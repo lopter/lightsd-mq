@@ -723,21 +723,28 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/core/CMakeLists.txt
-@@ -0,0 +1,7 @@
+@@ -0,0 +1,12 @@
 +CONFIGURE_FILE(version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
 +
 +ADD_EXECUTABLE(
 +    lifxd
++    bulb.c
++    client.c
++    gateway.c
 +    lifxd.c
 +    log.c
 +)
++
++TARGET_LINK_LIBRARIES(lifxd ${EVENT2_CORE_LIBRARY})
 diff --git a/core/bulb.c b/core/bulb.c
 new file mode 100644
 --- /dev/null
 +++ b/core/bulb.c
-@@ -0,0 +1,3 @@
+@@ -0,0 +1,5 @@
 +#include <sys/queue.h>
++#include <stdint.h>
 +
++#include "wire_proto.h"
 +#include "bulb.h"
 diff --git a/core/bulb.h b/core/bulb.h
 new file mode 100644
@@ -779,10 +786,14 @@ diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,36 @@
 +#include <sys/queue.h>
-+#include <event2/bufferevent.h>
++#include <err.h>
++#include <stdarg.h>
++#include <stdbool.h>
 +#include <stdint.h>
++
++#include <event2/bufferevent.h>
 +
 +#include "wire_proto.h"
 +#include "bulb.h"
@@ -801,8 +812,8 @@ new file mode 100644
 +void
 +lifxd_gateway_discover(const char *hostname, uint16_t port) {
 +    if (!hostname) {
-+        lifxd_warn("automatic discovery isn't supported yet.");
-+        return ;
++        lifxd_warnx("automatic discovery isn't supported yet");
++        return;
 +    }
 +
 +    lifxd_gateway_discover_one(hostname, port);
@@ -824,7 +835,7 @@ new file mode 100644
 +    struct bufferevent          *io;
 +    uint8_t                     addr[LIFXD_ADDR_LENGTH];
 +    struct lifxd_bulb_list      *bulbs;
-+}
++};
 +SLIST_HEAD(lifxd_gateway_list, lifxd_gateway);
 +
 +void lifxd_gateway_discover(const char *, uint16_t);
@@ -835,10 +846,10 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.c
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,129 @@
++#include <sys/queue.h>
 +#include <err.h>
 +#include <errno.h>
-+#include <event2/event.h>
 +#include <getopt.h>
 +#include <stdarg.h>
 +#include <stdbool.h>
@@ -847,9 +858,12 @@ new file mode 100644
 +#include <stdlib.h>
 +#include <strings.h>
 +
-+#include "lifxd.h"
-+#include "version.h"
++#include <event2/event.h>
++
++#include "wire_proto.h"
 +#include "gateway.h"
++#include "version.h"
++#include "lifxd.h"
 +
 +struct lifxd_opts lifxd_opts = {
 +    .foreground = false,
@@ -989,11 +1003,11 @@ new file mode 100644
 +extern struct event_base *lifxd_ev_base;
 +
 +void _lifxd_err(void (*)(int, const char *, va_list), int, const char *, ...);
-+#define lifxd_err(eval, fmt, ...) _lifxd_err(verr, (eval), (fmt), __VA_ARGS__);
-+#define lifxd_errx(eval, fmt, ...) _lifxd_err(verrx, (eval), (fmt), __VA_ARGS__);
++#define lifxd_err(eval, fmt, ...) _lifxd_err(verr, (eval), (fmt), ##__VA_ARGS__);
++#define lifxd_errx(eval, fmt, ...) _lifxd_err(verrx, (eval), (fmt), ##__VA_ARGS__);
 +void _lifxd_warn(void (*)(const char *, va_list), const char *, ...);
-+#define lifxd_warn(fmt, ...) _lifxd_warn(vwarn, (fmt), __VA_ARGS__);
-+#define lifxd_warnx(fmt, ...) _lifxd_warn(vwarnx, (fmt), __VA_ARGS__);
++#define lifxd_warn(fmt, ...) _lifxd_warn(vwarn, (fmt), ##__VA_ARGS__);
++#define lifxd_warnx(fmt, ...) _lifxd_warn(vwarnx, (fmt), ##__VA_ARGS__);
 +void lifxd_info(const char *, ...);
 +void lifxd_debug(const char *, ...);
 +void lifxd_libevent_log(int, const char *);
@@ -1003,14 +1017,15 @@ diff --git a/core/log.c b/core/log.c
 new file mode 100644
 --- /dev/null
 +++ b/core/log.c
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,75 @@
 +#include <err.h>
 +#include <errno.h>
-+#include <event2/event.h>
 +#include <stdarg.h>
 +#include <stdbool.h>
 +#include <stdint.h>
 +#include <stdio.h>
++
++#include <event2/event.h>
 +
 +#include "lifxd.h"
 +
