@@ -12,7 +12,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/CMakeLists.txt
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,36 @@
 +CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 +
 +PROJECT(LIFXD C)
@@ -37,6 +37,10 @@ new file mode 100644
 +SET(CMAKE_C_FLAGS "-pipe -Wextra -Wall -Wstrict-prototypes -std=c99")
 +
 +ADD_DEFINITIONS("-D_POSIX_C_SOURCE=200809L")
++
++IF (CMAKE_BUILD_TYPE MATCHES "DEBUG")
++    ADD_DEFINITIONS("-DQUEUE_MACRO_DEBUG=1")
++ENDIF ()
 +
 +INCLUDE_DIRECTORIES(
 +    ${LIFXD_SOURCE_DIR}/compat
@@ -788,7 +792,7 @@ diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,150 @@
 +#include <sys/queue.h>
 +#include <assert.h>
 +#include <err.h>
@@ -807,7 +811,77 @@ new file mode 100644
 +#include "lifxd.h"
 +
 +static struct lifxd_gateway_list lifxd_gateways = \
-+    SLIST_HEAD_INITIALIZER(&lifxd_gateways);
++    LIST_HEAD_INITIALIZER(&lifxd_gateways);
++
++static void
++lifxd_gateway_close(struct lifxd_gateway *gw)
++{
++    assert(gw);
++    assert(gw->io);
++
++    int sockfd = bufferevent_getfd(gw->io);
++    if (sockfd != -1) {
++        evutil_closesocket(sockfd);
++        LIST_REMOVE(gw, link);
++    }
++    bufferevent_free(gw->io);
++    free(gw->hostname);
++    free(gw);
++}
++
++static void
++lifxd_gateway_event_callback(struct bufferevent *bev, short events, void *ctx)
++{
++    assert(ctx);
++
++    struct lifxd_gateway *gw = (struct lifxd_gateway *)ctx;
++    if (events & BEV_EVENT_CONNECTED) {
++        lifxd_info(
++            "connected to gateway bulb: [%s]:%hu", gw->hostname, gw->port
++        );
++        LIST_INSERT_HEAD(&lifxd_gateways, gw, link);
++    } else if (events & (BEV_EVENT_ERROR|BEV_EVENT_EOF)) {
++        if (events & BEV_EVENT_ERROR) {
++            int gai_error = bufferevent_socket_get_dns_error(gw->io);
++            if (gai_error) {
++                lifxd_warnx(
++                    "can't connect to %s: %s",
++                    gw->hostname,
++                    evutil_gai_strerror(gai_error)
++                );
++            } else {
++                lifxd_warn(
++                    "lost connection with gateway bulb [%s]:%hu",
++                    gw->hostname,
++                    gw->port
++                );
++            }
++        } else {
++            lifxd_info(
++                "connection with gateway bulb [%s]:%hu closed",
++                gw->hostname,
++                gw->port
++            );
++        }
++        lifxd_gateway_close(gw);
++    }
++}
++
++static void
++lifxd_gateway_data_read_callback(struct bufferevent *bev, void *ctx)
++{
++    assert(ctx);
++
++    struct lifxd_gateway *gw = (struct lifxd_gateway *)ctx;
++}
++
++static void
++lifxd_gateway_data_write_callback(struct bufferevent *bev, void *ctx)
++{
++    assert(ctx);
++
++    struct lifxd_gateway *gw = (struct lifxd_gateway *)ctx;
++}
 +
 +bool
 +lifxd_gateway_open(const char *hostname, uint16_t port)
@@ -832,30 +906,21 @@ new file mode 100644
 +        goto hostname_alloc_error;
 +    }
 +    gw->port = port;
++    bufferevent_setcb(
++        gw->io,
++        lifxd_gateway_data_read_callback,
++        lifxd_gateway_data_write_callback,
++        lifxd_gateway_event_callback,
++        gw
++    );
 +
 +    int error = bufferevent_socket_connect_hostname(
 +        gw->io, NULL, AF_UNSPEC, hostname, port
 +    );
-+    if (error) {
-+        int gai_error = bufferevent_socket_get_dns_error(gw->io);
-+        if (gai_error) {
-+            lifxd_warnx(
-+                "can't connect to %s: %s",
-+                hostname,
-+                evutil_gai_strerror(gai_error)
-+            );
-+        } else {
-+            lifxd_warn("can't connect to [%s]:%hu", hostname, port);
-+        }
-+        goto connect_error;
++    if (!error) {
++        return true;
 +    }
 +
-+    lifxd_info("connected to gateway bulb: [%s]:%hu", hostname, port);
-+    SLIST_INSERT_HEAD(&lifxd_gateways, gw, link);
-+
-+    return true;
-+
-+connect_error:
 +    free(gw->hostname);
 +hostname_alloc_error:
 +    bufferevent_free(gw->io);
@@ -865,33 +930,17 @@ new file mode 100644
 +}
 +
 +bool
-+lifxd_gateway_discover_all(void) {
-+    lifxd_errx(1, "automatic discovery isn't supported yet");
-+    return false;
-+}
-+
-+static void
-+lifxd_gateway_close(struct lifxd_gateway *gw)
++lifxd_gateway_discover_all(void)
 +{
-+    assert(gw);
-+    assert(gw->io);
-+
-+    char *hostname = gw->hostname;
-+    uint16_t port = gw->port;
-+    evutil_closesocket(bufferevent_getfd(gw->io));
-+    bufferevent_free(gw->io);
-+    free(gw);
-+    lifxd_info("disconnected from gateway bulb: [%s]:%hu", hostname, port);
-+    free(hostname);
++    return false;
 +}
 +
 +void
 +lifxd_gateway_close_all(void)
 +{
 +    struct lifxd_gateway *gw, *next_gw;
-+    SLIST_FOREACH_SAFE(gw, &lifxd_gateways, link, next_gw) {
++    LIST_FOREACH_SAFE(gw, &lifxd_gateways, link, next_gw) {
 +        lifxd_gateway_close(gw);
-+        SLIST_REMOVE(&lifxd_gateways, gw, lifxd_gateway, link);
 +    }
 +}
 diff --git a/core/gateway.h b/core/gateway.h
@@ -902,14 +951,14 @@ new file mode 100644
 +#pragma once
 +
 +struct lifxd_gateway {
-+    SLIST_ENTRY(lifxd_gateway)  link;
++    LIST_ENTRY(lifxd_gateway)  link;
 +    char                        *hostname;
 +    uint16_t                    port;
 +    struct bufferevent          *io;
 +    uint8_t                     addr[LIFXD_ADDR_LENGTH];
 +    struct lifxd_bulb_list      *bulbs;
 +};
-+SLIST_HEAD(lifxd_gateway_list, lifxd_gateway);
++LIST_HEAD(lifxd_gateway_list, lifxd_gateway);
 +
 +bool lifxd_gateway_discover_all(void);
 +bool lifxd_gateway_open(const char *, uint16_t);
@@ -920,7 +969,7 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.c
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,139 @@
 +#include <sys/queue.h>
 +#include <err.h>
 +#include <errno.h>
@@ -1044,14 +1093,17 @@ new file mode 100644
 +
 +    lifxd_configure_libevent();
 +
-+    bool ok = lifxd_gateway_open(
-+        lifxd_opts.master_host, lifxd_opts.master_port
-+    );
-+    if (!ok) {
-+        lifxd_errx(1, "no bulb found on this network");
++    if (lifxd_opts.master_host) {
++        bool ok = lifxd_gateway_open(
++            lifxd_opts.master_host, lifxd_opts.master_port
++        );
++        if (!ok)
++            lifxd_errx(1, "no bulb to connect to");
++    } else {
++        lifxd_errx(1, "automatic discovery isn't supported yet");
 +    }
 +
-+    //event_base_dispatch(lifxd_ev_base);
++    event_base_dispatch(lifxd_ev_base);
 +
 +    lifxd_cleanup();
 +
