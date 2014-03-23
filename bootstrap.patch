@@ -1699,11 +1699,200 @@ new file mode 100644
 +    LIST_ENTRY(lifxd_client)    link;
 +};
 +LIST_HEAD(lifxd_client_list, lifxd_client);
+diff --git a/core/discovery.c b/core/discovery.c
+new file mode 100644
+--- /dev/null
++++ b/core/discovery.c
+@@ -0,0 +1,175 @@
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <assert.h>
++#include <err.h>
++#include <errno.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <event2/event.h>
++#include <event2/buffer.h>
++#include <event2/bufferevent.h>
++#include <event2/util.h>
++
++#include "wire_proto.h"
++#include "discovery.h"
++#include "gateway.h"
++#include "lifxd.h"
++
++enum { LIFXD_DISCOVERY_IO_SIZE = 512 };
++
++struct lifxd_udp_buffer {
++    struct evbuffer                 *buf;
++    enum {
++        LIFXD_STATE_BLANK,
++        LIFXD_STATE_HDR_RDY,
++        LIFXD_STATE_PKT_RDY
++    }                               state;
++    struct lifxd_packet_header      hdr;
++    const struct lifxd_packet_infos *pkt_infos;
++    struct lifxd_packet_pan_gateway pkt_gw;
++};
++
++static struct {
++    evutil_socket_t         socket;
++    struct event            *ev;
++    struct lifxd_udp_buffer read;
++    struct lifxd_udp_buffer write;
++} lifxd_udp_endpoint = { .socket = -1 };
++
++static
++void lifxd_discovery_event_callback(evutil_socket_t socket, short events, void *ctx)
++{
++    struct lifxd_udp_buffer *read = &lifxd_udp_endpoint.read;
++    struct lifxd_udp_buffer *write = &lifxd_udp_endpoint.write;
++    int nbytes = 0;
++    int error;
++
++    if (events & EV_TIMEOUT) {
++        lifxd_err(1, "timeout on the udp discovery socket");
++    }
++
++#define DO(what, on) do {                                          \
++    nbytes = (what)(                                               \
++        (on), lifxd_udp_endpoint.socket, LIFXD_DISCOVERY_IO_SIZE   \
++    );                                                             \
++    error = EVUTIL_SOCKET_ERROR();                                 \
++    if (nbytes == -1 && error != EAGAIN && error != EINTR) {       \
++        lifxd_err(1, "read error on the udp discovery socket");    \
++    }                                                              \
++} while (0)
++
++    if (events & EV_READ) {
++        switch (lifxd_udp_endpoint.read.state) {
++        case LIFXD_STATE_BLANK:
++            DO(evbuffer_read, read->buf);
++            if (evbuffer_get_length(read->buf) >= sizeof(read->hdr)) {
++                evbuffer_remove(read->buf, &read->hdr, sizeof(read->hdr));
++                read->state = LIFXD_STATE_HDR_RDY;
++                lifxd_wire_decode_header(&read->hdr);
++                read->pkt_infos = lifxd_gateway_get_packet_infos(
++                    read->hdr.packet_type
++                );
++                if (!read->pkt_infos) {
++
++                }
++            } else {
++                break;
++            }
++        case LIFXD_STATE_HDR_RDY:
++            DO(evbuffer_read);
++            if (evbuffer_get_length(read->buf) >= sizeof(read->pkt_gw)) {
++                ev
++            break;
++        case LIFXD_STATE_PKT_RDY:
++            break;
++        };
++    }
++
++#undef DO
++}
++
++bool
++lifxd_discovery_setup(void)
++{
++    if (lifxd_udp_endpoint.socket != -1) {
++        return false;
++    }
++
++    lifxd_udp_endpoint.socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if (lifxd_udp_endpoint.socket == -1) {
++        return false;
++    }
++
++    if (evutil_make_socket_nonblocking(lifxd_udp_endpoint.socket) == -1) {
++        goto err_ononblock;
++    }
++
++    struct evutil_addrinfo hints, *res = NULL;
++    memset(&hints, 0, sizeof(hints));
++    char port_str[6] = { 0 };
++    evutil_snprintf(
++        port_str, sizeof(port_str), "%d", (int)lifxd_opts.master_port
++    );
++    hints.ai_family = AF_INET;
++    hints.ai_socktype = SOCK_DGRAM;
++    hints.ai_protocol = IPPROTO_UDP;
++    hints.ai_flags = EVUTIL_AI_NUMERICHOST;
++
++    int err = evutil_getaddrinfo("255.255.255.255", port_str, &hints, &res);
++    if (err || !res) {
++        goto err_getaddrinfo;
++    }
++    if (bind(lifxd_udp_endpoint.socket, res->ai_addr, res->ai_addrlen) == -1) {
++        goto err_bind;
++    }
++
++    lifxd_udp_endpoint.write.buf = evbuffer_new();
++    lifxd_udp_endpoint.read.buf = evbuffer_new();
++    if (!lifxd_udp_endpoint.write.buf || !lifxd_udp_endpoint.read.buf) {
++        goto err_evbuffer_new;
++    }
++
++    lifxd_udp_endpoint.ev = event_new(
++        lifxd_ev_base,
++        lifxd_udp_endpoint.socket,
++        EV_READ,
++        lifxd_discovery_event_callback,
++        NULL
++    );
++    if (!lifxd_udp_endpoint.ev) {
++        goto err_event_new;
++    }
++    err = event_add(lifxd_udp_endpoint.ev, NULL);
++    if (err) {
++        goto err_event_add;
++    }
++
++    return true;
++
++err_event_add:
++    event_free(lifxd_udp_endpoint.ev);
++err_event_new:
++err_evbuffer_new:
++    if (lifxd_udp_endpoint.write.buf) {
++        evbuffer_free(lifxd_udp_endpoint.write.buf);
++    }
++    if (lifxd_udp_endpoint.read.buf) {
++        evbuffer_free(lifxd_udp_endpoint.read.buf);
++    }
++err_bind:
++err_getaddrinfo:
++err_ononblock:
++    evutil_closesocket(lifxd_udp_endpoint.socket);
++    lifxd_udp_endpoint.socket = -1;
++    return false;
++}
++
++void
++lifxd_start_discovery(void)
++{
++
++}
+diff --git a/core/discovery.h b/core/discovery.h
+new file mode 100644
+--- /dev/null
++++ b/core/discovery.h
+@@ -0,0 +1,4 @@
++#pragma once
++
++bool lifxd_discovery_setup(void);
++void lifxd_start_discovery(void);
 diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,331 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -1868,7 +2057,9 @@ new file mode 100644
 +                    }
 +                }
 +            } else {
-+                lifxd_warnx(
++                // TODO: drop this network and reconnect we are out of sync.
++                lifxd_errx(
++                    1,
 +                    "received header from [%s]:%hu for unknown packet %#x",
 +                    gw->hostname, gw->port, pkt_infos->type
 +                );
@@ -1957,12 +2148,6 @@ new file mode 100644
 +    return false;
 +}
 +
-+bool
-+lifxd_gateway_discover_all(void)
-+{
-+    return false;
-+}
-+
 +void
 +lifxd_gateway_close_all(void)
 +{
@@ -2043,7 +2228,7 @@ diff --git a/core/gateway.h b/core/gateway.h
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,51 @@
 +#pragma once
 +
 +struct lifxd_gateway {
@@ -2084,7 +2269,6 @@ new file mode 100644
 +void lifxd_gateway_load_packet_infos_map(void);
 +const struct lifxd_packet_infos *lifxd_gateway_get_packet_infos(enum lifxd_packet_type);
 +
-+bool lifxd_gateway_discover_all(void);
 +bool lifxd_gateway_open(const char *, uint16_t);
 +void lifxd_gateway_close_all(void);
 +
@@ -2102,7 +2286,7 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.c
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,144 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <err.h>
@@ -2119,6 +2303,7 @@ new file mode 100644
 +
 +#include "wire_proto.h"
 +#include "gateway.h"
++#include "discovery.h"
 +#include "version.h"
 +#include "lifxd.h"
 +
@@ -2235,8 +2420,8 @@ new file mode 100644
 +        if (!ok)
 +            lifxd_errx(1, "no bulb to connect to");
 +    } else {
-+        // NOTE: maybe we should the discovery in a separate translation unit?
-+        lifxd_gateway_discover_all();
++        lifxd_discovery_setup();
++        lidxd_discovery_start();
 +        lifxd_errx(1, "automatic discovery isn't supported yet");
 +    }
 +
