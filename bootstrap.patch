@@ -1704,7 +1704,7 @@ diff --git a/core/discovery.c b/core/discovery.c
 new file mode 100644
 --- /dev/null
 +++ b/core/discovery.c
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,341 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <arpa/inet.h>
@@ -1744,9 +1744,10 @@ new file mode 100644
 +};
 +
 +struct lifxd_discovery_wr_ctx {
-+    struct event                        *ev;
-+    const struct lifxd_packet_header    command;
-+    unsigned                            to_write;
++    struct event                *ev;
++    struct lifxd_packet_header  command;
++    bool                        encoded;
++    unsigned                    to_write;
 +};
 +
 +static struct {
@@ -1933,6 +1934,11 @@ new file mode 100644
 +lifxd_discovery_setup(void)
 +{
 +    assert(lifxd_udp_endpoint.socket == -1);
++
++    if (!lifxd_udp_endpoint.write.encoded) {
++        lifxd_wire_encode_header(&lifxd_udp_endpoint.write.command);
++        lifxd_udp_endpoint.write.encoded = true;
++    }
 +
 +    lifxd_udp_endpoint.socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 +    if (lifxd_udp_endpoint.socket == -1) {
