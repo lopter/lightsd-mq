@@ -1704,7 +1704,7 @@ diff --git a/core/discovery.c b/core/discovery.c
 new file mode 100644
 --- /dev/null
 +++ b/core/discovery.c
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,343 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <arpa/inet.h>
@@ -1895,19 +1895,24 @@ new file mode 100644
 +            sizeof(addr)
 +        );
 +        if (nbytes == -1) {
-+            if (EVUTIL_SOCKET_ERROR() == EINTR) {
++            int error = EVUTIL_SOCKET_ERROR();
++            if (error == EINTR) {
 +                goto retry;
++            } else if (error != EAGAIN) {
++                lifxd_warn("can't broadcast discovery packet");
 +            }
-+            lifxd_warn("can't broadcast discovery packet");
-+            return;
++        } else {
++            write->to_write -= nbytes;
 +        }
-+        write->to_write -= nbytes;
 +    }
 +
 +    if (!write->to_write) {
 +        lifxd_info("discovery packet has been broadcasted");
 +        if (event_del(write->ev) == -1) {
 +            lifxd_warn("can't stop discovery");
++        }
++        if (event_add(lifxd_udp_endpoint.read.ev, NULL) == -1) {
++            lifxd_warn("can't listen for the discovery answer");
 +        }
 +    }
 +}
@@ -2029,22 +2034,19 @@ new file mode 100644
 +    assert(lifxd_udp_endpoint.write.ev);
 +    assert(lifxd_udp_endpoint.read.ev);
 +
-+    lifxd_info("starting auto-discovery");
++    // Disable notifications for our own discovery packet:
++    if (event_del(lifxd_udp_endpoint.read.ev) == -1) {
++        return false;
++    }
++
 +    lifxd_udp_endpoint.write.to_write = LIFXD_PACKET_HEADER_SIZE;
 +    if (event_add(lifxd_udp_endpoint.write.ev, NULL) == -1) {
-+        goto err_enable_writes;
-+    }
-+    if (event_add(lifxd_udp_endpoint.read.ev, NULL) == -1) {
-+        goto err_enable_reads;
++        lifxd_udp_endpoint.write.to_write = 0;
++        return false;
 +    }
 +
++    lifxd_info("starting auto-discovery");
 +    return true;
-+
-+err_enable_reads:
-+    event_del(lifxd_udp_endpoint.write.ev);
-+err_enable_writes:
-+    lifxd_udp_endpoint.write.to_write = 0;
-+    return false;
 +}
 diff --git a/core/discovery.h b/core/discovery.h
 new file mode 100644
