@@ -1704,7 +1704,7 @@ diff --git a/core/discovery.c b/core/discovery.c
 new file mode 100644
 --- /dev/null
 +++ b/core/discovery.c
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,376 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <arpa/inet.h>
@@ -1770,6 +1770,7 @@ new file mode 100644
 +{
 +    struct lifxd_discovery_rd_ctx *read = &lifxd_udp_endpoint.read;
 +
++    assert(howmuch > 0);
 +    assert(read->offset + howmuch <= sizeof(read->buf));
 +    
 +    while (true) {
@@ -1802,75 +1803,107 @@ new file mode 100644
 +    struct lifxd_discovery_rd_ctx *read = &lifxd_udp_endpoint.read;
 +    struct sockaddr_in peer;
 +
-+    switch (lifxd_udp_endpoint.read.state) {
-+    case LIFXD_DISCOVERY_INIT:
-+        read->offset = lifxd_discovery_recvfrom(
-+            &peer, LIFXD_PACKET_HEADER_SIZE
-+        );
-+        if (read->offset == LIFXD_PACKET_HEADER_SIZE) {
-+            read->state = LIFXD_DISCOVERY_HDR_RDY;
-+            memcpy(&read->peer, &peer, sizeof(peer));
-+            // TODO: leave the header in the buf and use its size as an offset:
-+            memcpy(&read->hdr, read->buf, LIFXD_PACKET_HEADER_SIZE);
-+            lifxd_wire_decode_header(&read->hdr);
-+            read->pkt_size = read->hdr.size - LIFXD_PACKET_HEADER_SIZE;
-+            int extra_bytes = read->offset - LIFXD_PACKET_HEADER_SIZE;
-+            if (extra_bytes) {
-+                memmove(read->buf, &read->buf[read->offset], extra_bytes);
-+                read->offset = 0;
-+            }
-+        } else {
-+            return;
-+        }
-+    case LIFXD_DISCOVERY_HDR_RDY:
-+        while (read->offset < read->pkt_size) {
-+            int nbytes = lifxd_discovery_recvfrom(
-+                &peer, read->pkt_size - read->offset
++    while (1) {
++        if (read->state == LIFXD_DISCOVERY_INIT) {
++            read->offset += lifxd_discovery_recvfrom(
++                &peer, LIFXD_PACKET_HEADER_SIZE - read->offset
 +            );
-+            if (!nbytes) {
++            if (read->offset == LIFXD_PACKET_HEADER_SIZE) {
++                memcpy(&read->peer, &peer, sizeof(peer));
++                // TODO: leave the header in the buf and use its size as an offset:
++                memcpy(&read->hdr, read->buf, LIFXD_PACKET_HEADER_SIZE);
++                lifxd_wire_decode_header(&read->hdr);
++                read->pkt_size = read->hdr.size - LIFXD_PACKET_HEADER_SIZE;
++                if (read->pkt_size > LIFXD_DISCOVERY_BUF_SIZE) {
++                    lifxd_warnx(
++                        "received bugged header from [%s]:%hu "
++                        "with packet size = %d, type = %#x",
++                        inet_ntoa(peer.sin_addr),
++                        ntohs(peer.sin_port),
++                        read->pkt_size,
++                        read->hdr.packet_type
++                    );
++                    read->offset = 0;
++                    continue;
++                }
++                read->state = LIFXD_DISCOVERY_HDR_RDY;
++                int extra_bytes = read->offset - LIFXD_PACKET_HEADER_SIZE;
++                if (extra_bytes) {
++                    memmove(read->buf, &read->buf[read->offset], extra_bytes);
++                    read->offset = 0;
++                }
++            } else {
 +                return;
 +            }
-+            if (peer.sin_addr.s_addr != read->peer.sin_addr.s_addr) {
-+                lifxd_warnx("different bulbs are advertising on the network");
-+            } else {
-+                read->offset += nbytes;
-+            }
 +        }
-+        const struct lifxd_packet_infos *pkt_infos =
-+            lifxd_gateway_get_packet_infos(read->hdr.packet_type);
-+        if (pkt_infos) {
-+            pkt_infos->decode(read->buf);
-+            struct lifxd_gateway *gw = lifxd_gateway_get(read->hdr.gw_addr);
-+            if (!gw) {
-+                gw = lifxd_gateway_open(
-+                    inet_ntoa(peer.sin_addr),
-+                    ntohs(peer.sin_port),
-+                    read->hdr.gw_addr
++        if (read->state == LIFXD_DISCOVERY_HDR_RDY) {
++            while (read->offset < read->pkt_size) {
++                int nbytes = lifxd_discovery_recvfrom(
++                    &peer, read->pkt_size - read->offset
 +                );
++                if (!nbytes) {
++                    return;
++                }
++                if (peer.sin_addr.s_addr != read->peer.sin_addr.s_addr) {
++                    lifxd_warnx("different bulbs are advertising on the network");
++                } else {
++                    read->offset += nbytes;
++                }
 +            }
-+            if (gw) {
-+                pkt_infos->handle(gw, &read->hdr, read->buf);
-+                if (pkt_infos->type == LIFXD_PAN_GATEWAY) {
-+                    if (event_del(read->ev) == -1) {
-+                        lifxd_warn("can't stop auto discovery");
++            const struct lifxd_packet_infos *pkt_infos =
++                lifxd_gateway_get_packet_infos(read->hdr.packet_type);
++            // We can run into 4 scenarios at this point:
++            // 1. We get a packet we don't know how to handle: discard and restart
++            //    the discovery;
++            // 2. We get a packet we know how to handle but which is not part of
++            //    the discovery process (i.e: not GET_PAN_GW nor PAN_GW): try to
++            //    handle it if we already know the gateway where it is from and
++            //    restart the discovery processs;
++            // 3. We get a GET_PAN_GW packet, probably, our own packet: discard it;
++            // 4. We get a PAN_GW packet: handle it and stop the discovery process.
++            if (pkt_infos) {
++                if (pkt_infos->type != LIFXD_GET_PAN_GATEWAY) {
++                    struct lifxd_gateway *gw = lifxd_gateway_get(read->hdr.gw_addr);
++                    if (!gw && pkt_infos->type == LIFXD_PAN_GATEWAY) {
++                        gw = lifxd_gateway_open(
++                            inet_ntoa(peer.sin_addr),
++                            ntohs(peer.sin_port),
++                            read->hdr.gw_addr
++                        );
 +                    }
-+                } else if (!lifxd_discovery_start()) {
++                    if (gw) {
++                        pkt_infos->decode(read->buf);
++                        pkt_infos->handle(gw, &read->hdr, read->buf);
++                        if (pkt_infos->type == LIFXD_PAN_GATEWAY) {
++                            if (event_del(read->ev) == -1) {
++                                lifxd_warn("can't stop auto discovery");
++                            }
++                        } else if (!lifxd_discovery_start()) {
++                            lifxd_warn("can't start auto discovery");
++                        }
++                    }
++                } else {
++                    lifxd_debug(
++                        "discarding GET_PAN_GATEWAY packet from [%s]:%hu",
++                        inet_ntoa(peer.sin_addr),
++                        ntohs(peer.sin_port)
++                    );
++                }
++            } else {
++                lifxd_warnx(
++                    "received unknown packet %#x from [%s]:%hu",
++                    read->hdr.packet_type,
++                    inet_ntoa(peer.sin_addr),
++                    ntohs(peer.sin_port)
++                );
++                if (!lifxd_discovery_start()) {
 +                    lifxd_warn("can't start auto discovery");
 +                }
 +            }
-+        } else {
-+            lifxd_warnx(
-+                "received unknown packet %#x from [%s]:%hu",
-+                read->hdr.packet_type,
-+                inet_ntoa(peer.sin_addr),
-+                ntohs(peer.sin_port)
-+            );
-+            if (!lifxd_discovery_start()) {
-+                lifxd_warn("can't start auto discovery");
-+            }
++            read->offset = 0;
++            read->state = LIFXD_DISCOVERY_INIT;
 +        }
-+        read->state = LIFXD_DISCOVERY_INIT;
-+    };
++    }
 +}
 +
 +static void
@@ -1910,9 +1943,6 @@ new file mode 100644
 +        lifxd_info("discovery packet has been broadcasted");
 +        if (event_del(write->ev) == -1) {
 +            lifxd_warn("can't stop discovery");
-+        }
-+        if (event_add(lifxd_udp_endpoint.read.ev, NULL) == -1) {
-+            lifxd_warn("can't listen for the discovery answer");
 +        }
 +    }
 +}
@@ -1973,7 +2003,7 @@ new file mode 100644
 +    hints.ai_protocol = IPPROTO_UDP;
 +    hints.ai_flags = EVUTIL_AI_NUMERICHOST;
 +
-+    err = evutil_getaddrinfo("255.255.255.255", port_str, &hints, &res);
++    err = evutil_getaddrinfo("0.0.0.0", port_str, &hints, &res);
 +    if (err || !res) {
 +        goto err_getaddrinfo;
 +    }
@@ -1986,14 +2016,14 @@ new file mode 100644
 +    lifxd_udp_endpoint.read.ev = event_new(
 +        lifxd_ev_base,
 +        lifxd_udp_endpoint.socket,
-+        EV_READ,
++        EV_READ|EV_PERSIST,
 +        lifxd_discovery_event_callback,
 +        NULL
 +    );
 +    lifxd_udp_endpoint.write.ev = event_new(
 +        lifxd_ev_base,
 +        lifxd_udp_endpoint.socket,
-+        EV_WRITE,
++        EV_WRITE|EV_PERSIST,
 +        lifxd_discovery_event_callback,
 +        NULL
 +    );
@@ -2034,19 +2064,22 @@ new file mode 100644
 +    assert(lifxd_udp_endpoint.write.ev);
 +    assert(lifxd_udp_endpoint.read.ev);
 +
-+    // Disable notifications for our own discovery packet:
-+    if (event_del(lifxd_udp_endpoint.read.ev) == -1) {
-+        return false;
-+    }
-+
 +    lifxd_udp_endpoint.write.to_write = LIFXD_PACKET_HEADER_SIZE;
 +    if (event_add(lifxd_udp_endpoint.write.ev, NULL) == -1) {
-+        lifxd_udp_endpoint.write.to_write = 0;
-+        return false;
++        goto err_enable_writes;
++    }
++    if (event_add(lifxd_udp_endpoint.read.ev, NULL) == -1) {
++        goto err_enable_reads;
 +    }
 +
 +    lifxd_info("starting auto-discovery");
 +    return true;
++
++err_enable_reads:
++    event_del(lifxd_udp_endpoint.write.ev);
++err_enable_writes:
++    lifxd_udp_endpoint.write.to_write = 0;
++    return false;
 +}
 diff --git a/core/discovery.h b/core/discovery.h
 new file mode 100644
@@ -2061,7 +2094,7 @@ diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,356 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -2106,6 +2139,10 @@ new file mode 100644
 +               const void *))(x))
 +
 +    static struct lifxd_packet_infos packet_table[] = {
++        {
++            .name = "GET_PAN_GATEWAY",
++            .type = LIFXD_GET_PAN_GATEWAY
++        },
 +        {
 +            .name = "PAN_GATEWAY",
 +            .type = LIFXD_PAN_GATEWAY,
@@ -2171,7 +2208,6 @@ new file mode 100644
 +        );
 +        LIST_INSERT_HEAD(&lifxd_gateways, gw, link);
 +        bufferevent_enable(bev, EV_READ|EV_WRITE|EV_TIMEOUT);
-+        lifxd_gateway_get_pan_gateway(gw);
 +    } else if (events & (BEV_EVENT_ERROR|BEV_EVENT_EOF)) {
 +        if (events & BEV_EVENT_ERROR) {
 +            int gai_error = bufferevent_socket_get_dns_error(gw->io);
@@ -2312,6 +2348,7 @@ new file mode 100644
 +        gw->io, NULL, AF_UNSPEC, hostname, port
 +    );
 +    if (!error) {
++        lifxd_info("new gateway at [%s]:%hu", hostname, port);
 +        return gw;
 +    }
 +
@@ -2370,8 +2407,8 @@ new file mode 100644
 +    assert(gw && hdr && pkt);
 +
 +    lifxd_debug(
-+        "SET_PAN_GATEWAY ← [%s]:%hu - %hhx.%hhx.%hhx.%hhx.%hhx.%hhx ",
-+        "gw_addr=%hhx.%hhx.%hhx.%hhx.%hhx.%hhx",
++        "SET_PAN_GATEWAY ← [%s]:%hu - %hhx:%hhx:%hhx:%hhx:%hhx:%hhx ",
++        "gw_addr=%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
 +        gw->hostname, gw->port,
 +        &hdr->bulb_addr[0], &hdr->bulb_addr[1], &hdr->bulb_addr[2],
 +        &hdr->bulb_addr[3], &hdr->bulb_addr[4], &hdr->bulb_addr[5],
@@ -2691,7 +2728,7 @@ new file mode 100644
 +    int errsave = errno;
 +    lifxd_cleanup();
 +    errno = errsave;
-+    fprintf(stderr, "[ERR] ");
++    fputs("[ERR]   ", stderr);
 +    errfn(eval, fmt, ap);
 +}
 +
@@ -2701,7 +2738,7 @@ new file mode 100644
 +    if (lifxd_opts.verbosity <= LIFXD_WARN) {
 +        va_list ap;
 +        va_start(ap, fmt);
-+        fprintf(stderr, "[WARN] ");
++        fputs("[WARN]  ", stderr);
 +        warnfn(fmt, ap);
 +        va_end(ap);
 +    }
@@ -2713,7 +2750,7 @@ new file mode 100644
 +    if (lifxd_opts.verbosity <= LIFXD_INFO) {
 +        va_list ap;
 +        va_start(ap, fmt);
-+        fprintf(stderr, "[INFO] lifxd: ");
++        fprintf(stderr, "[INFO]  lifxd: ");
 +        vfprintf(stderr, fmt, ap);
 +        va_end(ap);
 +        fprintf(stderr, "\n");
@@ -2756,7 +2793,7 @@ diff --git a/core/wire_proto.c b/core/wire_proto.c
 new file mode 100644
 --- /dev/null
 +++ b/core/wire_proto.c
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,80 @@
 +#include <assert.h>
 +#include <endian.h>
 +#include <err.h>
@@ -2803,6 +2840,18 @@ new file mode 100644
 +}
 +
 +void
++lifxd_wire_decode_pan_gateway(struct lifxd_packet_pan_gateway *pkt)
++{
++    pkt->port = le32toh(pkt->port);
++}
++
++void
++lifxd_wire_encode_pan_gateway(struct lifxd_packet_pan_gateway *pkt)
++{
++    pkt->port = htole32(pkt->port);
++}
++
++void
 +lifxd_wire_decode_light_status(struct lifxd_packet_light_status *pkt)
 +{
 +    pkt->hue = le16toh(pkt->hue);
@@ -2824,19 +2873,6 @@ new file mode 100644
 +    pkt->dim = htole16(pkt->dim);
 +    pkt->power = htole16(pkt->power);
 +    pkt->tags = htobe64(pkt->tags);
-+}
-+
-+
-+void
-+lifxd_wire_decode_pan_gateway(struct lifxd_packet_pan_gateway *pkt)
-+{
-+    pkt->port = le32toh(pkt->port);
-+}
-+
-+void
-+lifxd_wire_encode_pan_gateway(struct lifxd_packet_pan_gateway *pkt)
-+{
-+    pkt->port = htole32(pkt->port);
 +}
 diff --git a/core/wire_proto.h b/core/wire_proto.h
 new file mode 100644
