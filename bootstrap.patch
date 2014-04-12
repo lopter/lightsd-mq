@@ -166,7 +166,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/CMakeLists.txt
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,38 @@
 +CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 +
 +PROJECT(LIFXD C)
@@ -187,6 +187,7 @@ new file mode 100644
 +
 +# TODO: we need at least 2.0.19-stable because of the logging defines
 +FIND_PACKAGE(Event2 REQUIRED COMPONENTS core)
++FIND_PACKAGE(Endian REQUIRED)
 +
 +SET(CMAKE_C_FLAGS "-pipe -Wextra -Wall -Wstrict-prototypes -std=c99")
 +
@@ -197,12 +198,38 @@ new file mode 100644
 +ENDIF ()
 +
 +INCLUDE_DIRECTORIES(
-+    ${LIFXD_SOURCE_DIR}/compat
++    ${LIFXD_SOURCE_DIR}/compat/generic
++    ${LIFXD_BINARY_DIR}/compat
 +    ${LIFXD_SOURCE_DIR}/core
 +    ${LIFXD_BINARY_DIR}/core
 +)
 +
 +ADD_SUBDIRECTORY(core)
+diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/FindEndian.cmake
+@@ -0,0 +1,20 @@
++INCLUDE(CheckIncludeFile)
++
++SET(COMPAT_ENDIAN_H "${LIFXD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/endian.h")
++
++IF (NOT ENDIAN_H_PATH)
++    CHECK_INCLUDE_FILE("endian.h" HAVE_ENDIAN_H)
++
++    IF (HAVE_ENDIAN_H)
++        SET(ENDIAN_H_PATH "using native header" CACHE INTERNAL "endian.h path")
++    ELSEIF (EXISTS "${COMPAT_ENDIAN_H}")
++        FILE(
++            COPY "${COMPAT_ENDIAN_H}"
++            DESTINATION "${LIFXD_BINARY_DIR}/compat/"
++        )
++        MESSAGE(STATUS "Using compatibility endian.h for ${CMAKE_SYSTEM_NAME}")
++        SET(ENDIAN_H_PATH "${COMPAT_ENDIAN_H}" CACHE INTERNAL "endian.h path")
++    ENDIF ()
++ENDIF ()
++
++FIND_PACKAGE_HANDLE_STANDARD_ARGS(Endian DEFAULT_MSG ENDIAN_H_PATH)
 diff --git a/CMakeScripts/FindEvent2.cmake b/CMakeScripts/FindEvent2.cmake
 new file mode 100644
 --- /dev/null
@@ -226,10 +253,33 @@ new file mode 100644
 +    HANDLE_COMPONENTS
 +    REQUIRED_VARS EVENT2_CORE_LIBRARY EVENT2_INCLUDE_DIR
 +)
-diff --git a/compat/sys/queue.h b/compat/sys/queue.h
+diff --git a/compat/Darwin/endian.h b/compat/Darwin/endian.h
 new file mode 100644
 --- /dev/null
-+++ b/compat/sys/queue.h
++++ b/compat/Darwin/endian.h
+@@ -0,0 +1,18 @@
++#pragma once
++
++#include <libkern/OSByteOrder.h>
++
++#define htobe16(x) OSSwapHostToBigInt16(x)
++#define htole16(x) OSSwapHostToLittleInt16(x)
++#define be16toh(x) OSSwapBigToHostInt16(x)
++#define le16toh(x) OSSwapLittleToHostInt16(x)
++
++#define htobe32(x) OSSwapHostToBigInt32(x)
++#define htole32(x) OSSwapHostToLittleInt32(x)
++#define be32toh(x) OSSwapBigToHostInt32(x)
++#define le32toh(x) OSSwapLittleToHostInt32(x)
++
++#define htobe64(x) OSSwapHostToBigInt64(x)
++#define htole64(x) OSSwapHostToLittleInt64(x)
++#define be64toh(x) OSSwapBigToHostInt64(x)
++#define le64toh(x) OSSwapLittleToHostInt64(x)
+diff --git a/compat/generic/sys/queue.h b/compat/generic/sys/queue.h
+new file mode 100644
+--- /dev/null
++++ b/compat/generic/sys/queue.h
 @@ -0,0 +1,648 @@
 +/*	$OpenBSD: queue.h,v 1.38 2013/07/03 15:05:21 fgsch Exp $	*/
 +/*	$NetBSD: queue.h,v 1.11 1996/05/16 05:17:14 mycroft Exp $	*/
@@ -879,10 +929,10 @@ new file mode 100644
 +} while (0)
 +
 +#endif	/* !_SYS_QUEUE_H_ */
-diff --git a/compat/sys/tree.h b/compat/sys/tree.h
+diff --git a/compat/generic/sys/tree.h b/compat/generic/sys/tree.h
 new file mode 100644
 --- /dev/null
-+++ b/compat/sys/tree.h
++++ b/compat/generic/sys/tree.h
 @@ -0,0 +1,748 @@
 +/*	$OpenBSD: tree.h,v 1.13 2011/07/09 00:19:45 pirofti Exp $	*/
 +/*
