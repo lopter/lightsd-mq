@@ -2487,10 +2487,10 @@ new file mode 100644
 +        "SET_PAN_GATEWAY ← [%s]:%hu - %hhx:%hhx:%hhx:%hhx:%hhx:%hhx "
 +        "gw_addr=%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
 +        gw->hostname, gw->port,
-+        &hdr->bulb_addr[0], &hdr->bulb_addr[1], &hdr->bulb_addr[2],
-+        &hdr->bulb_addr[3], &hdr->bulb_addr[4], &hdr->bulb_addr[5],
-+        &hdr->gw_addr[0], &hdr->gw_addr[1], &hdr->gw_addr[2],
-+        &hdr->gw_addr[3], &hdr->gw_addr[4], &hdr->gw_addr[5]
++        hdr->bulb_addr[0], hdr->bulb_addr[1], hdr->bulb_addr[2],
++        hdr->bulb_addr[3], hdr->bulb_addr[4], hdr->bulb_addr[5],
++        hdr->gw_addr[0], hdr->gw_addr[1], hdr->gw_addr[2],
++        hdr->gw_addr[3], hdr->gw_addr[4], hdr->gw_addr[5]
 +    );
 +    memcpy(gw->addr, &gw->cur_hdr.gw_addr, sizeof(gw->addr));
 +}
@@ -2522,8 +2522,8 @@ new file mode 100644
 +        "hue=%#hx, saturation=%#hx, brightness=%#hx, "
 +        "kelvin=%hx, dim=%#hx, power=%#hx, label=%.*s, tags=%lx",
 +        gw->hostname, gw->port,
-+        &hdr->bulb_addr[0], &hdr->bulb_addr[1], &hdr->bulb_addr[2],
-+        &hdr->bulb_addr[3], &hdr->bulb_addr[4], &hdr->bulb_addr[5],
++        hdr->bulb_addr[0], hdr->bulb_addr[1], hdr->bulb_addr[2],
++        hdr->bulb_addr[3], hdr->bulb_addr[4], hdr->bulb_addr[5],
 +        pkt->hue, pkt->saturation, pkt->brightness, pkt->kelvin,
 +        pkt->dim, pkt->power, pkt->label, pkt->tags
 +    );
