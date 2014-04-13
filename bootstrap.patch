@@ -2166,12 +2166,11 @@ diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,360 @@
+@@ -0,0 +1,359 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
 +#include <err.h>
-+#include <netinet/ether.h>
 +#include <stdarg.h>
 +#include <stdbool.h>
 +#include <stdint.h>
@@ -2740,7 +2739,7 @@ diff --git a/core/lifxd.h b/core/lifxd.h
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,36 @@
 +#pragma once
 +
 +#define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -2752,6 +2751,8 @@ new file mode 100644
 +    LIFXD_ERR
 +};
 +
++enum { LIFXD_ERROR_MSG_BUFSIZE = 2048 };
++
 +struct lifxd_opts {
 +    bool                    foreground;
 +    const char              *master_host;
@@ -2762,9 +2763,9 @@ new file mode 100644
 +extern struct lifxd_opts lifxd_opts;
 +extern struct event_base *lifxd_ev_base;
 +
-+void _lifxd_err(void (*)(int, const char *, va_list), int, const char *, ...);
-+#define lifxd_err(eval, fmt, ...) _lifxd_err(verr, (eval), (fmt), ##__VA_ARGS__);
-+#define lifxd_errx(eval, fmt, ...) _lifxd_err(verrx, (eval), (fmt), ##__VA_ARGS__);
++void _lifxd_err(void (*)(int, const char *, ...), int, const char *, ...);
++#define lifxd_err(eval, fmt, ...) _lifxd_err(err, (eval), (fmt), ##__VA_ARGS__);
++#define lifxd_errx(eval, fmt, ...) _lifxd_err(errx, (eval), (fmt), ##__VA_ARGS__);
 +void _lifxd_warn(void (*)(const char *, va_list), const char *, ...);
 +#define lifxd_warn(fmt, ...) _lifxd_warn(vwarn, (fmt), ##__VA_ARGS__);
 +#define lifxd_warnx(fmt, ...) _lifxd_warn(vwarnx, (fmt), ##__VA_ARGS__);
@@ -2779,7 +2780,7 @@ diff --git a/core/log.c b/core/log.c
 new file mode 100644
 --- /dev/null
 +++ b/core/log.c
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,80 @@
 +#include <err.h>
 +#include <errno.h>
 +#include <stdarg.h>
@@ -2792,18 +2793,23 @@ new file mode 100644
 +#include "lifxd.h"
 +
 +void
-+_lifxd_err(void (*errfn)(int, const char *, va_list),
++_lifxd_err(void (*errfn)(int, const char *, ...),
 +           int eval,
 +           const char *fmt,
 +           ...)
 +{
++    int errsave = errno;
 +    va_list ap;
 +    va_start(ap, fmt);
-+    int errsave = errno;
++    // lifxd_cleanup is probably going to free some of the arguments we got, so
++    // let's print to a buffer before we call err.
++    char errmsg[LIFXD_ERROR_MSG_BUFSIZE];
++    vsnprintf(errmsg, sizeof(errmsg), fmt, ap);
++    va_end(ap);
 +    lifxd_cleanup();
-+    errno = errsave;
 +    fputs("[ERR]   ", stderr);
-+    errfn(eval, fmt, ap);
++    errno = errsave;
++    errfn(eval, errmsg);
 +}
 +
 +void
