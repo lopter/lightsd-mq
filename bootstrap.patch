@@ -1706,23 +1706,106 @@ diff --git a/core/bulb.c b/core/bulb.c
 new file mode 100644
 --- /dev/null
 +++ b/core/bulb.c
-@@ -0,0 +1,7 @@
+@@ -0,0 +1,88 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
++#include <assert.h>
++#include <err.h>
++#include <stdarg.h>
 +#include <stdbool.h>
 +#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
 +
 +#include "wire_proto.h"
 +#include "bulb.h"
++#include "gateway.h"
++#include "lifxd.h"
++
++static struct lifxd_bulb_list lifxd_bulbs = LIST_HEAD_INITIALIZER(&lifxd_bulbs);
++
++struct lifxd_bulb *
++lifxd_bulb_get(struct lifxd_gateway *gw, const uint8_t *addr)
++{
++    assert(gw);
++
++    struct lifxd_bulb *bulb, *next_bulb;
++    LIST_FOREACH_SAFE(bulb, &lifxd_bulbs, link, next_bulb) {
++        if (bulb->gw == gw
++            && (!addr || !memcmp(bulb->addr, addr, sizeof(bulb->addr)))) {
++            return bulb;
++        }
++    }
++
++    return NULL;
++}
++
++struct lifxd_bulb *
++lifxd_bulb_open(struct lifxd_gateway *gw, const uint8_t *addr)
++{
++    assert(gw);
++    assert(addr);
++
++    struct lifxd_bulb *bulb = calloc(1, sizeof(*bulb));
++    if (!bulb) {
++        lifxd_warn("can't allocate a new bulb");
++        return NULL;
++    }
++
++    bulb->gw = gw;
++    memcpy(bulb->addr, addr, sizeof(bulb->addr));
++
++    return bulb;
++}
++
++struct lifxd_bulb *
++lifxd_bulb_get_or_open(struct lifxd_gateway *gw, const uint8_t *addr)
++{
++    assert(gw);
++    assert(addr);
++
++    struct lifxd_bulb *bulb = lifxd_bulb_get(gw, addr);
++    if (!bulb) {
++        bulb = lifxd_bulb_open(gw, addr);
++        if (bulb) {
++            lifxd_info(
++                "discovered new bulb %hhx:%hhx:%hhx:%hhx:%hhx:%hhx on [%s]:%hu",
++                addr[0], addr[1], addr[2], addr[3], addr[4], addr[5],
++                gw->hostname, gw->port
++            );
++        }
++    }
++
++    return bulb;
++}
++
++void
++lifxd_bulb_close(struct lifxd_bulb *bulb)
++{
++    assert(bulb);
++    assert(bulb->gw);
++
++    LIST_REMOVE(bulb, link);
++    lifxd_info(
++        "closed bulb \"%.*s\" on [%s]:%hu",
++        sizeof(bulb->status.label),
++        bulb->status.label,
++        bulb->gw->hostname,
++        bulb->gw->port
++    );
++    free(bulb);
++}
 diff --git a/core/bulb.h b/core/bulb.h
 new file mode 100644
 --- /dev/null
 +++ b/core/bulb.h
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,29 @@
 +#pragma once
 +
++struct lifxd_gateway;
++
++#pragma pack(push, 1)
 +struct lifxd_light_status {
-+    uint8_t     addr[LIFXD_ADDR_LENGTH];
 +    uint16_t    hue;
 +    uint16_t    saturation;
 +    uint16_t    brightness;
@@ -1732,12 +1815,20 @@ new file mode 100644
 +    char        label[LIFXD_LABEL_SIZE];
 +    uint64_t    tags;
 +};
++#pragma pack(pop)
 +
 +struct lifxd_bulb {
-+    SLIST_ENTRY(lifxd_bulb)     link;
-+    struct lifxd_light_status   *status;
++    LIST_ENTRY(lifxd_bulb)      link;
++    struct lifxd_gateway        *gw;
++    uint8_t                     addr[LIFXD_ADDR_LENGTH];
++    struct lifxd_light_status   status;
 +};
-+SLIST_HEAD(lifxd_bulb_list, lifxd_bulb);
++LIST_HEAD(lifxd_bulb_list, lifxd_bulb);
++
++struct lifxd_bulb *lifxd_bulb_get(struct lifxd_gateway *, const uint8_t *);
++struct lifxd_bulb *lifxd_bulb_open(struct lifxd_gateway *, const uint8_t *);
++struct lifxd_bulb *lifxd_bulb_get_or_open(struct lifxd_gateway *, const uint8_t *);
++void lifxd_bulb_close(struct lifxd_bulb *);
 diff --git a/core/client.c b/core/client.c
 new file mode 100644
 diff --git a/core/client.h b/core/client.h
@@ -1755,7 +1846,7 @@ diff --git a/core/discovery.c b/core/discovery.c
 new file mode 100644
 --- /dev/null
 +++ b/core/discovery.c
-@@ -0,0 +1,397 @@
+@@ -0,0 +1,400 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <arpa/inet.h>
@@ -1775,6 +1866,7 @@ new file mode 100644
 +
 +#include "wire_proto.h"
 +#include "discovery.h"
++#include "bulb.h"
 +#include "gateway.h"
 +#include "lifxd.h"
 +
@@ -1952,6 +2044,8 @@ new file mode 100644
 +                        } else if (!lifxd_discovery_start()) {
 +                            lifxd_warn("can't start auto discovery");
 +                        }
++                    } else {
++                        lifxd_err(1, "can't allocate gateway");
 +                    }
 +                } else {
 +                    lifxd_debug(
@@ -2166,7 +2260,7 @@ diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,393 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -2231,6 +2325,13 @@ new file mode 100644
 +            .decode = DECODER(lifxd_wire_decode_light_status),
 +            .encode = ENCODER(lifxd_wire_encode_light_status),
 +            .handle = HANDLER(lifxd_gateway_handle_light_status)
++        },
++        {
++            .name = "POWER_STATE",
++            .type = LIFXD_POWER_STATE,
++            .size = sizeof(struct lifxd_packet_power_state),
++            .decode = DECODER(lifxd_wire_decode_power_state),
++            .handle = HANDLER(lifxd_gateway_handle_power_state)
 +        }
 +    };
 +
@@ -2260,6 +2361,11 @@ new file mode 100644
 +        LIST_REMOVE(gw, link);
 +    }
 +    bufferevent_free(gw->io);
++    for (struct lifxd_bulb *bulb = lifxd_bulb_get(gw, NULL);
++         bulb;
++         bulb = lifxd_bulb_get(gw, NULL)) {
++        lifxd_bulb_close(bulb);
++    }
 +    lifxd_info(
 +        "connection with gateway bulb [%s]:%hu closed",
 +        gw->hostname,
@@ -2384,6 +2490,7 @@ new file mode 100644
 +    }
 +}
 +
++
 +struct lifxd_gateway *
 +lifxd_gateway_open(const char *hostname, uint16_t port, const uint8_t *site)
 +{
@@ -2442,8 +2549,8 @@ new file mode 100644
 +{
 +    assert(site);
 +
-+    struct lifxd_gateway *gw;
-+    LIST_FOREACH(gw, &lifxd_gateways, link) {
++    struct lifxd_gateway *gw, *next_gw;
++    LIST_FOREACH_SAFE(gw, &lifxd_gateways, link, next_gw) {
 +        if (!memcmp(gw->addr, site, sizeof(gw->addr))) {
 +            return gw;
 +        }
@@ -2484,13 +2591,10 @@ new file mode 100644
 +    assert(gw && hdr && pkt);
 +
 +    lifxd_debug(
-+        "SET_PAN_GATEWAY ← [%s]:%hu - %hhx:%hhx:%hhx:%hhx:%hhx:%hhx "
-+        "gw_addr=%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
++        "SET_PAN_GATEWAY ← [%s]:%hu - %s gw_addr=%s",
 +        gw->hostname, gw->port,
-+        hdr->bulb_addr[0], hdr->bulb_addr[1], hdr->bulb_addr[2],
-+        hdr->bulb_addr[3], hdr->bulb_addr[4], hdr->bulb_addr[5],
-+        hdr->gw_addr[0], hdr->gw_addr[1], hdr->gw_addr[2],
-+        hdr->gw_addr[3], hdr->gw_addr[4], hdr->gw_addr[5]
++        lifxd_addrtoa(hdr->bulb_addr),
++        lifxd_addrtoa(hdr->gw_addr)
 +    );
 +    memcpy(gw->addr, &gw->cur_hdr.gw_addr, sizeof(gw->addr));
 +}
@@ -2518,21 +2622,43 @@ new file mode 100644
 +    assert(gw && hdr && pkt);
 +
 +    lifxd_debug(
-+        "SET_LIGHT_STATUS ← [%s]:%hu - %hhx.%hhx.%hhx.%hhx.%hhx.%hhx "
++        "SET_LIGHT_STATUS ← [%s]:%hu - %s "
 +        "hue=%#hx, saturation=%#hx, brightness=%#hx, "
-+        "kelvin=%hx, dim=%#hx, power=%#hx, label=%.*s, tags=%lx",
-+        gw->hostname, gw->port,
-+        hdr->bulb_addr[0], hdr->bulb_addr[1], hdr->bulb_addr[2],
-+        hdr->bulb_addr[3], hdr->bulb_addr[4], hdr->bulb_addr[5],
++        "kelvin=%#hx, dim=%#hx, power=%#hx, label=%.*s, tags=%lx",
++        gw->hostname, gw->port, lifxd_addrtoa(hdr->bulb_addr),
 +        pkt->hue, pkt->saturation, pkt->brightness, pkt->kelvin,
-+        pkt->dim, pkt->power, pkt->label, pkt->tags
++        pkt->dim, pkt->power, sizeof(pkt->label), pkt->label, pkt->tags
 +    );
++
++    struct lifxd_bulb *bulb = lifxd_bulb_get_or_open(gw, hdr->bulb_addr);
++    if (bulb) {
++        assert(sizeof(*pkt) == sizeof(bulb->status));
++        memcpy(&bulb->status, pkt, sizeof(*pkt));
++    }
++}
++
++void
++lifxd_gateway_handle_power_state(struct lifxd_gateway *gw,
++                                 const struct lifxd_packet_header *hdr,
++                                 const struct lifxd_packet_power_state *pkt)
++{
++    assert(gw && hdr && pkt);
++
++    lifxd_debug(
++        "SET_POWER_STATUS ← [%s]:%hu - %s power=%#hx",
++        gw->hostname, gw->port, lifxd_addrtoa(hdr->bulb_addr), pkt->power
++    );
++
++    struct lifxd_bulb *bulb = lifxd_bulb_get_or_open(gw, hdr->bulb_addr);
++    if (bulb) {
++        bulb->status.power = pkt->power;
++    }
 +}
 diff --git a/core/gateway.h b/core/gateway.h
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.h
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,57 @@
 +#pragma once
 +
 +struct lifxd_gateway {
@@ -2541,7 +2667,6 @@ new file mode 100644
 +    uint16_t                    port;
 +    struct bufferevent          *io;
 +    uint8_t                     addr[LIFXD_ADDR_LENGTH];
-+    struct lifxd_bulb_list      *bulbs;
 +    struct lifxd_packet_header  cur_hdr;
 +    unsigned                    cur_hdr_offset;
 +    void                        *cur_pkt;
@@ -2587,13 +2712,17 @@ new file mode 100644
 +void lifxd_gateway_handle_light_status(struct lifxd_gateway *,
 +                                       const struct lifxd_packet_header *,
 +                                       const struct lifxd_packet_light_status *);
++
++void lifxd_gateway_handle_power_state(struct lifxd_gateway *,
++                                      const struct lifxd_packet_header *,
++                                      const struct lifxd_packet_power_state *);
 diff --git a/core/json_proto.h b/core/json_proto.h
 new file mode 100644
 diff --git a/core/lifxd.c b/core/lifxd.c
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.c
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,144 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <err.h>
@@ -2609,6 +2738,7 @@ new file mode 100644
 +#include <event2/event.h>
 +
 +#include "wire_proto.h"
++#include "bulb.h"
 +#include "gateway.h"
 +#include "discovery.h"
 +#include "version.h"
@@ -2741,7 +2871,7 @@ diff --git a/core/lifxd.h b/core/lifxd.h
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,37 @@
 +#pragma once
 +
 +#define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -2765,6 +2895,7 @@ new file mode 100644
 +extern struct lifxd_opts lifxd_opts;
 +extern struct event_base *lifxd_ev_base;
 +
++const char *lifxd_addrtoa(const uint8_t *);
 +void _lifxd_err(void (*)(int, const char *, ...), int, const char *, ...);
 +#define lifxd_err(eval, fmt, ...) _lifxd_err(err, (eval), (fmt), ##__VA_ARGS__);
 +#define lifxd_errx(eval, fmt, ...) _lifxd_err(errx, (eval), (fmt), ##__VA_ARGS__);
@@ -2782,7 +2913,8 @@ diff --git a/core/log.c b/core/log.c
 new file mode 100644
 --- /dev/null
 +++ b/core/log.c
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,95 @@
++#include <assert.h>
 +#include <err.h>
 +#include <errno.h>
 +#include <stdarg.h>
@@ -2792,7 +2924,21 @@ new file mode 100644
 +
 +#include <event2/event.h>
 +
++#include "wire_proto.h"
 +#include "lifxd.h"
++
++const char *
++lifxd_addrtoa(const uint8_t *addr)
++{
++    assert(addr);
++
++    static char str[LIFXD_ADDR_LENGTH * 2 + LIFXD_ADDR_LENGTH - 1];
++    snprintf(
++        str, sizeof(str), "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
++        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
++    );
++    return str;
++}
 +
 +void
 +_lifxd_err(void (*errfn)(int, const char *, ...),
@@ -2875,7 +3021,7 @@ diff --git a/core/wire_proto.c b/core/wire_proto.c
 new file mode 100644
 --- /dev/null
 +++ b/core/wire_proto.c
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,86 @@
 +#include <assert.h>
 +#include <endian.h>
 +#include <err.h>
@@ -2956,11 +3102,17 @@ new file mode 100644
 +    pkt->power = htole16(pkt->power);
 +    pkt->tags = htobe64(pkt->tags);
 +}
++
++void
++lifxd_wire_decode_power_state(struct lifxd_packet_power_state *pkt)
++{
++    (void)pkt;
++}
 diff --git a/core/wire_proto.h b/core/wire_proto.h
 new file mode 100644
 --- /dev/null
 +++ b/core/wire_proto.h
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,128 @@
 +#pragma once
 +
 +#pragma pack(push, 1)
@@ -3058,6 +3210,15 @@ new file mode 100644
 +    uint64be_t  tags;
 +};
 +
++enum lifxd_power_state {
++    LIFXD_POWER_OFF = 0,
++    LIFXD_POWER_ON = 0xffff
++};
++
++struct lifxd_packet_power_state {
++    uint16_t    power; // see enum lifxd_power_state
++};
++
 +enum lifxd_service_type {
 +    LIFXD_SERVICE_TCP = 1,
 +    LIFXD_SERVICE_UDP = 2
@@ -3077,5 +3238,6 @@ new file mode 100644
 +void lifxd_wire_encode_pan_gateway(struct lifxd_packet_pan_gateway *);
 +void lifxd_wire_decode_light_status(struct lifxd_packet_light_status *);
 +void lifxd_wire_encode_light_status(struct lifxd_packet_light_status *);
++void lifxd_wire_decode_power_state(struct lifxd_packet_power_state *);
 +
 +#pragma pack(pop)
