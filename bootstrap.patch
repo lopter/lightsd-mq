@@ -2166,7 +2166,7 @@ diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,359 @@
+@@ -0,0 +1,361 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -2322,48 +2322,51 @@ new file mode 100644
 +        );
 +        if (gw->cur_hdr_offset == LIFXD_PACKET_HEADER_SIZE) {
 +            lifxd_wire_decode_header(cur_hdr);
-+            lifxd_wire_dump_header(cur_hdr);
-+            pkt_infos = lifxd_gateway_get_packet_infos(cur_hdr->packet_type);
-+            if (pkt_infos) {
-+                lifxd_debug(
-+                    "received header from [%s]:%hu for packet %s",
-+                    gw->hostname, gw->port, pkt_infos->name
++            lifxd_debug(
++                "received header from [%s]:%hu for packet type %#x",
++                gw->hostname, gw->port, cur_hdr->packet_type
++            );
++            gw->cur_pkt_size = cur_hdr->size - LIFXD_PACKET_HEADER_SIZE;
++            if (gw->cur_pkt_size > LIFXD_MAX_PACKET_SIZE) {
++                lifxd_warnx(
++                    "unsupported packet size %hu (max = %d, packet_type = %#x) "
++                    "from [%s]:%hu",
++                    gw->cur_pkt_size,
++                    LIFXD_MAX_PACKET_SIZE,
++                    cur_hdr->packet_type,
++                    gw->hostname,
++                    gw->port
 +                );
-+                gw->cur_pkt_size = pkt_infos->size;
-+                if (gw->cur_pkt_size) {
-+                    gw->cur_pkt = calloc(1, gw->cur_pkt_size);
-+                    if (!gw->cur_pkt) {
-+                        lifxd_err(1, "can't allocate memory for a packet");
-+                    }
++                goto drop_gateway;
++            }
++            if (gw->cur_pkt_size) {
++                gw->cur_pkt = calloc(1, gw->cur_pkt_size);
++                if (!gw->cur_pkt) {
++                    lifxd_warn("can't allocate memory for a packet");
++                    goto drop_gateway;
 +                }
-+            } else {
-+                // TODO: discard the packet using the size in the header.
-+                lifxd_errx(
-+                    1,
-+                    "received header from [%s]:%hu for unknown packet %#x",
-+                    gw->hostname, gw->port, cur_hdr->packet_type
-+                );
-+                gw->cur_hdr_offset = 0;
 +            }
 +        }
 +    }
 +
-+    if (gw->cur_hdr_offset == LIFXD_PACKET_HEADER_SIZE
-+        && gw->cur_pkt_offset != gw->cur_pkt_size) {
-+        gw->cur_pkt_offset += bufferevent_read(
-+            bev,
-+            gw->cur_pkt + gw->cur_pkt_offset,
-+            gw->cur_pkt_size - gw->cur_pkt_offset
-+        );
++    if (gw->cur_hdr_offset == LIFXD_PACKET_HEADER_SIZE) {
++        if (gw->cur_pkt_offset != gw->cur_pkt_size) {
++            gw->cur_pkt_offset += bufferevent_read(
++                bev,
++                gw->cur_pkt + gw->cur_pkt_offset,
++                gw->cur_pkt_size - gw->cur_pkt_offset
++            );
++        }
 +        if (gw->cur_pkt_offset == gw->cur_pkt_size) {
-+            if (!pkt_infos) {
-+                pkt_infos = lifxd_gateway_get_packet_infos(
-+                    cur_hdr->packet_type
++            pkt_infos = lifxd_gateway_get_packet_infos(cur_hdr->packet_type);
++            if (pkt_infos) {
++                pkt_infos->decode(gw->cur_pkt);
++                pkt_infos->handle(gw, cur_hdr, gw->cur_pkt);
++            } else {
++                lifxd_warnx("discarding unknown packet %#x from [%s]:%hu",
++                    cur_hdr->packet_type, gw->hostname, gw->port
 +                );
-+                assert(pkt_infos);
 +            }
-+            pkt_infos->decode(gw->cur_pkt);
-+            pkt_infos->handle(gw, cur_hdr, gw->cur_pkt);
 +            free(gw->cur_pkt);
 +            gw->cur_pkt = NULL;
 +            gw->cur_pkt_size = 0;
@@ -2372,13 +2375,12 @@ new file mode 100644
 +        }
 +    }
 +
-+    if (gw->cur_hdr_offset == LIFXD_PACKET_HEADER_SIZE
-+        && gw->cur_pkt_offset == gw->cur_pkt_size) {
-+        lifxd_warnx(
-+            "read event on [%s]:%hu while already handling a packet",
-+            gw->hostname,
-+            gw->port
-+        );
++    return;
++
++drop_gateway:
++    lifxd_gateway_close(gw);
++    if (!lifxd_discovery_start()) {
++        lifxd_err(1, "can't start auto discovery");
 +    }
 +}
 +
@@ -2958,7 +2960,7 @@ diff --git a/core/wire_proto.h b/core/wire_proto.h
 new file mode 100644
 --- /dev/null
 +++ b/core/wire_proto.h
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,118 @@
 +#pragma once
 +
 +#pragma pack(push, 1)
@@ -2987,6 +2989,10 @@ new file mode 100644
 +
 +enum { LIFXD_PACKET_HEADER_SIZE = sizeof(struct lifxd_packet_header) };
 +enum { LIFXD_PROTOCOL_VERSION = 0x54 };
++
++// Let's define a maximum packet size just in case somebody sends us weird
++// headers:
++enum { LIFXD_MAX_PACKET_SIZE = 4096 };
 +
 +enum lifxd_packet_type {
 +    LIFXD_GET_PAN_GATEWAY = 0x02,
