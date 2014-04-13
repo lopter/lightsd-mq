@@ -13,7 +13,7 @@ diff --git a/.ycm_extra_conf.py b/.ycm_extra_conf.py
 new file mode 100644
 --- /dev/null
 +++ b/.ycm_extra_conf.py
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,149 @@
 +# This file is NOT licensed under the GPLv3, which is the license for the rest
 +# of YouCompleteMe.
 +#
@@ -58,9 +58,10 @@ new file mode 100644
 +    '-std=c99',
 +    '-D_POSIX_C_SOURCE=200809L',
 +    '-D_BSD_SOURCE=1',
-+    '-I./compat',
++    '-I./compat/generic',
 +    '-I./core',
 +    '-I{}'.format(os.path.join(os.getenv("MY_BUILD", "./build"), "core")),
++    '-I{}'.format(os.path.join(os.getenv("MY_BUILD", "./build"), "compat")),
 +]
 +
 +
@@ -1754,7 +1755,7 @@ diff --git a/core/discovery.c b/core/discovery.c
 new file mode 100644
 --- /dev/null
 +++ b/core/discovery.c
-@@ -0,0 +1,376 @@
+@@ -0,0 +1,397 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <arpa/inet.h>
@@ -1814,6 +1815,27 @@ new file mode 100644
 +        }
 +    }
 +};
++
++void
++lifxd_discovery_stop(void)
++{
++    if (lifxd_udp_endpoint.socket == -1)
++        return;
++
++    event_del(lifxd_udp_endpoint.write.ev);
++    event_free(lifxd_udp_endpoint.write.ev);
++    lifxd_udp_endpoint.write.ev = NULL;
++    event_del(lifxd_udp_endpoint.read.ev);
++    event_free(lifxd_udp_endpoint.read.ev);
++    lifxd_udp_endpoint.read.ev = NULL;
++
++    evutil_closesocket(lifxd_udp_endpoint.socket);
++    lifxd_udp_endpoint.socket = -1;
++
++    lifxd_udp_endpoint.read.offset = 0;
++    lifxd_udp_endpoint.read.state = LIFXD_DISCOVERY_INIT;
++    lifxd_udp_endpoint.write.to_write = 0;
++}
 +
 +static int
 +lifxd_discovery_recvfrom(struct sockaddr_in *peer, int howmuch)
@@ -1925,9 +1947,8 @@ new file mode 100644
 +                        pkt_infos->decode(read->buf);
 +                        pkt_infos->handle(gw, &read->hdr, read->buf);
 +                        if (pkt_infos->type == LIFXD_PAN_GATEWAY) {
-+                            if (event_del(read->ev) == -1) {
-+                                lifxd_warn("can't stop auto discovery");
-+                            }
++                            lifxd_discovery_stop();
++                            return;
 +                        } else if (!lifxd_discovery_start()) {
 +                            lifxd_warn("can't start auto discovery");
 +                        }
@@ -2015,7 +2036,7 @@ new file mode 100644
 +    }
 +}
 +
-+bool
++static bool
 +lifxd_discovery_setup(void)
 +{
 +    assert(lifxd_udp_endpoint.socket == -1);
@@ -2110,9 +2131,10 @@ new file mode 100644
 +lifxd_discovery_start(void)
 +{
 +    assert(lifxd_udp_endpoint.write.to_write == 0);
-+    assert(lifxd_udp_endpoint.socket != -1);
-+    assert(lifxd_udp_endpoint.write.ev);
-+    assert(lifxd_udp_endpoint.read.ev);
++
++    if (lifxd_udp_endpoint.socket == -1 && !lifxd_discovery_setup()) {
++        return false;
++    }
 +
 +    lifxd_udp_endpoint.write.to_write = LIFXD_PACKET_HEADER_SIZE;
 +    if (event_add(lifxd_udp_endpoint.write.ev, NULL) == -1) {
@@ -2138,17 +2160,18 @@ new file mode 100644
 @@ -0,0 +1,4 @@
 +#pragma once
 +
-+bool lifxd_discovery_setup(void);
 +bool lifxd_discovery_start(void);
++void lifxd_discovery_stop(void);
 diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,356 @@
+@@ -0,0 +1,360 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
 +#include <err.h>
++#include <netinet/ether.h>
 +#include <stdarg.h>
 +#include <stdbool.h>
 +#include <stdint.h>
@@ -2163,6 +2186,7 @@ new file mode 100644
 +#include "wire_proto.h"
 +#include "bulb.h"
 +#include "gateway.h"
++#include "discovery.h"
 +#include "lifxd.h"
 +
 +static struct lifxd_gateway_list lifxd_gateways = \
@@ -2276,6 +2300,9 @@ new file mode 100644
 +            }
 +        }
 +        lifxd_gateway_close(gw);
++        if (!lifxd_discovery_start()) {
++            lifxd_err(1, "can't start auto discovery");
++        }
 +    }
 +}
 +
@@ -2287,7 +2314,6 @@ new file mode 100644
 +    const struct lifxd_packet_infos *pkt_infos = NULL;
 +    struct lifxd_gateway *gw = (struct lifxd_gateway *)ctx;
 +    struct lifxd_packet_header *cur_hdr = &gw->cur_hdr;
-+    void *cur_pkt = gw->cur_pkt;
 +
 +    if (gw->cur_hdr_offset != LIFXD_PACKET_HEADER_SIZE) {
 +        gw->cur_hdr_offset += bufferevent_read(
@@ -2327,7 +2353,7 @@ new file mode 100644
 +        && gw->cur_pkt_offset != gw->cur_pkt_size) {
 +        gw->cur_pkt_offset += bufferevent_read(
 +            bev,
-+            cur_pkt + gw->cur_pkt_offset,
++            gw->cur_pkt + gw->cur_pkt_offset,
 +            gw->cur_pkt_size - gw->cur_pkt_offset
 +        );
 +        if (gw->cur_pkt_offset == gw->cur_pkt_size) {
@@ -2457,7 +2483,7 @@ new file mode 100644
 +    assert(gw && hdr && pkt);
 +
 +    lifxd_debug(
-+        "SET_PAN_GATEWAY ← [%s]:%hu - %hhx:%hhx:%hhx:%hhx:%hhx:%hhx ",
++        "SET_PAN_GATEWAY ← [%s]:%hu - %hhx:%hhx:%hhx:%hhx:%hhx:%hhx "
 +        "gw_addr=%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
 +        gw->hostname, gw->port,
 +        &hdr->bulb_addr[0], &hdr->bulb_addr[1], &hdr->bulb_addr[2],
@@ -2566,7 +2592,7 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.c
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,143 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <err.h>
@@ -2599,6 +2625,7 @@ new file mode 100644
 +void
 +lifxd_cleanup(void)
 +{
++    lifxd_discovery_stop();
 +    lifxd_gateway_close_all();
 +    event_base_free(lifxd_ev_base);
 +#if LIBEVENT_VERSION_NUMBER >= 0x02010100
@@ -2699,11 +2726,8 @@ new file mode 100644
 +        );
 +        if (!gw)
 +            lifxd_errx(1, "no bulb to connect to");
-+    } else {
-+        lifxd_discovery_setup();
-+        if (!lifxd_discovery_start()) {
-+            lifxd_err(1, "can't start auto discovery");
-+        }
++    } else if (!lifxd_discovery_start()) {
++        lifxd_err(1, "can't start auto discovery");
 +    }
 +
 +    event_base_dispatch(lifxd_ev_base);
