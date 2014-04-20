@@ -1706,7 +1706,7 @@ diff --git a/core/bulb.c b/core/bulb.c
 new file mode 100644
 --- /dev/null
 +++ b/core/bulb.c
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,89 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -1754,6 +1754,7 @@ new file mode 100644
 +
 +    bulb->gw = gw;
 +    memcpy(bulb->addr, addr, sizeof(bulb->addr));
++    LIST_INSERT_HEAD(&lifxd_bulbs, bulb, link);
 +
 +    return bulb;
 +}
@@ -2722,20 +2723,24 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.c
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,175 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
++#include <assert.h>
 +#include <err.h>
 +#include <errno.h>
 +#include <getopt.h>
++#include <signal.h>
 +#include <stdarg.h>
 +#include <stdbool.h>
 +#include <stdio.h>
 +#include <stdint.h>
 +#include <stdlib.h>
++#include <string.h>
 +#include <strings.h>
 +
 +#include <event2/event.h>
++#include <event2/event_struct.h>
 +
 +#include "wire_proto.h"
 +#include "bulb.h"
@@ -2765,16 +2770,42 @@ new file mode 100644
 +}
 +
 +static void
++lifxd_signal_event_callback(int signum, short events, void *ctx)
++{
++    assert(ctx);
++
++    lifxd_info(
++        "received signal %d (%s), exiting...", signum, strsignal(signum)
++    );
++    event_del((struct event *)ctx);  // restore default behavior
++    event_base_loopbreak(lifxd_ev_base);
++    (void)events;
++}
++
++static void
 +lifxd_configure_libevent(void)
 +{
 +    lifxd_gateway_close_all();
 +    event_set_log_callback(lifxd_libevent_log);
-+#ifndef NDEBUG
-+    // NOTE: let's keep in mind that we need to call event_debug_unassign when
-+    // using that and event_assign:
-+    event_enable_debug_mode();
-+#endif
 +    lifxd_ev_base = event_base_new();
++}
++
++static void
++lifxd_configure_signal_handling(void)
++{
++    const int signals[] = {SIGINT, SIGTERM, SIGQUIT};
++    static struct event sigevs[LIFXD_ARRAY_SIZE(signals)];
++
++    for (int i = 0; i != LIFXD_ARRAY_SIZE(signals); i++) {
++        evsignal_assign(
++            &sigevs[i],
++            lifxd_ev_base,
++            signals[i],
++            lifxd_signal_event_callback,
++            &sigevs[i]
++        );
++        evsignal_add(&sigevs[i], NULL);
++    }
 +}
 +
 +static void
@@ -2848,8 +2879,9 @@ new file mode 100644
 +    argc -= optind;
 +    argv += optind;
 +
-+    lifxd_configure_libevent();
 +    lifxd_gateway_load_packet_infos_map();
++    lifxd_configure_libevent();
++    lifxd_configure_signal_handling();
 +
 +    if (lifxd_opts.master_host) {
 +        struct lifxd_gateway *gw = lifxd_gateway_open(
@@ -2932,7 +2964,7 @@ new file mode 100644
 +{
 +    assert(addr);
 +
-+    static char str[LIFXD_ADDR_LENGTH * 2 + LIFXD_ADDR_LENGTH - 1];
++    static char str[LIFXD_ADDR_LENGTH * 2 + LIFXD_ADDR_LENGTH - 1 + 1];
 +    snprintf(
 +        str, sizeof(str), "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
 +        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
