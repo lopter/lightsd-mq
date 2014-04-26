@@ -1706,7 +1706,7 @@ diff --git a/core/bulb.c b/core/bulb.c
 new file mode 100644
 --- /dev/null
 +++ b/core/bulb.c
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,88 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -1770,9 +1770,8 @@ new file mode 100644
 +        bulb = lifxd_bulb_open(gw, addr);
 +        if (bulb) {
 +            lifxd_info(
-+                "discovered new bulb %hhx:%hhx:%hhx:%hhx:%hhx:%hhx on [%s]:%hu",
-+                addr[0], addr[1], addr[2], addr[3], addr[4], addr[5],
-+                gw->hostname, gw->port
++                "discovered new bulb %s on [%s]:%hu",
++                lifxd_addrtoa(addr), gw->hostname, gw->port
 +            );
 +        }
 +    }
@@ -2646,7 +2645,7 @@ new file mode 100644
 +    assert(gw && hdr && pkt);
 +
 +    lifxd_debug(
-+        "SET_POWER_STATUS ← [%s]:%hu - %s power=%#hx",
++        "SET_POWER_STATE ← [%s]:%hu - %s power=%#hx",
 +        gw->hostname, gw->port, lifxd_addrtoa(hdr->bulb_addr), pkt->power
 +    );
 +
