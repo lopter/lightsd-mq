@@ -254,6 +254,57 @@ new file mode 100644
 +    HANDLE_COMPONENTS
 +    REQUIRED_VARS EVENT2_CORE_LIBRARY EVENT2_INCLUDE_DIR
 +)
+diff --git a/README.rst b/README.rst
+new file mode 100644
+--- /dev/null
++++ b/README.rst
+@@ -0,0 +1,46 @@
++lifxd, a LIFX broker
++====================
++
++lifxd acts a central point of control for your LIFX_ WiFi bulbs.
++
++Having to run a daemon to control your LIFX bulbs may seem a little bit
++backward but has some advantages:
++
++- no discovery delay ever, you get all the bulbs and their state right away;
++- lifxd is always in sync with the bulbs and always know their state;
++- lifxd act as an abstraction layer and can expose new discovery mechanism (e.g:
++  zeroconf) and totally new APIs;
++- For those of you with a high paranoia factor, lifxd let you place your bulbs
++  in a totally separate and closed network.
++
++lifxd aims to be modular with a small core process that handles all the
++communications with the bulbs and a higher-level plugin API.
++
++.. _LIFX: http://lifx.co/
++
++Features
++--------
++
++lifxd doesn't do much yet, it just discovers your bulbs and stay in sync with
++them.
++
++Developers
++----------
++
++The project is far from being usable right now, but I'll be happy to hear your
++feedback and share ideas.
++
++Be aware that some parts of the code aren't really clean yet: I'm more focused
++on getting things working and good abstractions.
++
++Requirements
++------------
++
++lifxd aims to be highly portable on any POSIX system (win32 support should be
++quite easy, but isn't really the goal) and on any kind of hardware including
++embedded devices. Hence why lifxd is written in C with reasonable dependencies:
++
++- CMake ≥ 2.8;
++- libevent ≥ 2.0.19.
++
++.. vim: set tw=80 spelllang=en spell:
 diff --git a/compat/Darwin/endian.h b/compat/Darwin/endian.h
 new file mode 100644
 --- /dev/null
@@ -1706,7 +1757,36 @@ diff --git a/core/bulb.c b/core/bulb.c
 new file mode 100644
 --- /dev/null
 +++ b/core/bulb.c
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,117 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -1799,7 +1879,36 @@ diff --git a/core/bulb.h b/core/bulb.h
 new file mode 100644
 --- /dev/null
 +++ b/core/bulb.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,58 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#pragma once
 +
 +struct lifxd_gateway;
@@ -1846,7 +1955,36 @@ diff --git a/core/discovery.c b/core/discovery.c
 new file mode 100644
 --- /dev/null
 +++ b/core/discovery.c
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,429 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <arpa/inet.h>
@@ -2251,7 +2389,36 @@ diff --git a/core/discovery.h b/core/discovery.h
 new file mode 100644
 --- /dev/null
 +++ b/core/discovery.h
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,33 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#pragma once
 +
 +bool lifxd_discovery_start(void);
@@ -2260,7 +2427,36 @@ diff --git a/core/gateway.c b/core/gateway.c
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.c
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,422 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -2658,7 +2854,36 @@ diff --git a/core/gateway.h b/core/gateway.h
 new file mode 100644
 --- /dev/null
 +++ b/core/gateway.h
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,86 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#pragma once
 +
 +struct lifxd_gateway {
@@ -2722,7 +2947,36 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.c
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,204 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <assert.h>
@@ -2902,7 +3156,36 @@ diff --git a/core/lifxd.h b/core/lifxd.h
 new file mode 100644
 --- /dev/null
 +++ b/core/lifxd.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,66 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#pragma once
 +
 +#define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -2944,7 +3227,36 @@ diff --git a/core/log.c b/core/log.c
 new file mode 100644
 --- /dev/null
 +++ b/core/log.c
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,124 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#include <assert.h>
 +#include <err.h>
 +#include <errno.h>
@@ -3044,7 +3356,36 @@ diff --git a/core/version.h.in b/core/version.h.in
 new file mode 100644
 --- /dev/null
 +++ b/core/version.h.in
-@@ -0,0 +1,3 @@
+@@ -0,0 +1,32 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#pragma once
 +
 +const char LIFXD_VERSION[] = "@LIFXD_VERSION@";
@@ -3052,7 +3393,36 @@ diff --git a/core/wire_proto.c b/core/wire_proto.c
 new file mode 100644
 --- /dev/null
 +++ b/core/wire_proto.c
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,115 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#include <assert.h>
 +#include <endian.h>
 +#include <err.h>
@@ -3143,7 +3513,36 @@ diff --git a/core/wire_proto.h b/core/wire_proto.h
 new file mode 100644
 --- /dev/null
 +++ b/core/wire_proto.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,157 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
 +#pragma once
 +
 +#pragma pack(push, 1)
