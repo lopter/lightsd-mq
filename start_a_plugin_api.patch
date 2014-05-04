@@ -10,11 +10,78 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  ADD_SUBDIRECTORY(core)
 +ADD_SUBDIRECTORY(plugins)
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -3,11 +3,11 @@
+ ADD_EXECUTABLE(
+     lifxd
+     bulb.c
+-    client.c
+     discovery.c
+     gateway.c
+     lifxd.c
+     log.c
++    plugin.c
+     wire_proto.c
+ )
+ 
+diff --git a/core/client.c b/core/client.c
+deleted file mode 100644
+diff --git a/core/client.h b/core/client.h
+deleted file mode 100644
+--- a/core/client.h
++++ /dev/null
+@@ -1,6 +0,0 @@
+-#pragma once
+-
+-struct lifxd_client {
+-    LIST_ENTRY(lifxd_client)    link;
+-};
+-LIST_HEAD(lifxd_client_list, lifxd_client);
+diff --git a/core/plugin.h b/core/plugin.h
+new file mode 100644
+--- /dev/null
++++ b/core/plugin.h
+@@ -0,0 +1,33 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++bool lifxd_plugin_start(void);
++void lifxd_plugin_stop(void);
 diff --git a/plugins/plugin.h b/plugins/plugin.h
 new file mode 100644
 --- /dev/null
 +++ b/plugins/plugin.h
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,54 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -63,10 +130,9 @@ new file mode 100644
 +};
 +SLIST_HEAD(lifxd_light_list, lifxd_light);
 +
-+struct lifxd_light *lifxd_plugin_get_lights(void);
++struct lifxd_light_list lifxd_plugin_get_lights(void);
++struct lifxd_light_list lifxd_plugin_wait_for_light_changes(void);
 +void lifxd_plugin_set_lights(struct lifxd_light *);
 +void lifxd_plugin_free_lights(struct lifxd_light *);
-+
-+
 +
 +__END_DECLS
