@@ -1,0 +1,72 @@
+# HG changeset patch
+# Parent dabd434273eae71d1662b1650b24d9172061eef2
+Start a plugin API
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -36,3 +36,4 @@
+ )
+ 
+ ADD_SUBDIRECTORY(core)
++ADD_SUBDIRECTORY(plugins)
+diff --git a/plugins/plugin.h b/plugins/plugin.h
+new file mode 100644
+--- /dev/null
++++ b/plugins/plugin.h
+@@ -0,0 +1,55 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++__BEGIN_DECLS
++
++enum { LIFXD_LIGHT_ID_SIZE = 32 };
++
++//! Represent the state of one or more bulbs grouped together.
++struct lifxd_light {
++    SLIST_ENTRY(lifxd_light)    link;
++    uint16_t                    hue;
++    uint16_t                    saturation;
++    uint16_t                    brightness;
++    uint16_t                    kelvin;
++    uint16_t                    dim;
++    uint16_t                    power;
++    char                        id[LIFXD_LIGHT_ID_SIZE];
++};
++SLIST_HEAD(lifxd_light_list, lifxd_light);
++
++struct lifxd_light *lifxd_plugin_get_lights(void);
++void lifxd_plugin_set_lights(struct lifxd_light *);
++void lifxd_plugin_free_lights(struct lifxd_light *);
++
++
++
++__END_DECLS
