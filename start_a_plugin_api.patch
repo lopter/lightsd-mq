@@ -10,6 +10,17 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  ADD_SUBDIRECTORY(core)
 +ADD_SUBDIRECTORY(plugins)
+diff --git a/TODO.rst b/TODO.rst
+new file mode 100644
+--- /dev/null
++++ b/TODO.rst
+@@ -0,0 +1,6 @@
++TODO
++====
++
++- cleanup/simplify the discovery code;
++- use timers to do smarter discovery;
++- only export what's necessary in gateway.h/gateway.c.
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
@@ -39,11 +50,325 @@ deleted file mode 100644
 -    LIST_ENTRY(lifxd_client)    link;
 -};
 -LIST_HEAD(lifxd_client_list, lifxd_client);
+diff --git a/core/lifxd.c b/core/lifxd.c
+--- a/core/lifxd.c
++++ b/core/lifxd.c
+@@ -49,6 +49,7 @@
+ #include "bulb.h"
+ #include "gateway.h"
+ #include "discovery.h"
++#include "plugin.h"
+ #include "version.h"
+ #include "lifxd.h"
+ 
+@@ -56,6 +57,7 @@
+     .foreground = false,
+     .master_host = NULL,
+     .master_port = 56700,
++    .plugin_directory = NULL,
+     .verbosity = LIFXD_DEBUG
+ }; 
+ 
+@@ -116,7 +118,7 @@
+ {
+     printf(
+         "Usage: %s [-m master_bulb_host] [-p master_bulb_port] "
+-        "[-v debug|info|warning|error] [-f] [-h] [-V]\n",
++        "[-d plugin_directory] [-v debug|info|warning|error] [-f] [-h] [-V]\n",
+         progname
+     );
+     exit(0);
+@@ -126,13 +128,14 @@
+ main(int argc, char *argv[])
+ {
+     static const struct option opts[] = {
+-        {"foreground",  no_argument,       NULL, 'f'},
+-        {"help",        no_argument,       NULL, 'h'},
+-        {"master-host", required_argument, NULL, 'm'},
+-        {"master-port", required_argument, NULL, 'p'},
+-        {"verbosity",   required_argument, NULL, 'v'},
+-        {"version",     no_argument,       NULL, 'V'},
+-        {NULL,          0,                 NULL, 0}
++        {"foreground",          no_argument,       NULL, 'f'},
++        {"help",                no_argument,       NULL, 'h'},
++        {"master-host",         required_argument, NULL, 'm'},
++        {"master-port",         required_argument, NULL, 'p'},
++        {"plugin-directory",    required_argument, NULL, 'd'},
++        {"verbosity",           required_argument, NULL, 'v'},
++        {"version",             no_argument,       NULL, 'V'},
++        {NULL,                  0,                 NULL, 0}
+     };
+ 
+     for (int rv = getopt_long(argc, argv, "fhm:p:v:V", opts, NULL);
+@@ -141,22 +144,25 @@
+         switch (rv) {
+         case 'f':
+             lifxd_opts.foreground = true;
+-            break ;
++            break;
+         case 'h':
+             lifxd_usage(argv[0]);
+         case 'm':
+             lifxd_opts.master_host = optarg;
+-            break ;
++            break;
+         case 'p':
+             errno = 0;
+             long port = strtol(optarg, NULL, 10);
+             if (!errno && port <= UINT16_MAX && port > 0) {
+                 lifxd_opts.master_port = port;
+-                break ;
++                break;
+             }
+             lifxd_errx(
+                 1, "The master port must be between 1 and %d", UINT16_MAX
+             );
++        case 'd':
++            lifxd_opts.plugin_directory = optarg;
++            break;
+         case 'v':
+             for (int i = 0;;) {
+                 const char *verbose_levels[] = {
+@@ -164,13 +170,13 @@
+                 };
+                 if (!strcasecmp(optarg, verbose_levels[i])) {
+                     lifxd_opts.verbosity = i;
+-                    break ;
++                    break;
+                 }
+                 if (++i == LIFXD_ARRAY_SIZE(verbose_levels)) {
+                     lifxd_errx(1, "Unknown verbosity level: %s", optarg);
+                 }
+             }
+-            break ;
++            break;
+         case 'V':
+             printf("%s v%s\n", argv[0], LIFXD_VERSION);
+             return 0;
+@@ -185,6 +191,7 @@
+     lifxd_gateway_load_packet_infos_map();
+     lifxd_configure_libevent();
+     lifxd_configure_signal_handling();
++    lifxd_plugin_start_all();
+ 
+     if (lifxd_opts.master_host) {
+         struct lifxd_gateway *gw = lifxd_gateway_open(
+diff --git a/core/lifxd.h b/core/lifxd.h
+--- a/core/lifxd.h
++++ b/core/lifxd.h
+@@ -44,6 +44,7 @@
+     bool                    foreground;
+     const char              *master_host;
+     uint16_t                master_port;
++    const char              *plugin_directory;
+     enum lifxd_verbosity    verbosity;
+ };
+ 
+diff --git a/core/plugin.c b/core/plugin.c
+new file mode 100644
+--- /dev/null
++++ b/core/plugin.c
+@@ -0,0 +1,195 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++#include <sys/un.h>
++#include <assert.h>
++#include <err.h>
++#include <limits.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <event2/event.h>
++#include <event2/util.h>
++
++#include "bulb.h"
++#include "plugin.h"
++#include "lifxd.h"
++
++enum { LIFXD_PLUGIN_SOCKET_PATH_SIZE = 32 };
++enum { LIFXD_PLUGIN_SOCKET_BACKLOG = 16 };
++
++static struct {
++    evutil_socket_t socket;
++    struct event    *ev;
++    char            socket_path[LIFXD_PLUGIN_SOCKET_PATH_SIZE];
++    char            directory[];
++} lifxd_plugin_endpoint = {
++    .socket = -1,
++    .ev = NULL,
++#define LIFXD_PLUGIN_SOCKET_DIR "/tmp/lifxdXXXXXX"
++    .directory = LIFXD_PLUGIN_SOCKET_DIR
++};
++
++static struct lifxd_plugin_list lifxd_plugins = \
++    SLIST_HEAD_INITIALIZER(&lifxd_plugins);
++
++static void
++lifxd_plugin_event_callback(evutil_socket_t socket, short events, void *ctx)
++{
++    (void)ctx;
++
++    if (events & EV_READ) {
++        struct sockaddr_un peer;
++        ev_socklen_t addrlen;
++        evutil_socket_t plugin = accept(
++            socket, (struct sockaddr *)&peer, &addrlen
++        );
++        if (plugin == -1) {
++            lifxd_err(1, "can't accept new connection on the plugin socket");
++        }
++        if (evutil_make_socket_nonblocking(plugin) == -1) {
++            evutil_closesocket(plugin);
++            lifxd_err(1, "can't accept new connection on the plugin socket");
++        }
++        // XXX How do I know which plugin this socket corresponds to?
++    } else {
++        lifxd_warn("unexpected event on the plugin socket, events=%#x", events);
++    }
++}
++
++static bool
++lifxd_plugin_setup(void)
++{
++    assert(lifxd_plugin_endpoint.socket == -1);
++
++    lifxd_plugin_endpoint.socket = socket(AF_UNIX, SOCK_STREAM, 0);
++
++    if (evutil_make_socket_nonblocking(lifxd_plugin_endpoint.socket) == -1) {
++        goto err_ononblock;
++    }
++
++    if (!mkdtemp(lifxd_plugin_endpoint.directory)) {
++        goto err_mkdtemp;
++    }
++    strlcpy(
++        lifxd_plugin_endpoint.socket_path,
++        lifxd_plugin_endpoint.directory,
++        sizeof(lifxd_plugin_endpoint.socket_path)
++    );
++    strlcat(
++        lifxd_plugin_endpoint.socket_path,
++        "/core",
++        sizeof(lifxd_plugin_endpoint.socket_path)
++    );
++
++    struct sockaddr_un addr = { .sun_family = AF_UNIX };
++    strlcpy(
++        addr.sun_path, lifxd_plugin_endpoint.socket_path, sizeof(addr.sun_path)
++    );
++    int err = bind(
++        lifxd_plugin_endpoint.socket, (struct sockaddr *)&addr, sizeof(addr)
++    );
++    if (err == -1) {
++        goto err_bind;
++    }
++
++    err = listen(lifxd_plugin_endpoint.socket, LIFXD_PLUGIN_SOCKET_BACKLOG);
++    if (err == -1) {
++        goto err_listen;
++    }
++
++    lifxd_plugin_endpoint.ev = event_new(
++        lifxd_ev_base,
++        lifxd_plugin_endpoint.socket,
++        EV_READ|EV_PERSIST,
++        lifxd_plugin_event_callback,
++        NULL
++    );
++    if (!lifxd_plugin_endpoint.ev) {
++        goto err_event_new;
++    }
++
++err_event_new:
++err_listen:
++err_bind:
++    rmdir(lifxd_plugin_endpoint.directory);
++    memset(
++        lifxd_plugin_endpoint.socket_path,
++        0,
++        sizeof(lifxd_plugin_endpoint.socket_path)
++    );
++    strlcpy(
++        lifxd_plugin_endpoint.directory,
++        LIFXD_PLUGIN_SOCKET_DIR,
++        sizeof(LIFXD_PLUGIN_SOCKET_DIR)
++    );
++err_mkdtemp:
++err_ononblock:
++    evutil_closesocket(lifxd_plugin_endpoint.socket);
++    lifxd_plugin_endpoint.socket = -1;
++    return false;
++}
++
++void
++lifxd_plugin_start_one(const char *path)
++{
++
++}
++
++bool
++lifxd_plugin_start_all(void)
++{
++    assert(lifxd_ev_base);
++
++    if (lifxd_plugin_endpoint.socket == -1 && !lifxd_plugin_setup()) {
++        return false;
++    }
++
++    char path[PATH_MAX];
++
++    strlcpy(path, lifxd_opts.plugin_directory, sizeof(path));
++    strlcat(path, "/pulse", sizeof(path));
++    lifxd_plugin_start_one(path);
++
++    return true;
++}
++
++void
++lifxd_plugin_stop_all(void)
++{
++    evutil_closesocket(lifxd_plugin_endpoint.socket);
++    lifxd_plugin_endpoint.socket = -1;
++    unlink(lifxd_plugin_endpoint.socket_path);
++    rmdir(lifxd_plugin_endpoint.directory);
++}
 diff --git a/core/plugin.h b/core/plugin.h
 new file mode 100644
 --- /dev/null
 +++ b/core/plugin.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,44 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -75,13 +400,59 @@ new file mode 100644
 +
 +#pragma once
 +
-+bool lifxd_plugin_start(void);
-+void lifxd_plugin_stop(void);
++enum { LIFXD_PLUGIN_NAME_SIZE = 32 };
++
++struct lifxd_plugin {
++    SLIST_ENTRY(lifxd_plugin)   link;
++    char                        name[LIFXD_PLUGIN_NAME_SIZE];
++    pid_t                       pid;
++    struct bufferevent          *io;
++};
++SLIST_HEAD(lifxd_plugin_list, lifxd_plugin);
++
++bool lifxd_plugin_start_all(void);
++void lifxd_plugin_stop_all(void);
++void lifxd_plugin_update_all(void);
+diff --git a/plugins/plugin.c b/plugins/plugin.c
+new file mode 100644
+--- /dev/null
++++ b/plugins/plugin.c
+@@ -0,0 +1,30 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++
 diff --git a/plugins/plugin.h b/plugins/plugin.h
 new file mode 100644
 --- /dev/null
 +++ b/plugins/plugin.h
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,62 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -129,6 +500,14 @@ new file mode 100644
 +    char                        id[LIFXD_LIGHT_ID_SIZE];
 +};
 +SLIST_HEAD(lifxd_light_list, lifxd_light);
++
++//! Entry point of your plugin.
++void lifxd_plugin_main(void);
++
++void lifxd_plugin_error(const char *, ...);
++void lifxd_plugin_warn(const char *, ...);
++void lifxd_plugin_info(const char *, ...);
++void lifxd_plugin_debug(const char *, ...);
 +
 +struct lifxd_light_list lifxd_plugin_get_lights(void);
 +struct lifxd_light_list lifxd_plugin_wait_for_light_changes(void);
