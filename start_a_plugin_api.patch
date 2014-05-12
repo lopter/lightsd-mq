@@ -168,7 +168,7 @@ diff --git a/core/plugin.c b/core/plugin.c
 new file mode 100644
 --- /dev/null
 +++ b/core/plugin.c
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,115 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -217,125 +217,56 @@ new file mode 100644
 +#include "plugin.h"
 +#include "lifxd.h"
 +
-+enum { LIFXD_PLUGIN_SOCKET_PATH_SIZE = 32 };
-+enum { LIFXD_PLUGIN_SOCKET_BACKLOG = 16 };
-+
-+static struct {
-+    evutil_socket_t socket;
-+    struct event    *ev;
-+    char            socket_path[LIFXD_PLUGIN_SOCKET_PATH_SIZE];
-+    char            directory[];
-+} lifxd_plugin_endpoint = {
-+    .socket = -1,
-+    .ev = NULL,
-+#define LIFXD_PLUGIN_SOCKET_DIR "/tmp/lifxdXXXXXX"
-+    .directory = LIFXD_PLUGIN_SOCKET_DIR
-+};
-+
 +static struct lifxd_plugin_list lifxd_plugins = \
 +    SLIST_HEAD_INITIALIZER(&lifxd_plugins);
 +
-+static void
-+lifxd_plugin_event_callback(evutil_socket_t socket, short events, void *ctx)
-+{
-+    (void)ctx;
-+
-+    if (events & EV_READ) {
-+        struct sockaddr_un peer;
-+        ev_socklen_t addrlen;
-+        evutil_socket_t plugin = accept(
-+            socket, (struct sockaddr *)&peer, &addrlen
-+        );
-+        if (plugin == -1) {
-+            lifxd_err(1, "can't accept new connection on the plugin socket");
-+        }
-+        if (evutil_make_socket_nonblocking(plugin) == -1) {
-+            evutil_closesocket(plugin);
-+            lifxd_err(1, "can't accept new connection on the plugin socket");
-+        }
-+        // XXX How do I know which plugin this socket corresponds to?
-+    } else {
-+        lifxd_warn("unexpected event on the plugin socket, events=%#x", events);
-+    }
-+}
-+
 +static bool
-+lifxd_plugin_setup(void)
++lifxd_plugin_start_one(const char *path, const char *name)
 +{
-+    assert(lifxd_plugin_endpoint.socket == -1);
++    struct lifxd_plugin *plugin = calloc(1, sizeof(*plugin));
++    if (!plugin) {
++        return false;
++    }
 +
-+    lifxd_plugin_endpoint.socket = socket(AF_UNIX, SOCK_STREAM, 0);
++    strlcpy(plugin->name, name, sizeof(plugin->name));
 +
-+    if (evutil_make_socket_nonblocking(lifxd_plugin_endpoint.socket) == -1) {
++    evutil_socket_t ipc[2];
++    if (evutil_socketpair(AF_UNIX, SOCK_STREAM, PF_UNSPEC, ipc) == -1) {
++        goto err_socketpair;
++    }
++
++    if (evutil_make_socket_nonblocking(ipc[0]) == -1) {
 +        goto err_ononblock;
 +    }
 +
-+    if (!mkdtemp(lifxd_plugin_endpoint.directory)) {
-+        goto err_mkdtemp;
-+    }
-+    strlcpy(
-+        lifxd_plugin_endpoint.socket_path,
-+        lifxd_plugin_endpoint.directory,
-+        sizeof(lifxd_plugin_endpoint.socket_path)
-+    );
-+    strlcat(
-+        lifxd_plugin_endpoint.socket_path,
-+        "/core",
-+        sizeof(lifxd_plugin_endpoint.socket_path)
-+    );
-+
-+    struct sockaddr_un addr = { .sun_family = AF_UNIX };
-+    strlcpy(
-+        addr.sun_path, lifxd_plugin_endpoint.socket_path, sizeof(addr.sun_path)
-+    );
-+    int err = bind(
-+        lifxd_plugin_endpoint.socket, (struct sockaddr *)&addr, sizeof(addr)
-+    );
-+    if (err == -1) {
-+        goto err_bind;
++    plugin->io = bufferevent_socket_new(lifxd_ev_base, ipc[0], 0);
++    if (!plugin->io) {
++        goto err_bufferevent_new;
 +    }
 +
-+    err = listen(lifxd_plugin_endpoint.socket, LIFXD_PLUGIN_SOCKET_BACKLOG);
-+    if (err == -1) {
-+        goto err_listen;
++    pid_t rv = fork();
++    if (rv == -1) {
++        goto err_fork;
++    } else if (rv == 0) {
++        // TODO: dup the standard fds to do all the logging in the core
++        execve
 +    }
 +
-+    lifxd_plugin_endpoint.ev = event_new(
-+        lifxd_ev_base,
-+        lifxd_plugin_endpoint.socket,
-+        EV_READ|EV_PERSIST,
-+        lifxd_plugin_event_callback,
-+        NULL
-+    );
-+    if (!lifxd_plugin_endpoint.ev) {
-+        goto err_event_new;
-+    }
++    plugin->pid = rv;
++    SLIST_INSERT_HEAD(&lifxd_plugins, plugin, link);
++    lifxd_info("started plugin %s", name);
 +
-+err_event_new:
-+err_listen:
-+err_bind:
-+    rmdir(lifxd_plugin_endpoint.directory);
-+    memset(
-+        lifxd_plugin_endpoint.socket_path,
-+        0,
-+        sizeof(lifxd_plugin_endpoint.socket_path)
-+    );
-+    strlcpy(
-+        lifxd_plugin_endpoint.directory,
-+        LIFXD_PLUGIN_SOCKET_DIR,
-+        sizeof(LIFXD_PLUGIN_SOCKET_DIR)
-+    );
-+err_mkdtemp:
++    return true;
++
++err_fork:
++    bufferevent_free(plugin->io);
++err_bufferevent_new:
 +err_ononblock:
-+    evutil_closesocket(lifxd_plugin_endpoint.socket);
-+    lifxd_plugin_endpoint.socket = -1;
++    close(ipc[0]);
++    close(ipc[1]);
++err_socketpair:
++    free(plugin);
 +    return false;
-+}
-+
-+void
-+lifxd_plugin_start_one(const char *path)
-+{
-+
 +}
 +
 +bool
@@ -343,26 +274,15 @@ new file mode 100644
 +{
 +    assert(lifxd_ev_base);
 +
-+    if (lifxd_plugin_endpoint.socket == -1 && !lifxd_plugin_setup()) {
-+        return false;
-+    }
-+
 +    char path[PATH_MAX];
-+
 +    strlcpy(path, lifxd_opts.plugin_directory, sizeof(path));
 +    strlcat(path, "/pulse", sizeof(path));
-+    lifxd_plugin_start_one(path);
-+
-+    return true;
++    return lifxd_plugin_start_one(path);
 +}
 +
 +void
 +lifxd_plugin_stop_all(void)
 +{
-+    evutil_closesocket(lifxd_plugin_endpoint.socket);
-+    lifxd_plugin_endpoint.socket = -1;
-+    unlink(lifxd_plugin_endpoint.socket_path);
-+    rmdir(lifxd_plugin_endpoint.directory);
 +}
 diff --git a/core/plugin.h b/core/plugin.h
 new file mode 100644
