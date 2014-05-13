@@ -40,7 +40,7 @@ new file mode 100644
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
-@@ -3,11 +3,11 @@
+@@ -3,12 +3,12 @@
  ADD_EXECUTABLE(
      lifxd
      bulb.c
@@ -53,6 +53,8 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
      wire_proto.c
  )
  
+-TARGET_LINK_LIBRARIES(lifxd ${EVENT2_CORE_LIBRARY})
++TARGET_LINK_LIBRARIES(lifxd ${EVENT2_CORE_LIBRARY} bsd) # FIXME portability
 diff --git a/core/client.c b/core/client.c
 deleted file mode 100644
 diff --git a/core/client.h b/core/client.h
@@ -172,7 +174,17 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 diff --git a/core/lifxd.h b/core/lifxd.h
 --- a/core/lifxd.h
 +++ b/core/lifxd.h
-@@ -44,6 +44,7 @@
+@@ -29,6 +29,9 @@
+ 
+ #pragma once
+ 
++size_t strlcpy(char *, const char *, size_t);
++size_t strlcat(char *, const char *, size_t);
++
+ #define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+ 
+ enum lifxd_verbosity {
+@@ -44,6 +47,7 @@
      bool                    foreground;
      const char              *master_host;
      uint16_t                master_port;
@@ -184,7 +196,7 @@ diff --git a/core/plugin.c b/core/plugin.c
 new file mode 100644
 --- /dev/null
 +++ b/core/plugin.c
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,209 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -227,12 +239,15 @@ new file mode 100644
 +#include <stdint.h>
 +#include <stdlib.h>
 +#include <string.h>
++#include <time.h>
 +#include <unistd.h>
 +
++#include <event2/bufferevent.h>
 +#include <event2/event.h>
 +#include <event2/event_struct.h>
 +#include <event2/util.h>
 +
++#include "wire_proto.h"
 +#include "bulb.h"
 +#include "plugin.h"
 +#include "lifxd.h"
@@ -245,12 +260,35 @@ new file mode 100644
 +{
 +    struct lifxd_plugin *plugin, *next_plugin, *prev_plugin = NULL;
 +    SLIST_FOREACH_SAFE(plugin, &lifxd_plugins, link, next_plugin) {
-+        int err, status;
-+        err = waitpid(plugin->pid, &status, WNOHANG);
-+        if (err == -1) {
++        int rv, status;
++        rv = waitpid(plugin->pid, &status, WNOHANG);
++        if (rv == -1) {
 +            lifxd_err(1, "can't stop plugin %s", plugin->name);
-+        } else if (err != 0) {
-+
++        } else if (rv != 0) {
++            if (WIFEXITED(status)) {
++                if (WEXITSTATUS(status) != EXIT_SUCCESS) {
++                    lifxd_warnx(
++                        "plugin %s exited with unexpected status %d",
++                        plugin->name, WEXITSTATUS(status)
++                    );
++                } else {
++                    lifxd_info("plugin %s finished", plugin->name);
++                }
++                if (prev_plugin) {
++                    SLIST_REMOVE_AFTER(prev_plugin, link);
++                } else {
++                    SLIST_REMOVE_HEAD(&lifxd_plugins, link);
++                }
++            } else if (WIFSIGNALED(status)) {
++                lifxd_warnx(
++                    "plugin %s exited on unexpected signal %s",
++                    plugin->name, strsignal(WTERMSIG(status))
++                );
++            } else if (WIFSTOPPED(status)) {
++                lifxd_info("%s has been stopped", plugin->name);
++            } else {
++                lifxd_info("%s been started", plugin->name);
++            }
 +        }
 +
 +        prev_plugin = plugin;
@@ -285,6 +323,12 @@ new file mode 100644
 +        goto err_bufferevent_new;
 +    }
 +
++    struct timespec time;
++    if (clock_gettime(CLOCK_MONOTONIC, &time) == -1) {
++        goto err_gettime;
++    }
++    plugin->started_at = time.tv_sec;
++
 +    struct rlimit max_fileno;
 +    getrlimit(RLIMIT_NOFILE, &max_fileno);
 +
@@ -313,6 +357,7 @@ new file mode 100644
 +    return true;
 +
 +err_fork:
++err_gettime:
 +    bufferevent_free(plugin->io);
 +err_bufferevent_new:
 +err_ononblock:
@@ -354,7 +399,7 @@ new file mode 100644
 +    char path[PATH_MAX];
 +    strlcpy(path, lifxd_opts.plugin_directory, sizeof(path));
 +    strlcat(path, "/pulse", sizeof(path));
-+    return lifxd_plugin_start_one(path);
++    return lifxd_plugin_start_one(path, "pulse");
 +}
 +
 +void
@@ -365,7 +410,7 @@ diff --git a/core/plugin.h b/core/plugin.h
 new file mode 100644
 --- /dev/null
 +++ b/core/plugin.h
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,45 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -402,7 +447,8 @@ new file mode 100644
 +struct lifxd_plugin {
 +    SLIST_ENTRY(lifxd_plugin)   link;
 +    char                        name[LIFXD_PLUGIN_NAME_SIZE];
-+    pid_t                       pid;
++    pid_t                       pid; //!< 0 if the plugin is not running
++    time_t                      started_at;
 +    struct bufferevent          *io;
 +};
 +SLIST_HEAD(lifxd_plugin_list, lifxd_plugin);
@@ -410,11 +456,38 @@ new file mode 100644
 +bool lifxd_plugin_start_all(void);
 +void lifxd_plugin_stop_all(void);
 +void lifxd_plugin_update_all(void);
+diff --git a/core/wire_proto.c b/core/wire_proto.c
+--- a/core/wire_proto.c
++++ b/core/wire_proto.c
+@@ -27,6 +27,7 @@
+ // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
++#include <sys/types.h>
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
+diff --git a/plugins/CMakeLists.txt b/plugins/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/plugins/CMakeLists.txt
+@@ -0,0 +1,11 @@
++ADD_LIBRARY(plugin SHARED plugin.c)
++TARGET_LINK_LIBRARIES(plugin bsd) # FIXME portability
++
++LINK_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
++
++FUNCTION(ADD_PLUGIN NAME)
++    ADD_EXECUTABLE(${NAME} ${ARGN})
++    TARGET_LINK_LIBRARIES(${NAME} libplugin)
++ENDFUNCTION()
++
++ADD_PLUGIN(pulse pulse.c)
 diff --git a/plugins/plugin.c b/plugins/plugin.c
 new file mode 100644
 --- /dev/null
 +++ b/plugins/plugin.c
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,40 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -444,7 +517,17 @@ new file mode 100644
 +// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 +// POSSIBILITY OF SUCH DAMAGE.
 +
++#include <sys/queue.h>
++#include <stdint.h>
++#include <stdlib.h>
 +
++#include "plugin.h"
++
++int
++main(int argc, char *argv[])
++{
++    return lifxd_plugin_main();
++}
 diff --git a/plugins/plugin.h b/plugins/plugin.h
 new file mode 100644
 --- /dev/null
@@ -499,7 +582,7 @@ new file mode 100644
 +SLIST_HEAD(lifxd_light_list, lifxd_light);
 +
 +//! Entry point of your plugin.
-+void lifxd_plugin_main(void);
++int lifxd_plugin_main(void);
 +
 +void lifxd_plugin_error(const char *, ...);
 +void lifxd_plugin_warn(const char *, ...);
@@ -512,3 +595,51 @@ new file mode 100644
 +void lifxd_plugin_free_lights(struct lifxd_light *);
 +
 +__END_DECLS
+diff --git a/plugins/pulse.c b/plugins/pulse.c
+new file mode 100644
+--- /dev/null
++++ b/plugins/pulse.c
+@@ -0,0 +1,43 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <stdlib.h>
++
++#include "plugin.h"
++
++int
++lifxd_plugin_main(void)
++{
++    fprintf(stderr, "plugin pulse running");
++
++    return EXIT_SUCCESS;
++}
