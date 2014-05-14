@@ -96,7 +96,7 @@ diff --git a/core/lifxd.c b/core/lifxd.c
          progname
      );
      exit(0);
-@@ -126,13 +128,14 @@
+@@ -126,37 +128,41 @@
  main(int argc, char *argv[])
  {
      static const struct option opts[] = {
@@ -117,8 +117,11 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 +        {NULL,                  0,                 NULL, 0}
      };
  
-     for (int rv = getopt_long(argc, argv, "fhm:p:v:V", opts, NULL);
-@@ -141,22 +144,25 @@
+-    for (int rv = getopt_long(argc, argv, "fhm:p:v:V", opts, NULL);
++    for (int rv = getopt_long(argc, argv, "fhm:p:d:v:V", opts, NULL);
+          rv != -1;
+-         rv = getopt_long(argc, argv, "fh:p:v:V", opts, NULL)) {
++         rv = getopt_long(argc, argv, "fh:p:d:v:V", opts, NULL)) {
          switch (rv) {
          case 'f':
              lifxd_opts.foreground = true;
@@ -196,7 +199,7 @@ diff --git a/core/plugin.c b/core/plugin.c
 new file mode 100644
 --- /dev/null
 +++ b/core/plugin.c
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,211 @@
 +// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -382,6 +385,8 @@ new file mode 100644
 +            lifxd_plugin_sigchld_callback,
 +            NULL
 +        );
++        evsignal_add(&sigchld_event, NULL);
++        done = true;
 +    }
 +
 +    return done;
@@ -479,7 +484,7 @@ new file mode 100644
 +
 +FUNCTION(ADD_PLUGIN NAME)
 +    ADD_EXECUTABLE(${NAME} ${ARGN})
-+    TARGET_LINK_LIBRARIES(${NAME} libplugin)
++    TARGET_LINK_LIBRARIES(${NAME} plugin)
 +ENDFUNCTION()
 +
 +ADD_PLUGIN(pulse pulse.c)
