@@ -340,7 +340,7 @@ diff --git a/core/gateway.c b/core/gateway.c
  
      if (!site) {
          lifxd_warnx("connecting directly to a bulb isn't supported yet");
-@@ -274,38 +288,65 @@
+@@ -274,38 +288,68 @@
          lifxd_warn("can't allocate a new gateway bulb");
          return false;
      }
@@ -384,11 +384,14 @@ diff --git a/core/gateway.c b/core/gateway.c
 +        gw
 +    );
 +    gw->write_buf = evbuffer_new();
-+    inet_ntop(peer->ss_family, peer, gw->ip_addr, peer->ss_len);
 +    if (peer->ss_family == AF_INET) {
-+        gw->port = ntohs(((const struct sockaddr_in *)peer)->sin_port);
++        const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
++        inet_ntop(AF_INET, &in_peer->sin_addr, gw->ip_addr, sizeof(gw->ip_addr));
++        gw->port = ntohs(in_peer->sin_port);
 +    } else {
-+        gw->port = ntohs(((const struct sockaddr_in6 *)peer)->sin6_port);
++        const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
++        inet_ntop(AF_INET6, &in6_peer->sin6_addr, gw->ip_addr, sizeof(gw->ip_addr));
++        gw->port = ntohs(in6_peer->sin6_port);
 +    }
 +    memcpy(gw->addr, site, sizeof(gw->addr));
  
@@ -430,7 +433,7 @@ diff --git a/core/gateway.c b/core/gateway.c
      free(gw);
      return NULL;
  }
-@@ -345,8 +386,9 @@
+@@ -345,8 +389,9 @@
          .packet_type = LIFXD_GET_PAN_GATEWAY
      };
      lifxd_wire_encode_header(&hdr);
@@ -442,7 +445,7 @@ diff --git a/core/gateway.c b/core/gateway.c
  }
  
  void
-@@ -358,11 +400,11 @@
+@@ -358,11 +403,11 @@
  
      lifxd_debug(
          "SET_PAN_GATEWAY ← [%s]:%hu - %s gw_addr=%s",
@@ -456,7 +459,7 @@ diff --git a/core/gateway.c b/core/gateway.c
  }
  
  void
-@@ -376,8 +418,9 @@
+@@ -376,8 +421,9 @@
          .packet_type = LIFXD_GET_LIGHT_STATE
      };
      lifxd_wire_encode_header(&hdr);
@@ -468,7 +471,7 @@ diff --git a/core/gateway.c b/core/gateway.c
  }
  
  void
-@@ -391,7 +434,7 @@
+@@ -391,7 +437,7 @@
          "SET_LIGHT_STATUS ← [%s]:%hu - %s "
          "hue=%#hx, saturation=%#hx, brightness=%#hx, "
          "kelvin=%#hx, dim=%#hx, power=%#hx, label=%.*s, tags=%lx",
@@ -477,7 +480,7 @@ diff --git a/core/gateway.c b/core/gateway.c
          pkt->hue, pkt->saturation, pkt->brightness, pkt->kelvin,
          pkt->dim, pkt->power, sizeof(pkt->label), pkt->label, pkt->tags
      );
-@@ -412,7 +455,7 @@
+@@ -412,7 +458,7 @@
  
      lifxd_debug(
          "SET_POWER_STATE ← [%s]:%hu - %s power=%#hx",
