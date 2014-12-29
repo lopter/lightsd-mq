@@ -1,0 +1,1395 @@
+# HG changeset patch
+# Parent acb7f99d8d5a5e0c5da3681421edea6604290adc
+
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -2,9 +2,9 @@
+ 
+ ADD_EXECUTABLE(
+     lifxd
++    broadcast.c
+     bulb.c
+     client.c
+-    discovery.c
+     gateway.c
+     lifxd.c
+     log.c
+diff --git a/core/broadcast.c b/core/broadcast.c
+new file mode 100644
+--- /dev/null
++++ b/core/broadcast.c
+@@ -0,0 +1,389 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <arpa/inet.h>
++#include <assert.h>
++#include <err.h>
++#include <errno.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <event2/event.h>
++#include <event2/buffer.h>
++#include <event2/bufferevent.h>
++#include <event2/util.h>
++
++#include "wire_proto.h"
++#include "bulb.h"
++#include "gateway.h"
++#include "broadcast.h"
++#include "lifxd.h"
++
++static struct lifxd_packet_infos_map lifxd_packet_infos = \
++    RB_INITIALIZER(&lifxd_packets_infos);
++
++RB_GENERATE_STATIC(
++    lifxd_packet_infos_map,
++    lifxd_packet_infos,
++    link,
++    lifxd_packet_infos_cmp
++);
++
++static void
++lifxd_broadcast_load_packet_infos_map(void)
++{
++#define DECODER(x)  ((void (*)(void *))(x))
++#define ENCODER(x)  ((void (*)(void *))(x))
++#define HANDLER(x)                                  \
++    ((void (*)(struct lifxd_gateway *,              \
++               const struct lifxd_packet_header *,  \
++               const void *))(x))
++
++    static struct lifxd_packet_infos packet_table[] = {
++        {
++            .name = "GET_PAN_GATEWAY",
++            .type = LIFXD_GET_PAN_GATEWAY
++        },
++        {
++            .name = "PAN_GATEWAY",
++            .type = LIFXD_PAN_GATEWAY,
++            .size = sizeof(struct lifxd_packet_pan_gateway),
++            .decode = DECODER(lifxd_wire_decode_pan_gateway),
++            .encode = ENCODER(lifxd_wire_encode_pan_gateway),
++            .handle = HANDLER(lifxd_gateway_handle_pan_gateway)
++        },
++        {
++            .name = "LIGHT_STATUS",
++            .type = LIFXD_LIGHT_STATUS,
++            .size = sizeof(struct lifxd_packet_light_status),
++            .decode = DECODER(lifxd_wire_decode_light_status),
++            .encode = ENCODER(lifxd_wire_encode_light_status),
++            .handle = HANDLER(lifxd_gateway_handle_light_status)
++        },
++        {
++            .name = "POWER_STATE",
++            .type = LIFXD_POWER_STATE,
++            .size = sizeof(struct lifxd_packet_power_state),
++            .decode = DECODER(lifxd_wire_decode_power_state),
++            .handle = HANDLER(lifxd_gateway_handle_power_state)
++        }
++    };
++
++    for (int i = 0; i != LIFXD_ARRAY_SIZE(packet_table); ++i) {
++        RB_INSERT(
++            lifxd_packet_infos_map, &lifxd_packet_infos, &packet_table[i]
++        );
++    }
++}
++
++static const struct lifxd_packet_infos *
++lifxd_broadcast_get_packet_infos(enum lifxd_packet_type packet_type)
++{
++    struct lifxd_packet_infos pkt_infos = { .type = packet_type };
++    return RB_FIND(lifxd_packet_infos_map, &lifxd_packet_infos, &pkt_infos);
++}
++
++static struct {
++    evutil_socket_t socket;
++    struct event    *read_ev;
++    struct event    *write_ev;
++} lifxd_broadcast_endpoint = {
++    .socket = -1,
++    .read_ev = NULL,
++    .write_ev = NULL
++};
++
++static bool
++lifxd_broadcast_handle_read(void)
++{
++    assert(lifxd_broadcast_endpoint.socket != -1);
++
++    while (true) {
++        struct sockaddr_storage peer;
++        ev_socklen_t addrlen;
++        union {
++            char buf[LIFXD_MAX_PACKET_SIZE];
++            struct lifxd_packet_header hdr;
++        } read;
++        int nbytes = recvfrom(
++            lifxd_broadcast_endpoint.socket,
++            read.buf,
++            sizeof(read.buf),
++            0,
++            (struct sockaddr *)&peer,
++            &addrlen
++        );
++        if (nbytes == -1) {
++            int error = EVUTIL_SOCKET_ERROR();
++            if (error == EINTR) {
++                continue;
++            }
++            if (error == EAGAIN) {
++                return true;
++            }
++            lifxd_warn("can't receive broadcast packet");
++            return false;
++        }
++
++        char peer_addr[INET6_ADDRSTRLEN];
++        lifxd_sockaddrtoa(&peer, peer_addr, sizeof(peer_addr));
++        short peer_port = lifxd_sockaddrport(&peer);
++
++        if (nbytes < LIFXD_PACKET_HEADER_SIZE) {
++            lifxd_warnx(
++                "broadcast packet too short from [%s]:%hu", peer_addr, peer_port
++            );
++            return false;
++        }
++
++        lifxd_wire_decode_header(&read.hdr);
++        if (read.hdr.size != nbytes) {
++            lifxd_warnx(
++                "incomplete broadcast packet from [%s]:%hu",
++                peer_addr,
++                peer_port
++            );
++            return false;
++        }
++        if (read.hdr.packet_type == LIFXD_GET_PAN_GATEWAY) {
++            lifxd_debug(
++                "discarding GET_PAN_GATEWAY packet from [%s]:%hu",
++                peer_addr,
++                peer_port
++            );
++            return true;
++        }
++
++        const struct lifxd_packet_infos *pkt_infos =
++            lifxd_broadcast_get_packet_infos(read.hdr.packet_type);
++        if (pkt_infos) {
++            struct lifxd_gateway *gw = lifxd_gateway_get(read.hdr.gw_addr);
++            if (!gw && pkt_infos->type == LIFXD_PAN_GATEWAY) {
++                gw = lifxd_gateway_open(&peer, read.hdr.gw_addr);
++            }
++            if (gw) {
++                void *pkt = &read.buf[LIFXD_PACKET_HEADER_SIZE];
++                if (pkt_infos->decode) {
++                    pkt_infos->decode(pkt);
++                }
++                pkt_infos->handle(gw, &read.hdr, pkt);
++            } else {
++                lifxd_err(1, "can't allocate gateway");
++            }
++        } else {
++            lifxd_warnx(
++                "received unknown packet %#x from [%s]:%hu",
++                read.hdr.packet_type,
++                peer_addr,
++                peer_port
++            )
++        }
++    }
++}
++
++static bool
++lifxd_broadcast_handle_write(void)
++{
++    assert(lifxd_broadcast_endpoint.socket != -1);
++
++    struct sockaddr_in lifx_addr = {
++        .sin_len = sizeof(lifx_addr),
++        .sin_family = AF_INET,
++        .sin_addr = { INADDR_BROADCAST },
++        .sin_port = htons(lifxd_opts.master_port)
++    };
++    struct lifxd_packet_header get_pan_gateway = {
++        .size = LIFXD_PACKET_HEADER_SIZE,
++        .protocol = LIFXD_PROTOCOL_VERSION,
++        .packet_type = LIFXD_GET_PAN_GATEWAY
++    };
++    lifxd_wire_encode_header(&get_pan_gateway);
++
++    int nbytes;
++retry:
++    nbytes = sendto(
++        lifxd_broadcast_endpoint.socket,
++        (void *)&get_pan_gateway,
++        sizeof(get_pan_gateway),
++        0,
++        (const struct sockaddr *)&lifx_addr,
++        sizeof(lifx_addr)
++    );
++    if (nbytes == sizeof(get_pan_gateway)) {
++        event_del(lifxd_broadcast_endpoint.write_ev);
++        return true;
++    }
++    if (nbytes == -1) {
++        if (EVUTIL_SOCKET_ERROR() == EINTR) {
++            goto retry;
++        }
++        lifxd_warn("can't broadcast discovery packet");
++    } else {
++        lifxd_warnx("can't broadcast discovery packet");
++    }
++    return false;
++}
++
++static void
++lifxd_broadcast_event_callback(evutil_socket_t socket, short events, void *ctx)
++{
++    (void)socket;
++    (void)ctx;
++
++    if (events & EV_TIMEOUT) {
++        // not sure how that could happen but eh.
++        lifxd_warnx("timeout on the udp broadcast socket");
++        goto error_reset;
++    }
++    if (events & EV_READ) {
++        if (!lifxd_broadcast_handle_read()) {
++            goto error_reset;
++        }
++    }
++    if (events & EV_WRITE) {
++        if (!lifxd_broadcast_handle_write()) {
++            goto error_reset;
++        }
++    }
++
++    return;
++
++error_reset:
++    lifxd_broadcast_close();
++    lifxd_broadcast_setup();
++    lifxd_broadcast_discovery();
++}
++
++void
++lifxd_broadcast_close(void)
++{
++    if (lifxd_broadcast_endpoint.read_ev) {
++        event_del(lifxd_broadcast_endpoint.read_ev);
++        event_free(lifxd_broadcast_endpoint.read_ev);
++        lifxd_broadcast_endpoint.read_ev = NULL;
++    }
++    if (lifxd_broadcast_endpoint.write_ev) {
++        event_del(lifxd_broadcast_endpoint.write_ev);
++        event_free(lifxd_broadcast_endpoint.write_ev);
++        lifxd_broadcast_endpoint.write_ev = NULL;
++    }
++    if (lifxd_broadcast_endpoint.socket != -1) {
++        evutil_closesocket(lifxd_broadcast_endpoint.socket);
++        lifxd_broadcast_endpoint.socket = -1;
++    }
++}
++
++bool
++lifxd_broadcast_setup(void)
++{
++    assert(lifxd_broadcast_endpoint.socket == -1);
++    assert(lifxd_broadcast_endpoint.read_ev == NULL);
++    assert(lifxd_broadcast_endpoint.write_ev == NULL);
++
++    if (RB_EMPTY(&lifxd_packet_infos))
++        lifxd_broadcast_load_packet_infos_map();
++
++    lifxd_broadcast_endpoint.socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if (lifxd_broadcast_endpoint.socket == -1) {
++        return false;
++    }
++
++    int val = 1;
++    int err = setsockopt(
++        lifxd_broadcast_endpoint.socket,
++        SOL_SOCKET,
++        SO_BROADCAST,
++        &val,
++        sizeof(val)
++    );
++    if (err) {
++        goto error;
++    }
++
++    if (evutil_make_socket_nonblocking(lifxd_broadcast_endpoint.socket) == -1) {
++        goto error;
++    }
++
++    struct sockaddr_in lifx_addr = {
++        .sin_len = sizeof(lifx_addr),
++        .sin_family = AF_INET,
++        .sin_addr = { INADDR_ANY },
++        .sin_port = htons(lifxd_opts.master_port)
++    };
++
++    err = bind(
++        lifxd_broadcast_endpoint.socket,
++        (const struct sockaddr *)&lifx_addr,
++        sizeof(lifx_addr)
++    );
++    if (err) {
++        goto error;
++    }
++
++    lifxd_broadcast_endpoint.read_ev = event_new(
++        lifxd_ev_base,
++        lifxd_broadcast_endpoint.socket,
++        EV_READ|EV_PERSIST,
++        lifxd_broadcast_event_callback,
++        NULL
++    );
++    lifxd_broadcast_endpoint.write_ev = event_new(
++        lifxd_ev_base,
++        lifxd_broadcast_endpoint.socket,
++        EV_WRITE|EV_PERSIST,
++        lifxd_broadcast_event_callback,
++        NULL
++    );
++    if (!lifxd_broadcast_endpoint.read_ev || !lifxd_broadcast_endpoint.write_ev) {
++        goto error;
++    }
++
++    if (!event_add(lifxd_broadcast_endpoint.read_ev, NULL)) {
++        return true;
++    }
++
++    int errsave;
++error:
++    errsave = errno;
++    lifxd_broadcast_close();
++    errno = errsave;
++    return false;
++}
++
++bool
++lifxd_broadcast_discovery(void)
++{
++    assert(lifxd_broadcast_endpoint.write_ev);
++    return event_add(lifxd_broadcast_endpoint.write_ev, NULL) == 0;
++}
+diff --git a/core/broadcast.h b/core/broadcast.h
+new file mode 100644
+--- /dev/null
++++ b/core/broadcast.h
+@@ -0,0 +1,54 @@
++// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++struct lifxd_packet_infos {
++    RB_ENTRY(lifxd_packet_infos)    link;
++    const char                      *name;
++    enum lifxd_packet_type          type;
++    unsigned                        size;
++    void                            (*decode)(void *);
++    void                            (*encode)(void *);
++    void                            (*handle)(struct lifxd_gateway *,
++                                              const struct lifxd_packet_header *,
++                                              const void *);
++};
++RB_HEAD(lifxd_packet_infos_map, lifxd_packet_infos);
++
++static inline int
++lifxd_packet_infos_cmp(struct lifxd_packet_infos *a,
++                       struct lifxd_packet_infos *b)
++{
++    return a->type - b->type;
++}
++
++bool lifxd_broadcast_setup(void);
++void lifxd_broadcast_close(void);
++bool lifxd_broadcast_discovery(void);
+diff --git a/core/discovery.c b/core/discovery.c
+deleted file mode 100644
+--- a/core/discovery.c
++++ /dev/null
+@@ -1,428 +0,0 @@
+-// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
+-// All rights reserved.
+-//
+-// Redistribution and use in source and binary forms, with or without
+-// modification, are permitted provided that the following conditions are met:
+-//
+-// 1. Redistributions of source code must retain the above copyright notice,
+-//    this list of conditions and the following disclaimer.
+-//
+-// 2. Redistributions in binary form must reproduce the above copyright notice,
+-//    this list of conditions and the following disclaimer in the documentation
+-//    and/or other materials provided with the distribution.
+-//
+-// 3. Neither the name of the copyright holder nor the names of its contributors
+-//    may be used to endorse or promote products derived from this software
+-//    without specific prior written permission.
+-//
+-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+-// POSSIBILITY OF SUCH DAMAGE.
+-
+-#include <sys/queue.h>
+-#include <sys/tree.h>
+-#include <arpa/inet.h>
+-#include <assert.h>
+-#include <err.h>
+-#include <errno.h>
+-#include <stdarg.h>
+-#include <stdbool.h>
+-#include <stdint.h>
+-#include <stdlib.h>
+-#include <string.h>
+-
+-#include <event2/event.h>
+-#include <event2/buffer.h>
+-#include <event2/bufferevent.h>
+-#include <event2/util.h>
+-
+-#include "wire_proto.h"
+-#include "discovery.h"
+-#include "bulb.h"
+-#include "gateway.h"
+-#include "lifxd.h"
+-
+-enum { LIFXD_DISCOVERY_BUF_SIZE = 1024 };
+-
+-struct lifxd_discovery_rd_ctx {
+-    enum {
+-        LIFXD_DISCOVERY_INIT,
+-        LIFXD_DISCOVERY_HDR_RDY
+-    }                           state;
+-    struct event                *ev;
+-    struct sockaddr_in          peer;
+-    char                        buf[LIFXD_DISCOVERY_BUF_SIZE];
+-    // TODO use pkt_offset and read_offset and keep everything in buf
+-    unsigned                    offset;
+-    struct lifxd_packet_header  hdr;
+-    unsigned                    pkt_size;
+-};
+-
+-struct lifxd_discovery_wr_ctx {
+-    struct event                *ev;
+-    struct lifxd_packet_header  command;
+-    bool                        encoded;
+-    unsigned                    to_write;
+-};
+-
+-static struct {
+-    evutil_socket_t                 socket;
+-    struct lifxd_discovery_rd_ctx   read;
+-    struct lifxd_discovery_wr_ctx   write;
+-} lifxd_udp_endpoint = {
+-    .socket = -1,
+-    .write = {
+-        .command = {
+-            .size = LIFXD_PACKET_HEADER_SIZE,
+-            .protocol = LIFXD_PROTOCOL_VERSION,
+-            .packet_type = LIFXD_GET_PAN_GATEWAY
+-        }
+-    }
+-};
+-
+-void
+-lifxd_discovery_stop(void)
+-{
+-    if (lifxd_udp_endpoint.socket == -1)
+-        return;
+-
+-    event_del(lifxd_udp_endpoint.write.ev);
+-    event_free(lifxd_udp_endpoint.write.ev);
+-    lifxd_udp_endpoint.write.ev = NULL;
+-    event_del(lifxd_udp_endpoint.read.ev);
+-    event_free(lifxd_udp_endpoint.read.ev);
+-    lifxd_udp_endpoint.read.ev = NULL;
+-
+-    evutil_closesocket(lifxd_udp_endpoint.socket);
+-    lifxd_udp_endpoint.socket = -1;
+-
+-    lifxd_udp_endpoint.read.offset = 0;
+-    lifxd_udp_endpoint.read.state = LIFXD_DISCOVERY_INIT;
+-    lifxd_udp_endpoint.write.to_write = 0;
+-}
+-
+-static int
+-lifxd_discovery_recvfrom(struct sockaddr_in *peer, int howmuch)
+-{
+-    struct lifxd_discovery_rd_ctx *read = &lifxd_udp_endpoint.read;
+-
+-    assert(howmuch > 0);
+-    assert(read->offset + howmuch <= sizeof(read->buf));
+-    
+-    while (true) {
+-        ev_socklen_t socklen = sizeof(*peer);
+-        int nbytes = recvfrom(
+-            lifxd_udp_endpoint.socket,
+-            &read->buf[read->offset],
+-            howmuch,
+-            0,
+-            (struct sockaddr *)peer,
+-            &socklen
+-        );
+-        if (nbytes == -1) {
+-            int error = EVUTIL_SOCKET_ERROR();
+-            if (error == EAGAIN) {
+-                return 0;
+-            }
+-            if (error != EINTR) {
+-                lifxd_err(1, "read error on the udp discovery socket");
+-            }
+-        } else {
+-            return nbytes;
+-        }
+-    }
+-}
+-
+-static void
+-lifxd_discovery_handle_read(void)
+-{
+-    struct lifxd_discovery_rd_ctx *read = &lifxd_udp_endpoint.read;
+-    struct sockaddr_in peer;
+-
+-    while (1) {
+-        if (read->state == LIFXD_DISCOVERY_INIT) {
+-            read->offset += lifxd_discovery_recvfrom(
+-                &peer, LIFXD_PACKET_HEADER_SIZE - read->offset
+-            );
+-            if (read->offset == LIFXD_PACKET_HEADER_SIZE) {
+-                memcpy(&read->peer, &peer, sizeof(peer));
+-                // TODO: leave the header in the buf and use its size as an offset:
+-                memcpy(&read->hdr, read->buf, LIFXD_PACKET_HEADER_SIZE);
+-                lifxd_wire_decode_header(&read->hdr);
+-                read->pkt_size = read->hdr.size - LIFXD_PACKET_HEADER_SIZE;
+-                if (read->pkt_size > LIFXD_DISCOVERY_BUF_SIZE) {
+-                    lifxd_warnx(
+-                        "received bugged header from [%s]:%hu "
+-                        "with packet size = %d, type = %#x",
+-                        inet_ntoa(peer.sin_addr),
+-                        ntohs(peer.sin_port),
+-                        read->pkt_size,
+-                        read->hdr.packet_type
+-                    );
+-                    read->offset = 0;
+-                    continue;
+-                }
+-                read->state = LIFXD_DISCOVERY_HDR_RDY;
+-                int extra_bytes = read->offset - LIFXD_PACKET_HEADER_SIZE;
+-                if (extra_bytes) {
+-                    memmove(read->buf, &read->buf[read->offset], extra_bytes);
+-                    read->offset = 0;
+-                }
+-            } else {
+-                return;
+-            }
+-        }
+-        if (read->state == LIFXD_DISCOVERY_HDR_RDY) {
+-            while (read->offset < read->pkt_size) {
+-                int nbytes = lifxd_discovery_recvfrom(
+-                    &peer, read->pkt_size - read->offset
+-                );
+-                if (!nbytes) {
+-                    return;
+-                }
+-                if (peer.sin_addr.s_addr != read->peer.sin_addr.s_addr) {
+-                    lifxd_warnx("different bulbs are advertising on the network");
+-                } else {
+-                    read->offset += nbytes;
+-                }
+-            }
+-            const struct lifxd_packet_infos *pkt_infos =
+-                lifxd_gateway_get_packet_infos(read->hdr.packet_type);
+-            // We can run into 4 scenarios at this point:
+-            // 1. We get a packet we don't know how to handle: discard and restart
+-            //    the discovery;
+-            // 2. We get a packet we know how to handle but which is not part of
+-            //    the discovery process (i.e: not GET_PAN_GW nor PAN_GW): try to
+-            //    handle it if we already know the gateway where it is from and
+-            //    restart the discovery processs;
+-            // 3. We get a GET_PAN_GW packet, probably, our own packet: discard it;
+-            // 4. We get a PAN_GW packet: handle it and stop the discovery process.
+-            if (pkt_infos) {
+-                if (pkt_infos->type != LIFXD_GET_PAN_GATEWAY) {
+-                    struct lifxd_gateway *gw = lifxd_gateway_get(read->hdr.gw_addr);
+-                    if (!gw && pkt_infos->type == LIFXD_PAN_GATEWAY) {
+-                        gw = lifxd_gateway_open(
+-                            (const struct sockaddr_storage *)&peer,
+-                            read->hdr.gw_addr
+-                        );
+-                    }
+-                    if (gw) {
+-                        pkt_infos->decode(read->buf);
+-                        pkt_infos->handle(gw, &read->hdr, read->buf);
+-                        if (pkt_infos->type == LIFXD_PAN_GATEWAY) {
+-                            lifxd_discovery_stop();
+-                            return;
+-                        } else if (!lifxd_discovery_start()) {
+-                            lifxd_warn("can't start auto discovery");
+-                        }
+-                    } else {
+-                        lifxd_err(1, "can't allocate gateway");
+-                    }
+-                } else {
+-                    lifxd_debug(
+-                        "discarding GET_PAN_GATEWAY packet from [%s]:%hu",
+-                        inet_ntoa(peer.sin_addr),
+-                        ntohs(peer.sin_port)
+-                    );
+-                }
+-            } else {
+-                lifxd_warnx(
+-                    "received unknown packet %#x from [%s]:%hu",
+-                    read->hdr.packet_type,
+-                    inet_ntoa(peer.sin_addr),
+-                    ntohs(peer.sin_port)
+-                );
+-                if (!lifxd_discovery_start()) {
+-                    lifxd_warn("can't start auto discovery");
+-                }
+-            }
+-            read->offset = 0;
+-            read->state = LIFXD_DISCOVERY_INIT;
+-        }
+-    }
+-}
+-
+-static void
+-lifxd_discovery_handle_write(void)
+-{
+-    struct lifxd_discovery_wr_ctx *write = &lifxd_udp_endpoint.write;
+-
+-    if (write->to_write) {
+-        struct sockaddr_in addr = {
+-            .sin_family = AF_INET,
+-            .sin_port = htons(lifxd_opts.master_port)
+-        };
+-        int nbytes;
+-        inet_pton(AF_INET, "255.255.255.255", &addr.sin_addr);
+-    retry:
+-        nbytes = sendto(
+-            lifxd_udp_endpoint.socket,
+-            (void *)&write->command,
+-            write->to_write,
+-            0,
+-            (struct sockaddr *)&addr,
+-            sizeof(addr)
+-        );
+-        if (nbytes == -1) {
+-            int error = EVUTIL_SOCKET_ERROR();
+-            if (error == EINTR) {
+-                goto retry;
+-            } else if (error != EAGAIN) {
+-                lifxd_warn("can't broadcast discovery packet");
+-            }
+-        } else {
+-            write->to_write -= nbytes;
+-        }
+-    }
+-
+-    if (!write->to_write) {
+-        lifxd_info("discovery packet has been broadcasted");
+-        if (event_del(write->ev) == -1) {
+-            lifxd_warn("can't stop discovery");
+-        }
+-    }
+-}
+-
+-static void
+-lifxd_discovery_event_callback(evutil_socket_t socket, short events, void *ctx)
+-{
+-    (void)socket;
+-    (void)ctx;
+-
+-    if (events & EV_TIMEOUT) {
+-        lifxd_errx(1, "timeout on the udp discovery socket");
+-        // TODO: reset state and restart discovery.
+-    }
+-    if (events & EV_READ) {
+-        lifxd_discovery_handle_read();
+-    }
+-    if (events & EV_WRITE) {
+-        lifxd_discovery_handle_write();
+-    }
+-}
+-
+-static bool
+-lifxd_discovery_setup(void)
+-{
+-    assert(lifxd_udp_endpoint.socket == -1);
+-
+-    if (!lifxd_udp_endpoint.write.encoded) {
+-        lifxd_wire_encode_header(&lifxd_udp_endpoint.write.command);
+-        lifxd_udp_endpoint.write.encoded = true;
+-    }
+-
+-    lifxd_udp_endpoint.socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+-    if (lifxd_udp_endpoint.socket == -1) {
+-        return false;
+-    }
+-
+-    int val = 1;
+-    int err = setsockopt(
+-        lifxd_udp_endpoint.socket, SOL_SOCKET, SO_BROADCAST, &val, sizeof(val)
+-    );
+-    if (err == -1) {
+-        goto err_setsockopt;
+-    }
+-
+-    if (evutil_make_socket_nonblocking(lifxd_udp_endpoint.socket) == -1) {
+-        goto err_ononblock;
+-    }
+-
+-    struct evutil_addrinfo hints, *res = NULL;
+-    memset(&hints, 0, sizeof(hints));
+-    char port_str[6] = { 0 };
+-    evutil_snprintf(
+-        port_str, sizeof(port_str), "%hu", lifxd_opts.master_port
+-    );
+-    hints.ai_family = AF_INET;
+-    hints.ai_socktype = SOCK_DGRAM;
+-    hints.ai_protocol = IPPROTO_UDP;
+-    hints.ai_flags = EVUTIL_AI_NUMERICHOST;
+-
+-    err = evutil_getaddrinfo("0.0.0.0", port_str, &hints, &res);
+-    if (err || !res) {
+-        goto err_getaddrinfo;
+-    }
+-    if (bind(lifxd_udp_endpoint.socket, res->ai_addr, res->ai_addrlen) == -1) {
+-        evutil_freeaddrinfo(res);
+-        goto err_bind;
+-    }
+-    freeaddrinfo(res);
+-
+-    lifxd_udp_endpoint.read.ev = event_new(
+-        lifxd_ev_base,
+-        lifxd_udp_endpoint.socket,
+-        EV_READ|EV_PERSIST,
+-        lifxd_discovery_event_callback,
+-        NULL
+-    );
+-    lifxd_udp_endpoint.write.ev = event_new(
+-        lifxd_ev_base,
+-        lifxd_udp_endpoint.socket,
+-        EV_WRITE|EV_PERSIST,
+-        lifxd_discovery_event_callback,
+-        NULL
+-    );
+-    if (!lifxd_udp_endpoint.read.ev || !lifxd_udp_endpoint.write.ev) {
+-        goto err_event_new;
+-    }
+-    err = event_add(lifxd_udp_endpoint.read.ev, NULL);
+-    if (err) {
+-        goto err_event_add;
+-    }
+-
+-    return true;
+-
+-err_event_add:
+-err_event_new:
+-    if (lifxd_udp_endpoint.read.ev) {
+-        event_free(lifxd_udp_endpoint.read.ev);
+-        lifxd_udp_endpoint.read.ev = NULL;
+-    }
+-    if (lifxd_udp_endpoint.write.ev) {
+-        event_free(lifxd_udp_endpoint.write.ev);
+-        lifxd_udp_endpoint.write.ev = NULL;
+-    }
+-err_bind:
+-err_getaddrinfo:
+-err_setsockopt:
+-err_ononblock:
+-    evutil_closesocket(lifxd_udp_endpoint.socket);
+-    lifxd_udp_endpoint.socket = -1;
+-    return false;
+-}
+-
+-bool
+-lifxd_discovery_start(void)
+-{
+-    assert(lifxd_udp_endpoint.write.to_write == 0);
+-
+-    if (lifxd_udp_endpoint.socket == -1 && !lifxd_discovery_setup()) {
+-        return false;
+-    }
+-
+-    lifxd_udp_endpoint.write.to_write = LIFXD_PACKET_HEADER_SIZE;
+-    if (event_add(lifxd_udp_endpoint.write.ev, NULL) == -1) {
+-        goto err_enable_writes;
+-    }
+-    if (event_add(lifxd_udp_endpoint.read.ev, NULL) == -1) {
+-        goto err_enable_reads;
+-    }
+-
+-    lifxd_info("starting auto-discovery");
+-    return true;
+-
+-err_enable_reads:
+-    event_del(lifxd_udp_endpoint.write.ev);
+-err_enable_writes:
+-    lifxd_udp_endpoint.write.to_write = 0;
+-    return false;
+-}
+diff --git a/core/discovery.h b/core/discovery.h
+deleted file mode 100644
+--- a/core/discovery.h
++++ /dev/null
+@@ -1,33 +0,0 @@
+-// Copyright (c) 2014, Louis Opter <kalessin@kalessin.fr>
+-// All rights reserved.
+-//
+-// Redistribution and use in source and binary forms, with or without
+-// modification, are permitted provided that the following conditions are met:
+-//
+-// 1. Redistributions of source code must retain the above copyright notice,
+-//    this list of conditions and the following disclaimer.
+-//
+-// 2. Redistributions in binary form must reproduce the above copyright notice,
+-//    this list of conditions and the following disclaimer in the documentation
+-//    and/or other materials provided with the distribution.
+-//
+-// 3. Neither the name of the copyright holder nor the names of its contributors
+-//    may be used to endorse or promote products derived from this software
+-//    without specific prior written permission.
+-//
+-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+-// POSSIBILITY OF SUCH DAMAGE.
+-
+-#pragma once
+-
+-bool lifxd_discovery_start(void);
+-void lifxd_discovery_stop(void);
+diff --git a/core/gateway.c b/core/gateway.c
+--- a/core/gateway.c
++++ b/core/gateway.c
+@@ -29,11 +29,9 @@
+ 
+ #include <sys/queue.h>
+ #include <sys/tree.h>
+-#include <arpa/inet.h>
+ #include <assert.h>
+ #include <err.h>
+ #include <errno.h>
+-#include <fcntl.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -48,90 +46,23 @@
+ #include "wire_proto.h"
+ #include "bulb.h"
+ #include "gateway.h"
+-#include "discovery.h"
++#include "broadcast.h"
+ #include "lifxd.h"
+ 
+ static struct lifxd_gateway_list lifxd_gateways = \
+     LIST_HEAD_INITIALIZER(&lifxd_gateways);
+ 
+-static struct lifxd_packet_infos_map lifxd_packet_infos = \
+-    RB_INITIALIZER(&lifxd_packets_infos);
+-
+-RB_GENERATE_STATIC(
+-    lifxd_packet_infos_map,
+-    lifxd_packet_infos,
+-    link,
+-    lifxd_packet_infos_cmp
+-);
+-
+-void
+-lifxd_gateway_load_packet_infos_map(void)
+-{
+-#define DECODER(x)  ((void (*)(void *))(x))
+-#define ENCODER(x)  ((void (*)(void *))(x))
+-#define HANDLER(x)                                  \
+-    ((void (*)(struct lifxd_gateway *,              \
+-               const struct lifxd_packet_header *,  \
+-               const void *))(x))
+-
+-    static struct lifxd_packet_infos packet_table[] = {
+-        {
+-            .name = "GET_PAN_GATEWAY",
+-            .type = LIFXD_GET_PAN_GATEWAY
+-        },
+-        {
+-            .name = "PAN_GATEWAY",
+-            .type = LIFXD_PAN_GATEWAY,
+-            .size = sizeof(struct lifxd_packet_pan_gateway),
+-            .decode = DECODER(lifxd_wire_decode_pan_gateway),
+-            .encode = ENCODER(lifxd_wire_encode_pan_gateway),
+-            .handle = HANDLER(lifxd_gateway_handle_pan_gateway)
+-        },
+-        {
+-            .name = "LIGHT_STATUS",
+-            .type = LIFXD_LIGHT_STATUS,
+-            .size = sizeof(struct lifxd_packet_light_status),
+-            .decode = DECODER(lifxd_wire_decode_light_status),
+-            .encode = ENCODER(lifxd_wire_encode_light_status),
+-            .handle = HANDLER(lifxd_gateway_handle_light_status)
+-        },
+-        {
+-            .name = "POWER_STATE",
+-            .type = LIFXD_POWER_STATE,
+-            .size = sizeof(struct lifxd_packet_power_state),
+-            .decode = DECODER(lifxd_wire_decode_power_state),
+-            .handle = HANDLER(lifxd_gateway_handle_power_state)
+-        }
+-    };
+-
+-    for (int i = 0; i != LIFXD_ARRAY_SIZE(packet_table); ++i) {
+-        RB_INSERT(
+-            lifxd_packet_infos_map, &lifxd_packet_infos, &packet_table[i]
+-        );
+-    }
+-}
+-
+-const struct lifxd_packet_infos *
+-lifxd_gateway_get_packet_infos(enum lifxd_packet_type packet_type)
+-{
+-    struct lifxd_packet_infos pkt_infos = { .type = packet_type };
+-    return RB_FIND(lifxd_packet_infos_map, &lifxd_packet_infos, &pkt_infos);
+-}
+-
+ static void
+ lifxd_gateway_close(struct lifxd_gateway *gw)
+ {
+     assert(gw);
+ 
+     event_del(gw->write_ev);
+-    event_del(gw->read_ev);
+     if (gw->socket != -1) {
+         evutil_closesocket(gw->socket);
+         LIST_REMOVE(gw, link);
+     }
+     event_free(gw->write_ev);
+-    event_free(gw->read_ev);
+-    evbuffer_free(gw->read_buf);
+     evbuffer_free(gw->write_buf);
+     for (struct lifxd_bulb *bulb = lifxd_bulb_get(gw, NULL);
+          bulb;
+@@ -145,90 +76,6 @@
+ }
+ 
+ static void
+-lifxd_gateway_read_header(struct lifxd_gateway *gw)
+-{
+-    evbuffer_remove(
+-        gw->read_buf, &gw->cur_hdr, sizeof(gw->cur_hdr)
+-    );
+-    lifxd_wire_decode_header(&gw->cur_hdr);
+-    lifxd_debug(
+-        "received header from [%s]:%hu for packet type %#x",
+-        gw->ip_addr, gw->port, gw->cur_hdr.packet_type
+-    );
+-}
+-
+-static void
+-lifxd_gateway_read_packet(struct lifxd_gateway *gw, int pkt_size)
+-{
+-    void *pkt = calloc(1, pkt_size);
+-    evbuffer_remove(gw->read_buf, pkt, pkt_size);
+-    const struct lifxd_packet_infos *pkt_infos = lifxd_gateway_get_packet_infos(
+-        gw->cur_hdr.packet_type
+-    );
+-    if (pkt_infos) {
+-        pkt_infos->decode(pkt);
+-        pkt_infos->handle(gw, &gw->cur_hdr, pkt);
+-    } else {
+-        lifxd_warnx("discarding unknown packet %#x from [%s]:%hu",
+-            gw->cur_hdr.packet_type, gw->ip_addr, gw->port
+-        );
+-    }
+-    free(pkt);
+-}
+-
+-static void
+-lifxd_gateway_handle_read(struct lifxd_gateway *gw)
+-{
+-    assert(gw);
+-
+-    if (evbuffer_read(gw->read_buf, gw->socket, -1) == -1 && errno != EAGAIN) {
+-        lifxd_warn("can't read from [%s]:%hu", gw->ip_addr, gw->port);
+-        lifxd_gateway_close(gw);
+-        if (!lifxd_discovery_start()) {
+-            lifxd_err(1, "can't start auto discovery");
+-        }
+-        return;
+-    }
+-
+-    int buflen = evbuffer_get_length(gw->read_buf);
+-    bool consumed;
+-    do {
+-        consumed = false;
+-        if (!gw->cur_hdr.packet_type) {
+-            if (buflen >= LIFXD_PACKET_HEADER_SIZE) {
+-                lifxd_gateway_read_header(gw);
+-                consumed = true;
+-                buflen -= LIFXD_PACKET_HEADER_SIZE;
+-            }
+-        }
+-        if (gw->cur_hdr.packet_type) {
+-            int pkt_size = gw->cur_hdr.size - sizeof(gw->cur_hdr);
+-            if (buflen >= pkt_size) {
+-                lifxd_gateway_read_packet(gw, pkt_size);
+-                consumed = true;
+-                buflen -= pkt_size;
+-                memset(&gw->cur_hdr, 0, sizeof(gw->cur_hdr));
+-            } else if (pkt_size > LIFXD_MAX_PACKET_SIZE) {
+-                lifxd_warnx(
+-                    "unsupported packet size %hu (max = %d, "
+-                    "packet_type = %#x) from [%s]:%hu",
+-                    pkt_size,
+-                    LIFXD_MAX_PACKET_SIZE,
+-                    gw->cur_hdr.packet_type,
+-                    gw->ip_addr,
+-                    gw->port
+-                );
+-                lifxd_gateway_close(gw);
+-                if (!lifxd_discovery_start()) {
+-                    lifxd_err(1, "can't start auto discovery");
+-                }
+-                return;
+-            }
+-        }
+-    } while (consumed);
+-}
+-
+-static void
+ lifxd_gateway_handle_write(struct lifxd_gateway *gw)
+ {
+     assert(gw);
+@@ -236,7 +83,7 @@
+     if (evbuffer_write(gw->write_buf, gw->socket) == -1 && errno != EAGAIN) {
+         lifxd_warn("can't write to [%s]:%hu", gw->ip_addr, gw->port);
+         lifxd_gateway_close(gw);
+-        if (!lifxd_discovery_start()) {
++        if (!lifxd_broadcast_discovery()) {
+             lifxd_err(1, "can't start auto discovery");
+         }
+         return;
+@@ -260,14 +107,11 @@
+             "lost connection with gateway bulb [%s]:%hu", gw->ip_addr, gw->port
+         );
+         lifxd_gateway_close(gw);
+-        if (!lifxd_discovery_start()) {
++        if (!lifxd_broadcast_discovery()) {
+             lifxd_err(1, "can't start auto discovery");
+         }
+         return;
+     }
+-    if (events & EV_READ) {
+-        lifxd_gateway_handle_read(gw);
+-    }
+     if (events & EV_WRITE) {
+         lifxd_gateway_handle_write(gw);
+     }
+@@ -293,19 +137,11 @@
+         lifxd_warn("can't open a new socket");
+         goto error_socket;
+     }
+-    if (connect(gw->socket, (const struct sockaddr *)peer, peer->ss_len) != 0
+-        || fcntl(gw->socket, F_SETFL, O_NONBLOCK) != 0) {
++    if (connect(gw->socket, (const struct sockaddr *)peer, peer->ss_len) == -1
++        || evutil_make_socket_nonblocking(gw->socket) == -1) {
+         lifxd_warn("can't open a new socket");
+         goto error_connect;
+     }
+-    gw->read_ev = event_new(
+-        lifxd_ev_base,
+-        gw->socket,
+-        EV_READ|EV_PERSIST,
+-        lifxd_gateway_event_callback,
+-        gw
+-    );
+-    gw->read_buf = evbuffer_new();
+     gw->write_ev = event_new(
+         lifxd_ev_base,
+         gw->socket,
+@@ -314,33 +150,23 @@
+         gw
+     );
+     gw->write_buf = evbuffer_new();
+-    if (peer->ss_family == AF_INET) {
+-        const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
+-        inet_ntop(AF_INET, &in_peer->sin_addr, gw->ip_addr, sizeof(gw->ip_addr));
+-        gw->port = ntohs(in_peer->sin_port);
+-    } else {
+-        const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
+-        inet_ntop(AF_INET6, &in6_peer->sin6_addr, gw->ip_addr, sizeof(gw->ip_addr));
+-        gw->port = ntohs(in6_peer->sin6_port);
+-    }
++    lifxd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
++    gw->port = lifxd_sockaddrport(peer);
+     memcpy(gw->addr, site, sizeof(gw->addr));
+ 
+-    if (gw->read_ev && gw->read_buf && gw->write_ev && gw->write_buf) {
+-        lifxd_info("new gateway at [%s]:%hu", gw->ip_addr, gw->port);
+-        if (!event_add(gw->read_ev, NULL)) {
+-            return gw;
+-        }
+-        lifxd_warnx("can't enable events on a new gateway bulb");
+-    } else {
+-        lifxd_warn("can't allocate a new gateway bulb");
++    if (gw->write_ev && gw->write_buf) {
++        lifxd_info(
++            "gateway %s at [%s]:%hu",
++            lifxd_addrtoa(gw->addr),
++            gw->ip_addr,
++            gw->port
++        );
++        LIST_INSERT_HEAD(&lifxd_gateways, gw, link);
++        return gw;
+     }
+ 
+-    if (gw->read_ev) {
+-        event_free(gw->read_ev);
+-    }
+-    if (gw->read_buf) {
+-        evbuffer_free(gw->read_buf);
+-    }
++    lifxd_warn("can't allocate a new gateway bulb");
++
+     if (gw->write_ev) {
+         event_free(gw->write_ev);
+     }
+diff --git a/core/gateway.h b/core/gateway.h
+--- a/core/gateway.h
++++ b/core/gateway.h
+@@ -35,37 +35,11 @@
+     uint16_t                    port;
+     uint8_t                     addr[LIFXD_ADDR_LENGTH];
+     evutil_socket_t             socket;
+-    struct lifxd_packet_header  cur_hdr;
+-    struct event                *read_ev;
+-    struct evbuffer             *read_buf;
+     struct event                *write_ev;
+     struct evbuffer             *write_buf;
+ };
+ LIST_HEAD(lifxd_gateway_list, lifxd_gateway);
+ 
+-struct lifxd_packet_infos {
+-    RB_ENTRY(lifxd_packet_infos)    link;
+-    const char                      *name;
+-    enum lifxd_packet_type          type;
+-    unsigned                        size;
+-    void                            (*decode)(void *);
+-    void                            (*encode)(void *);
+-    void                            (*handle)(struct lifxd_gateway *,
+-                                              const struct lifxd_packet_header *,
+-                                              const void *);
+-};
+-RB_HEAD(lifxd_packet_infos_map, lifxd_packet_infos);
+-
+-static inline int
+-lifxd_packet_infos_cmp(struct lifxd_packet_infos *a,
+-                       struct lifxd_packet_infos *b)
+-{
+-    return a->type - b->type;
+-}
+-
+-void lifxd_gateway_load_packet_infos_map(void);
+-const struct lifxd_packet_infos *lifxd_gateway_get_packet_infos(enum lifxd_packet_type);
+-
+ struct lifxd_gateway *lifxd_gateway_get(const uint8_t *);
+ struct lifxd_gateway *lifxd_gateway_open(const struct sockaddr_storage *,
+                                          const uint8_t *);
+diff --git a/core/lifxd.c b/core/lifxd.c
+--- a/core/lifxd.c
++++ b/core/lifxd.c
+@@ -29,6 +29,7 @@
+ 
+ #include <sys/queue.h>
+ #include <sys/tree.h>
++#include <arpa/inet.h>
+ #include <assert.h>
+ #include <err.h>
+ #include <errno.h>
+@@ -48,7 +49,7 @@
+ #include "wire_proto.h"
+ #include "bulb.h"
+ #include "gateway.h"
+-#include "discovery.h"
++#include "broadcast.h"
+ #include "version.h"
+ #include "lifxd.h"
+ 
+@@ -63,7 +64,7 @@
+ void
+ lifxd_cleanup(void)
+ {
+-    lifxd_discovery_stop();
++    lifxd_broadcast_close();
+     lifxd_gateway_close_all();
+     event_base_free(lifxd_ev_base);
+ #if LIBEVENT_VERSION_NUMBER >= 0x02010100
+@@ -71,6 +72,20 @@
+ #endif
+ }
+ 
++short
++lifxd_sockaddrport(const struct sockaddr_storage *peer)
++{
++    assert(peer);
++
++    if (peer->ss_family == AF_INET) {
++        const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
++        return ntohs(in_peer->sin_port);
++    } else {
++        const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
++        return ntohs(in6_peer->sin6_port);
++    }
++}
++
+ static void
+ lifxd_signal_event_callback(int signum, short events, void *ctx)
+ {
+@@ -177,11 +192,10 @@
+     argc -= optind;
+     argv += optind;
+ 
+-    lifxd_gateway_load_packet_infos_map();
+     lifxd_configure_libevent();
+     lifxd_configure_signal_handling();
+ 
+-    if (!lifxd_discovery_start()) {
++    if (!lifxd_broadcast_setup() || !lifxd_broadcast_discovery()) {
+         lifxd_err(1, "can't start auto discovery");
+     }
+ 
+diff --git a/core/lifxd.h b/core/lifxd.h
+--- a/core/lifxd.h
++++ b/core/lifxd.h
+@@ -50,6 +50,9 @@
+ extern struct event_base *lifxd_ev_base;
+ 
+ const char *lifxd_addrtoa(const uint8_t *);
++void lifxd_sockaddrtoa(const struct sockaddr_storage *, char *buf, int buflen);
++short lifxd_sockaddrport(const struct sockaddr_storage *);
++
+ void _lifxd_err(void (*)(int, const char *, ...), int, const char *, ...);
+ #define lifxd_err(eval, fmt, ...) _lifxd_err(err, (eval), (fmt), ##__VA_ARGS__);
+ #define lifxd_errx(eval, fmt, ...) _lifxd_err(errx, (eval), (fmt), ##__VA_ARGS__);
+diff --git a/core/log.c b/core/log.c
+--- a/core/log.c
++++ b/core/log.c
+@@ -27,6 +27,7 @@
+ // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
++#include <arpa/inet.h>
+ #include <assert.h>
+ #include <err.h>
+ #include <errno.h>
+@@ -54,6 +55,22 @@
+ }
+ 
+ void
++lifxd_sockaddrtoa(const struct sockaddr_storage *peer, char *buf, int buflen)
++{
++    assert(peer);
++    assert(buf);
++    assert(buflen > 0);
++
++    if (peer->ss_family == AF_INET) {
++        const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
++        inet_ntop(AF_INET, &in_peer->sin_addr, buf, buflen);
++    } else {
++        const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
++        inet_ntop(AF_INET6, &in6_peer->sin6_addr, buf, buflen);
++    }
++}
++
++void
+ _lifxd_err(void (*errfn)(int, const char *, ...),
+            int eval,
+            const char *fmt,
+diff --git a/core/wire_proto.c b/core/wire_proto.c
+--- a/core/wire_proto.c
++++ b/core/wire_proto.c
+@@ -27,6 +27,7 @@
+ // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
++#include <arpa/inet.h>
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
