@@ -1,0 +1,801 @@
+# HG changeset patch
+# Parent 96553c6dad0299221530eacd0b3b435e3296333c
+
+diff --git a/core/broadcast.c b/core/broadcast.c
+--- a/core/broadcast.c
++++ b/core/broadcast.c
+@@ -50,66 +50,6 @@
+ #include "broadcast.h"
+ #include "lifxd.h"
+ 
+-static struct lifxd_packet_infos_map lifxd_packet_infos =
+-    RB_INITIALIZER(&lifxd_packets_infos);
+-
+-RB_GENERATE_STATIC(
+-    lifxd_packet_infos_map,
+-    lifxd_packet_infos,
+-    link,
+-    lifxd_packet_infos_cmp
+-);
+-
+-static void
+-lifxd_broadcast_load_packet_infos_map(void)
+-{
+-#define DECODER(x)  ((void (*)(void *))(x))
+-#define ENCODER(x)  ((void (*)(void *))(x))
+-#define HANDLER(x)                                  \
+-    ((void (*)(struct lifxd_gateway *,              \
+-               const struct lifxd_packet_header *,  \
+-               const void *))(x))
+-
+-    static struct lifxd_packet_infos packet_table[] = {
+-        {
+-            .name = "PAN_GATEWAY",
+-            .type = LIFXD_PAN_GATEWAY,
+-            .size = sizeof(struct lifxd_packet_pan_gateway),
+-            .decode = DECODER(lifxd_wire_decode_pan_gateway),
+-            .encode = ENCODER(lifxd_wire_encode_pan_gateway),
+-            .handle = HANDLER(lifxd_gateway_handle_pan_gateway)
+-        },
+-        {
+-            .name = "LIGHT_STATUS",
+-            .type = LIFXD_LIGHT_STATUS,
+-            .size = sizeof(struct lifxd_packet_light_status),
+-            .decode = DECODER(lifxd_wire_decode_light_status),
+-            .encode = ENCODER(lifxd_wire_encode_light_status),
+-            .handle = HANDLER(lifxd_gateway_handle_light_status)
+-        },
+-        {
+-            .name = "POWER_STATE",
+-            .type = LIFXD_POWER_STATE,
+-            .size = sizeof(struct lifxd_packet_power_state),
+-            .decode = DECODER(lifxd_wire_decode_power_state),
+-            .handle = HANDLER(lifxd_gateway_handle_power_state)
+-        }
+-    };
+-
+-    for (int i = 0; i != LIFXD_ARRAY_SIZE(packet_table); ++i) {
+-        RB_INSERT(
+-            lifxd_packet_infos_map, &lifxd_packet_infos, &packet_table[i]
+-        );
+-    }
+-}
+-
+-static const struct lifxd_packet_infos *
+-lifxd_broadcast_get_packet_infos(enum lifxd_packet_type packet_type)
+-{
+-    struct lifxd_packet_infos pkt_infos = { .type = packet_type };
+-    return RB_FIND(lifxd_packet_infos_map, &lifxd_packet_infos, &pkt_infos);
+-}
+-
+ static struct {
+     evutil_socket_t socket;
+     struct event    *read_ev;
+@@ -184,12 +124,12 @@
+         }
+ 
+         const struct lifxd_packet_infos *pkt_infos =
+-            lifxd_broadcast_get_packet_infos(read.hdr.packet_type);
++            lifxd_wire_get_packet_infos(read.hdr.packet_type);
+         if (pkt_infos) {
+             struct lifxd_gateway *gw = lifxd_gateway_get(read.hdr.site);
+             if (!gw) {
+                 gw = lifxd_gateway_open(
+-                    &peer, read.hdr.site, read.hdr.bulb_addr
++                    &peer, read.hdr.site, read.hdr.target.device_addr
+                 );
+                 if (!gw) {
+                     lifxd_err(1, "can't allocate gateway");
+@@ -223,12 +163,14 @@
+         .sin_addr = { INADDR_BROADCAST },
+         .sin_port = htons(lifxd_opts.master_port)
+     };
+-    struct lifxd_packet_header get_pan_gateway = {
+-        .size = LIFXD_PACKET_HEADER_SIZE,
+-        .protocol = LIFXD_PROTOCOL_VERSION,
+-        .packet_type = LIFXD_GET_PAN_GATEWAY
+-    };
+-    lifxd_wire_encode_header(&get_pan_gateway);
++    struct lifxd_packet_header get_pan_gateway;
++    lifxd_wire_setup_header(
++        &get_pan_gateway,
++        LIFXD_TARGET_ALL_DEVICES,
++        LIFXD_UNSPEC_TARGET,
++        NULL,
++        LIFXD_GET_PAN_GATEWAY
++    );
+ 
+     int nbytes;
+ retry:
+@@ -342,9 +284,6 @@
+     assert(lifxd_broadcast_endpoint.read_ev == NULL);
+     assert(lifxd_broadcast_endpoint.write_ev == NULL);
+ 
+-    if (RB_EMPTY(&lifxd_packet_infos))
+-        lifxd_broadcast_load_packet_infos_map();
+-
+     lifxd_broadcast_endpoint.socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+     if (lifxd_broadcast_endpoint.socket == -1) {
+         return false;
+diff --git a/core/broadcast.h b/core/broadcast.h
+--- a/core/broadcast.h
++++ b/core/broadcast.h
+@@ -29,26 +29,6 @@
+ 
+ #pragma once
+ 
+-struct lifxd_packet_infos {
+-    RB_ENTRY(lifxd_packet_infos)    link;
+-    const char                      *name;
+-    enum lifxd_packet_type          type;
+-    unsigned                        size;
+-    void                            (*decode)(void *);
+-    void                            (*encode)(void *);
+-    void                            (*handle)(struct lifxd_gateway *,
+-                                              const struct lifxd_packet_header *,
+-                                              const void *);
+-};
+-RB_HEAD(lifxd_packet_infos_map, lifxd_packet_infos);
+-
+-static inline int
+-lifxd_packet_infos_cmp(struct lifxd_packet_infos *a,
+-                       struct lifxd_packet_infos *b)
+-{
+-    return a->type - b->type;
+-}
+-
+ enum { LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSEC = 2000 };
+ 
+ bool lifxd_broadcast_setup(void);
+diff --git a/core/broker.c b/core/broker.c
+new file mode 100644
+--- /dev/null
++++ b/core/broker.c
+@@ -0,0 +1,47 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <arpa/inet.h>
++#include <assert.h>
++#include <endian.h>
++#include <err.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++#include "wire_proto.h"
++#include "lifxd.h"
++
++void
++lifxd_broker_send_command(enum lifxd_target_type target_type,
++                          union lifxd_target target,
++                          enum lifxd_packet_type packet_type,
++                          void *pkt)
++{
++}
+diff --git a/core/broker.h b/core/broker.h
+new file mode 100644
+--- /dev/null
++++ b/core/broker.h
+@@ -0,0 +1,35 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++void lifxd_broker_send_command(enum lifxd_target_type,
++                               union lifxd_target,
++                               enum lifxd_packet_type,
++                               void *);
+diff --git a/core/gateway.c b/core/gateway.c
+--- a/core/gateway.c
++++ b/core/gateway.c
+@@ -30,6 +30,7 @@
+ #include <sys/queue.h>
+ #include <sys/tree.h>
+ #include <assert.h>
++#include <endian.h>
+ #include <err.h>
+ #include <errno.h>
+ #include <stdarg.h>
+@@ -47,6 +48,7 @@
+ #include "bulb.h"
+ #include "gateway.h"
+ #include "broadcast.h"
++#include "broker.h"
+ #include "lifxd.h"
+ 
+ static struct lifxd_gateway_list lifxd_gateways = \
+@@ -122,10 +124,13 @@
+ 
+     int buflen = evbuffer_get_length(gw->write_buf);
+     if (buflen < LIFXD_GATEWAY_WRITE_HIGH_WATERMARK) {
+-        struct lifxd_bulb *bulb;
+-        SLIST_FOREACH(bulb, &gw->bulbs, link_by_gw) {
+-            lifxd_gateway_get_light_status(gw, bulb);
+-        }
++        struct lifxd_packet_header hdr;
++        union lifxd_target target = { .addr = gw->site };
++        lifxd_wire_setup_header(
++            &hdr, LIFXD_TARGET_SITE, target, gw->site, LIFXD_GET_LIGHT_STATE
++        );
++        lifxd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
++        lifxd_gateway_send_packet(gw, &hdr, NULL, 0);
+         return;
+     }
+     lifxd_info(
+@@ -261,6 +266,24 @@
+ }
+ 
+ void
++lifxd_gateway_send_packet(struct lifxd_gateway *gw,
++                          const struct lifxd_packet_header *hdr,
++                          const void *pkt,
++                          int pkt_size)
++{
++    assert(gw);
++    assert(hdr);
++    assert(!memcmp(hdr->site, gw->site, LIFXD_ADDR_LENGTH));
++
++    evbuffer_add(gw->write_buf, hdr, sizeof(*hdr));
++    if (pkt) {
++        assert(pkt_size == le16toh(hdr->size) - sizeof(*hdr));
++        evbuffer_add(gw->write_buf, pkt, pkt_size);
++    }
++    event_add(gw->write_ev, NULL);
++}
++
++void
+ lifxd_gateway_handle_pan_gateway(struct lifxd_gateway *gw,
+                                  const struct lifxd_packet_header *hdr,
+                                  const struct lifxd_packet_pan_gateway *pkt)
+@@ -270,33 +293,13 @@
+     lifxd_debug(
+         "SET_PAN_GATEWAY <-- [%s]:%hu - %s site=%s",
+         gw->ip_addr, gw->port,
+-        lifxd_addrtoa(hdr->bulb_addr),
++        lifxd_addrtoa(hdr->target.device_addr),
+         lifxd_addrtoa(hdr->site)
+     );
+     memcpy(gw->site, hdr->site, sizeof(gw->site));
+ }
+ 
+ void
+-lifxd_gateway_get_light_status(struct lifxd_gateway *gw,
+-                               const struct lifxd_bulb *bulb)
+-{
+-    assert(gw);
+-    assert(bulb);
+-
+-    struct lifxd_packet_header hdr = {
+-        .size = LIFXD_PACKET_HEADER_SIZE,
+-        .protocol = LIFXD_PROTOCOL_VERSION_WITH_ADDR,
+-        .packet_type = LIFXD_GET_LIGHT_STATE
+-    };
+-    memcpy(hdr.site, gw->site, sizeof(hdr.site));
+-    memcpy(hdr.bulb_addr, bulb->addr, sizeof(hdr.bulb_addr));
+-    lifxd_wire_encode_header(&hdr);
+-    lifxd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
+-    evbuffer_add(gw->write_buf, &hdr, sizeof(hdr));
+-    event_add(gw->write_ev, NULL);
+-}
+-
+-void
+ lifxd_gateway_handle_light_status(struct lifxd_gateway *gw,
+                                   const struct lifxd_packet_header *hdr,
+                                   const struct lifxd_packet_light_status *pkt)
+@@ -307,12 +310,14 @@
+         "SET_LIGHT_STATUS <-- [%s]:%hu - %s "
+         "hue=%#hx, saturation=%#hx, brightness=%#hx, "
+         "kelvin=%#hx, dim=%#hx, power=%#hx, label=%.*s, tags=%lx",
+-        gw->ip_addr, gw->port, lifxd_addrtoa(hdr->bulb_addr),
++        gw->ip_addr, gw->port, lifxd_addrtoa(hdr->target.device_addr),
+         pkt->hue, pkt->saturation, pkt->brightness, pkt->kelvin,
+         pkt->dim, pkt->power, sizeof(pkt->label), pkt->label, pkt->tags
+     );
+ 
+-    struct lifxd_bulb *b = lifxd_gateway_get_or_open_bulb(gw, hdr->bulb_addr);
++    struct lifxd_bulb *b = lifxd_gateway_get_or_open_bulb(
++        gw, hdr->target.device_addr
++    );
+     if (!b) {
+         return;
+     }
+@@ -330,10 +335,12 @@
+ 
+     lifxd_debug(
+         "SET_POWER_STATE <-- [%s]:%hu - %s power=%#hx",
+-        gw->ip_addr, gw->port, lifxd_addrtoa(hdr->bulb_addr), pkt->power
++        gw->ip_addr, gw->port, lifxd_addrtoa(hdr->target.device_addr), pkt->power
+     );
+ 
+-    struct lifxd_bulb *b = lifxd_gateway_get_or_open_bulb(gw, hdr->bulb_addr);
++    struct lifxd_bulb *b = lifxd_gateway_get_or_open_bulb(
++        gw, hdr->target.device_addr
++    );
+     if (!b) {
+         return;
+     }
+diff --git a/core/gateway.h b/core/gateway.h
+--- a/core/gateway.h
++++ b/core/gateway.h
+@@ -56,15 +56,17 @@
+                                          const uint8_t *);
+ void lifxd_gateway_close_all(void);
+ 
++void lifxd_gateway_send_packet(struct lifxd_gateway *,
++                               const struct lifxd_packet_header *,
++                               const void *,
++                               int);
++
+ void lifxd_gateway_handle_pan_gateway(struct lifxd_gateway *,
+                                       const struct lifxd_packet_header *,
+                                       const struct lifxd_packet_pan_gateway *);
+-
+-void lifxd_gateway_get_light_status(struct lifxd_gateway *, const struct lifxd_bulb *);
+ void lifxd_gateway_handle_light_status(struct lifxd_gateway *,
+                                        const struct lifxd_packet_header *,
+                                        const struct lifxd_packet_light_status *);
+-
+ void lifxd_gateway_handle_power_state(struct lifxd_gateway *,
+                                       const struct lifxd_packet_header *,
+                                       const struct lifxd_packet_power_state *);
+diff --git a/core/json_proto.h b/core/json_proto.h
+deleted file mode 100644
+diff --git a/core/lifxd.c b/core/lifxd.c
+--- a/core/lifxd.c
++++ b/core/lifxd.c
+@@ -195,6 +195,7 @@
+     lifxd_configure_libevent();
+     lifxd_configure_signal_handling();
+ 
++    lifxd_wire_load_packet_infos_map();
+     if (!lifxd_broadcast_setup() || !lifxd_broadcast_discovery()) {
+         lifxd_err(1, "can't start auto discovery");
+     }
+diff --git a/core/log.c b/core/log.c
+--- a/core/log.c
++++ b/core/log.c
+@@ -27,6 +27,7 @@
+ // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
++#include <sys/tree.h>
+ #include <arpa/inet.h>
+ #include <assert.h>
+ #include <err.h>
+diff --git a/core/wire_proto.c b/core/wire_proto.c
+--- a/core/wire_proto.c
++++ b/core/wire_proto.c
+@@ -27,6 +27,8 @@
+ // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
++#include <sys/queue.h>
++#include <sys/tree.h>
+ #include <arpa/inet.h>
+ #include <assert.h>
+ #include <endian.h>
+@@ -34,83 +36,230 @@
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <event2/util.h>
+ 
+ #include "wire_proto.h"
++#include "bulb.h"
++#include "gateway.h"
+ #include "lifxd.h"
+ 
++union lifxd_target LIFXD_UNSPEC_TARGET = { .tags = 0 };
++
++static struct lifxd_packet_infos_map lifxd_packet_infos =
++    RB_INITIALIZER(&lifxd_packets_infos);
++
++RB_GENERATE_STATIC(
++    lifxd_packet_infos_map,
++    lifxd_packet_infos,
++    link,
++    lifxd_packet_infos_cmp
++);
++
++static void
++lifxd_wire_null_packet_encoder_decoder(void *pkt)
++{
++    (void)pkt;
++}
++
++static void
++lifxd_wire_null_packet_handler(struct lifxd_gateway *gw,
++                               const struct lifxd_packet_header *hdr,
++                               const void *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++
++void
++lifxd_wire_load_packet_infos_map(void)
++{
++#define DECODER(x)  ((void (*)(void *))(x))
++#define ENCODER(x)  ((void (*)(void *))(x))
++#define HANDLER(x)                                  \
++    ((void (*)(struct lifxd_gateway *,              \
++               const struct lifxd_packet_header *,  \
++               const void *))(x))
++#define REQUEST_ONLY                                    \
++    .decode = lifxd_wire_null_packet_encoder_decoder,   \
++    .encode = lifxd_wire_null_packet_encoder_decoder,   \
++    .handle = lifxd_wire_null_packet_handler
++
++    static struct lifxd_packet_infos packet_table[] = {
++        {
++            REQUEST_ONLY,
++            .name = "GET_PAN_GATEWAY",
++            .type = LIFXD_GET_PAN_GATEWAY
++        },
++        {
++            .name = "PAN_GATEWAY",
++            .type = LIFXD_PAN_GATEWAY,
++            .size = sizeof(struct lifxd_packet_pan_gateway),
++            .decode = DECODER(lifxd_wire_decode_pan_gateway),
++            .encode = ENCODER(lifxd_wire_encode_pan_gateway),
++            .handle = HANDLER(lifxd_gateway_handle_pan_gateway)
++        },
++        {
++            REQUEST_ONLY,
++            .name = "GET_LIGHT_STATUS",
++            .type = LIFXD_GET_LIGHT_STATE
++        },
++        {
++            .name = "LIGHT_STATUS",
++            .type = LIFXD_LIGHT_STATUS,
++            .size = sizeof(struct lifxd_packet_light_status),
++            .decode = DECODER(lifxd_wire_decode_light_status),
++            .encode = ENCODER(lifxd_wire_encode_light_status),
++            .handle = HANDLER(lifxd_gateway_handle_light_status)
++        },
++        {
++            .name = "POWER_STATE",
++            .type = LIFXD_POWER_STATE,
++            .size = sizeof(struct lifxd_packet_power_state),
++            .decode = DECODER(lifxd_wire_decode_power_state),
++            .handle = HANDLER(lifxd_gateway_handle_power_state)
++        }
++    };
++
++    for (int i = 0; i != LIFXD_ARRAY_SIZE(packet_table); ++i) {
++        RB_INSERT(
++            lifxd_packet_infos_map, &lifxd_packet_infos, &packet_table[i]
++        );
++    }
++}
++
++const struct lifxd_packet_infos *
++lifxd_wire_get_packet_infos(enum lifxd_packet_type packet_type)
++{
++    struct lifxd_packet_infos pkt_infos = { .type = packet_type };
++    return RB_FIND(lifxd_packet_infos_map, &lifxd_packet_infos, &pkt_infos);
++}
++
+ // Convert all the fields in the header to the host endianness.
+ //
+-// :returns: The payload size or -1 if the header is invalid.
++// \return The payload size or -1 if the header is invalid.
+ void
+ lifxd_wire_decode_header(struct lifxd_packet_header *hdr)
+ {
+     assert(hdr);
+ 
+     hdr->size = le16toh(hdr->size);
+-    hdr->protocol = be16toh(hdr->protocol);
+-    hdr->timestamp = be64toh(hdr->timestamp);
++    hdr->protocol.version = le16toh(hdr->protocol.version);
++    if (hdr->protocol.tagged) {
++        le64toh(hdr->target.tags);
++    }
++    hdr->timestamp = le64toh(hdr->timestamp);
+     hdr->packet_type = le16toh(hdr->packet_type);
+ }
+ 
++const struct lifxd_packet_infos *
++lifxd_wire_setup_header(struct lifxd_packet_header *hdr,
++                        enum lifxd_target_type target_type,
++                        union lifxd_target target,
++                        const uint8_t *site,
++                        enum lifxd_packet_type packet_type)
++{
++    assert(hdr);
++
++    const struct lifxd_packet_infos *pkt_infos = lifxd_wire_get_packet_infos(
++        packet_type
++    );
++
++    memset(hdr, 0, sizeof(*hdr));
++    hdr->size = pkt_infos->size + sizeof(*hdr);
++    hdr->protocol.version = LIFXD_LIFX_PROTOCOL_V1;
++    hdr->packet_type = packet_type;
++    if (site) {
++        memcpy(hdr->site, site, sizeof(hdr->site));
++    } else {
++        assert(target_type == LIFXD_TARGET_ALL_DEVICES);
++    }
++
++    switch (target_type) {
++    case LIFXD_TARGET_SITE:
++        hdr->protocol.tagged = true;
++        break;
++    case LIFXD_TARGET_TAGS:
++        hdr->protocol.tagged = true;
++        hdr->target.tags = target.tags;
++        break;
++    case LIFXD_TARGET_DEVICE:
++        hdr->protocol.addressable = false;
++        memcpy(hdr->target.device_addr, target.addr, LIFXD_ADDR_LENGTH);
++        break;
++    case LIFXD_TARGET_ALL_DEVICES:
++        hdr->protocol.tagged = true;
++        break;
++    }
++
++    lifxd_wire_encode_header(hdr);
++
++    return pkt_infos;
++}
++
+ void
+ lifxd_wire_encode_header(struct lifxd_packet_header *hdr)
+ {
+     assert(hdr);
+ 
+     hdr->size = htole16(hdr->size);
+-    hdr->protocol = htobe16(hdr->protocol);
+-    hdr->timestamp = htobe64(hdr->timestamp);
++    hdr->protocol.version = htole16(hdr->protocol.version);
++    if (hdr->protocol.tagged) {
++        le64toh(hdr->target.tags);
++    }
++    hdr->timestamp = htole64(hdr->timestamp);
+     hdr->packet_type = htole16(hdr->packet_type);
+ }
+ 
+ void
+-lifxd_wire_dump_header(const struct lifxd_packet_header *hdr)
+-{
+-    assert(hdr);
+-    lifxd_debug(
+-        "header @%p: size=%hu, protocol=%hu, timestamp=%lu, packet_type=%hx",
+-        hdr, hdr->size, hdr->protocol, hdr->timestamp, hdr->packet_type
+-    );
+-}
+-
+-void
+ lifxd_wire_decode_pan_gateway(struct lifxd_packet_pan_gateway *pkt)
+ {
++    assert(pkt);
++
+     pkt->port = le32toh(pkt->port);
+ }
+ 
+ void
+ lifxd_wire_encode_pan_gateway(struct lifxd_packet_pan_gateway *pkt)
+ {
++    assert(pkt);
++
+     pkt->port = htole32(pkt->port);
+ }
+ 
+ void
+ lifxd_wire_decode_light_status(struct lifxd_packet_light_status *pkt)
+ {
++    assert(pkt);
++
+     pkt->hue = le16toh(pkt->hue);
+     pkt->saturation = le16toh(pkt->saturation);
+     pkt->brightness = le16toh(pkt->brightness);
+     pkt->kelvin = le16toh(pkt->kelvin);
+     pkt->dim = le16toh(pkt->dim);
+     pkt->power = le16toh(pkt->power);
+-    pkt->tags = be64toh(pkt->tags);
++    pkt->tags = le64toh(pkt->tags);
+ }
+ 
+ void
+ lifxd_wire_encode_light_status(struct lifxd_packet_light_status *pkt)
+ {
++    assert(pkt);
++
+     pkt->hue = htole16(pkt->hue);
+     pkt->saturation = htole16(pkt->saturation);
+     pkt->brightness = htole16(pkt->brightness);
+     pkt->kelvin = htole16(pkt->kelvin);
+     pkt->dim = htole16(pkt->dim);
+     pkt->power = htole16(pkt->power);
+-    pkt->tags = htobe64(pkt->tags);
++    pkt->tags = htole64(pkt->tags);
+ }
+ 
+ void
+ lifxd_wire_decode_power_state(struct lifxd_packet_power_state *pkt)
+ {
+-    (void)pkt;
++    assert(pkt);
+ }
+diff --git a/core/wire_proto.h b/core/wire_proto.h
+--- a/core/wire_proto.h
++++ b/core/wire_proto.h
+@@ -41,21 +41,44 @@
+ enum { LIFXD_ADDR_LENGTH = 6 };
+ 
+ struct lifxd_packet_header {
+-    uint16le_t  size;
+-    uint16be_t  protocol;
+-    uint8_t     reserved1[4];
+-    uint8_t     bulb_addr[LIFXD_ADDR_LENGTH];
+-    uint8_t     reserved2[2];
+-    uint8_t     site[LIFXD_ADDR_LENGTH];
+-    uint8_t     reserved3[2];
+-    uint64be_t  timestamp;
+-    uint16le_t  packet_type;
+-    uint8_t     reserved4[2];
++    //! Packet size including the headers (i.e: this structure).
++    uint16le_t      size;
++    struct {
++        //! Protocol version should be LIFXD_LIFX_PROTOCOL_V1.
++        uint16le_t  version:12;
++        //! True when the target field holds a device address.
++        uint16le_t  addressable:1;
++        //! True when the target field holds tags.
++        uint16le_t  tagged:1;
++        //! LIFX internal use should be 0.
++        uint16le_t  origin:2;
++    }               protocol;
++    //! This seems to be for LIFX internal use only.
++    uint32le_t      source;
++    union {
++        //! All targeted tags ORed together.
++        uint64le_t  tags;
++        //! Address of the targeted device.
++        uint8_t     device_addr[LIFXD_ADDR_LENGTH];
++    }               target;
++    uint8_t         site[LIFXD_ADDR_LENGTH];
++    struct {
++        //! True when a response is required, called acknowledge in lifx-gem...
++        uint8_t     response_required:1;
++        //! True when an acknowledgement is required, no idea what it means.
++        uint8_t     ack_required:1;
++        uint8_t     reserved:6;
++    }               flags;
++    //! Wrap-around sequence number, LIFX internal use.
++    uint8_t         seqn;
++    uint64le_t      timestamp;
++    uint16le_t      packet_type;
++    uint8_t         reserved[2];
+ };
+ 
+ enum { LIFXD_PACKET_HEADER_SIZE = sizeof(struct lifxd_packet_header) };
+-enum { LIFXD_PROTOCOL_VERSION = 0x54 };
+-enum { LIFXD_PROTOCOL_VERSION_WITH_ADDR = 0x34 };
++
++enum { LIFXD_LIFX_PROTOCOL_V1 = 1024 };
+ 
+ // Let's define a maximum packet size just in case somebody sends us weird
+ // headers:
+@@ -112,6 +135,28 @@
+     LIFXD_ACCESS_POINT = 0x132,
+ };
+ 
++struct lifxd_gateway;
++
++struct lifxd_packet_infos {
++    RB_ENTRY(lifxd_packet_infos)    link;
++    const char                      *name;
++    enum lifxd_packet_type          type;
++    unsigned                        size;
++    void                            (*decode)(void *);
++    void                            (*encode)(void *);
++    void                            (*handle)(struct lifxd_gateway *,
++                                              const struct lifxd_packet_header *,
++                                              const void *);
++};
++RB_HEAD(lifxd_packet_infos_map, lifxd_packet_infos);
++
++static inline int
++lifxd_packet_infos_cmp(struct lifxd_packet_infos *a,
++                       struct lifxd_packet_infos *b)
++{
++    return a->type - b->type;
++}
++
+ enum { LIFXD_LABEL_SIZE = 32 };
+ 
+ struct lifxd_packet_light_status {
+@@ -144,10 +189,30 @@
+     uint32le_t  port;
+ };
+ 
++enum lifxd_target_type {
++    LIFXD_TARGET_SITE,
++    LIFXD_TARGET_TAGS,
++    LIFXD_TARGET_DEVICE,
++    LIFXD_TARGET_ALL_DEVICES
++};
++
++union lifxd_target {
++    uint64_t        tags;
++    const uint8_t   *addr; //! site or device address
++};
++
++extern union lifxd_target LIFXD_UNSPEC_TARGET;
++
++const struct lifxd_packet_infos *lifxd_wire_get_packet_infos(enum lifxd_packet_type);
++void lifxd_wire_load_packet_infos_map(void);
++
++const struct lifxd_packet_infos *lifxd_wire_setup_header(struct lifxd_packet_header *,
++                                                         enum lifxd_target_type,
++                                                         union lifxd_target,
++                                                         const uint8_t *,
++                                                         enum lifxd_packet_type);
+ void lifxd_wire_decode_header(struct lifxd_packet_header *);
+ void lifxd_wire_encode_header(struct lifxd_packet_header *);
+-void lifxd_wire_dump_header(const struct lifxd_packet_header *);
+-void lifxd_wire_encode_packet(void *, enum lifxd_packet_type);
+ 
+ void lifxd_wire_decode_pan_gateway(struct lifxd_packet_pan_gateway *);
+ void lifxd_wire_encode_pan_gateway(struct lifxd_packet_pan_gateway *);

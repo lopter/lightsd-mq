@@ -1,0 +1,98 @@
+# HG changeset patch
+# Parent b2d4867a12d7e593321ddbf9db68ecb8edfcd028
+
+diff --git a/core/broadcast.c b/core/broadcast.c
+--- a/core/broadcast.c
++++ b/core/broadcast.c
+@@ -186,10 +186,10 @@
+         const struct lifxd_packet_infos *pkt_infos =
+             lifxd_broadcast_get_packet_infos(read.hdr.packet_type);
+         if (pkt_infos) {
+-            struct lifxd_gateway *gw = lifxd_gateway_get(read.hdr.gw_addr);
++            struct lifxd_gateway *gw = lifxd_gateway_get(read.hdr.site);
+             if (!gw) {
+                 gw = lifxd_gateway_open(
+-                    &peer, read.hdr.gw_addr, read.hdr.bulb_addr
++                    &peer, read.hdr.site, read.hdr.bulb_addr
+                 );
+                 if (!gw) {
+                     lifxd_err(1, "can't allocate gateway");
+diff --git a/core/gateway.c b/core/gateway.c
+--- a/core/gateway.c
++++ b/core/gateway.c
+@@ -195,7 +195,7 @@
+     );
+     lifxd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
+     gw->port = lifxd_sockaddrport(peer);
+-    memcpy(gw->addr, site, sizeof(gw->addr));
++    memcpy(gw->site, site, sizeof(gw->site));
+ 
+     struct timeval refresh_interval = {
+         .tv_usec = LIFXD_GATEWAY_REFRESH_INTERVAL_MSEC * 1000
+@@ -212,7 +212,7 @@
+ 
+     lifxd_info(
+         "gateway %s at [%s]:%hu",
+-        lifxd_addrtoa(gw->addr),
++        lifxd_addrtoa(gw->site),
+         gw->ip_addr,
+         gw->port
+     );
+@@ -243,7 +243,7 @@
+ 
+     struct lifxd_gateway *gw, *next_gw;
+     LIST_FOREACH_SAFE(gw, &lifxd_gateways, link, next_gw) {
+-        if (!memcmp(gw->addr, site, sizeof(gw->addr))) {
++        if (!memcmp(gw->site, site, sizeof(gw->site))) {
+             return gw;
+         }
+     }
+@@ -268,12 +268,12 @@
+     assert(gw && hdr && pkt);
+ 
+     lifxd_debug(
+-        "SET_PAN_GATEWAY <-- [%s]:%hu - %s gw_addr=%s",
++        "SET_PAN_GATEWAY <-- [%s]:%hu - %s site=%s",
+         gw->ip_addr, gw->port,
+         lifxd_addrtoa(hdr->bulb_addr),
+-        lifxd_addrtoa(hdr->gw_addr)
++        lifxd_addrtoa(hdr->site)
+     );
+-    memcpy(gw->addr, hdr->gw_addr, sizeof(gw->addr));
++    memcpy(gw->site, hdr->site, sizeof(gw->site));
+ }
+ 
+ void
+@@ -288,7 +288,7 @@
+         .protocol = LIFXD_PROTOCOL_VERSION_WITH_ADDR,
+         .packet_type = LIFXD_GET_LIGHT_STATE
+     };
+-    memcpy(hdr.gw_addr, gw->addr, sizeof(hdr.gw_addr));
++    memcpy(hdr.site, gw->site, sizeof(hdr.site));
+     memcpy(hdr.bulb_addr, bulb->addr, sizeof(hdr.bulb_addr));
+     lifxd_wire_encode_header(&hdr);
+     lifxd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
+diff --git a/core/gateway.h b/core/gateway.h
+--- a/core/gateway.h
++++ b/core/gateway.h
+@@ -42,7 +42,7 @@
+     struct lifxd_bulb_list      bulbs;
+     char                        ip_addr[INET6_ADDRSTRLEN];
+     uint16_t                    port;
+-    uint8_t                     addr[LIFXD_ADDR_LENGTH];
++    uint8_t                     site[LIFXD_ADDR_LENGTH];
+     evutil_socket_t             socket;
+     struct event                *write_ev;
+     struct evbuffer             *write_buf;
+diff --git a/core/wire_proto.h b/core/wire_proto.h
+--- a/core/wire_proto.h
++++ b/core/wire_proto.h
+@@ -46,7 +46,7 @@
+     uint8_t     reserved1[4];
+     uint8_t     bulb_addr[LIFXD_ADDR_LENGTH];
+     uint8_t     reserved2[2];
+-    uint8_t     gw_addr[LIFXD_ADDR_LENGTH];
++    uint8_t     site[LIFXD_ADDR_LENGTH];
+     uint8_t     reserved3[2];
+     uint64be_t  timestamp;
+     uint16le_t  packet_type;

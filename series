@@ -1,5 +1,7 @@
 move_to_udp_only.patch
 single_udp_socket.patch
 aggressive_light_status.patch
+site_vs_addr.patch
+accurate_protocol.patch
 start_a_plugin_api.patch
 wip_plugin_api_include_ujson4c.patch
