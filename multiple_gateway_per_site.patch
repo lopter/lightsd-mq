@@ -1,2 +1,237 @@
 # HG changeset patch
 # Parent 6dfc40f36084be2a519d405d1e5bcb18f592fe0f
+
+diff --git a/core/broadcast.c b/core/broadcast.c
+--- a/core/broadcast.c
++++ b/core/broadcast.c
+@@ -109,45 +109,58 @@
+         if (read.hdr.size != nbytes) {
+             lifxd_warnx(
+                 "incomplete broadcast packet from [%s]:%hu",
+-                peer_addr,
+-                peer_port
++                peer_addr, peer_port
+             );
+             return false;
+         }
++        if (read.hdr.protocol.version != LIFXD_LIFX_PROTOCOL_V1) {
++            lifxd_warnx(
++                "unsupported protocol %d from [%s]:%hu",
++                read.hdr.protocol.version, peer_addr, peer_port
++            );
++        }
+         if (read.hdr.packet_type == LIFXD_GET_PAN_GATEWAY) {
+             lifxd_debug(
+                 "discarding GET_PAN_GATEWAY packet from [%s]:%hu",
+-                peer_addr,
+-                peer_port
++                peer_addr, peer_port
+             );
+-            return true;
++            continue;
+         }
+ 
+         const struct lifxd_packet_infos *pkt_infos =
+             lifxd_wire_get_packet_infos(read.hdr.packet_type);
+-        if (pkt_infos) {
+-            struct lifxd_gateway *gw = lifxd_gateway_get(read.hdr.site);
++        if (!pkt_infos) {
++            lifxd_warnx(
++                "received unknown packet %#x from [%s]:%hu",
++                read.hdr.packet_type, peer_addr, peer_port
++            )
++            continue;
++        }
++        if (read.hdr.protocol.tagged || !read.hdr.protocol.addressable) {
++            lifxd_warnx(
++                "received non-addressable packet %s from [%s]:%hu",
++                pkt_infos->name, peer_addr, peer_port
++            );
++            continue;
++        }
++        struct lifxd_gateway *gw = lifxd_gateway_get(&peer);
++        if (!gw && read.hdr.packet_type == LIFXD_PAN_GATEWAY) {
++            gw = lifxd_gateway_open(&peer, read.hdr.site);
+             if (!gw) {
+-                gw = lifxd_gateway_open(
+-                    &peer, read.hdr.site, read.hdr.target.device_addr
+-                );
+-                if (!gw) {
+-                    lifxd_err(1, "can't allocate gateway");
+-                }
+-                if (event_del(lifxd_broadcast_endpoint.discovery_timeout_ev)) {
+-                    lifxd_err(1, "can't setup events");
+-                }
++                lifxd_err(1, "can't allocate gateway");
+             }
++            if (event_del(lifxd_broadcast_endpoint.discovery_timeout_ev)) {
++                lifxd_err(1, "can't setup events");
++            }
++        }
++        if (gw) {
+             void *pkt = &read.buf[LIFXD_PACKET_HEADER_SIZE];
+             pkt_infos->decode(pkt);
+             pkt_infos->handle(gw, &read.hdr, pkt);
+         } else {
+             lifxd_warnx(
+-                "received unknown packet %#x from [%s]:%hu",
+-                read.hdr.packet_type,
+-                peer_addr,
+-                peer_port
+-            )
++                "got packet from unknown gateway [%s]:%hu", peer_addr, peer_port
++            );
+         }
+     }
+ }
+@@ -183,10 +196,9 @@
+         sizeof(lifx_addr)
+     );
+     if (nbytes == sizeof(get_pan_gateway)) {
+-        struct timeval tv = {
+-            .tv_sec = LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSEC / 1000,
+-            .tv_usec = (LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSEC % 1000) * 1000
+-        };
++        struct timeval tv = LIFXD_MSECS_TO_TV(
++            LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSEC
++        );
+         if (event_del(lifxd_broadcast_endpoint.write_ev)
+             || event_add(lifxd_broadcast_endpoint.discovery_timeout_ev, &tv)) {
+             lifxd_err(1, "can't setup events");
+diff --git a/core/gateway.c b/core/gateway.c
+--- a/core/gateway.c
++++ b/core/gateway.c
+@@ -160,13 +160,10 @@
+ }
+ 
+ struct lifxd_gateway *
+-lifxd_gateway_open(const struct sockaddr_storage *peer,
+-                   const uint8_t *site,
+-                   const uint8_t *addr)
++lifxd_gateway_open(const struct sockaddr_storage *peer, const uint8_t *site)
+ {
+     assert(peer);
+     assert(site);
+-    assert(addr);
+ 
+     struct lifxd_gateway *gw = calloc(1, sizeof(*gw));
+     if (!gw) {
+@@ -198,28 +195,24 @@
+         lifxd_gateway_refresh_callback,
+         gw
+     );
++    memcpy(&gw->peer, peer, peer->ss_len);
+     lifxd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
+     gw->port = lifxd_sockaddrport(peer);
+     memcpy(gw->site, site, sizeof(gw->site));
+ 
+-    struct timeval refresh_interval = {
+-        .tv_usec = LIFXD_GATEWAY_REFRESH_INTERVAL_MSEC * 1000
+-    };
++    struct timeval refresh_interval = LIFXD_MSECS_TO_TV(
++        LIFXD_GATEWAY_REFRESH_INTERVAL_MSEC
++    );
+ 
+-    // The gateway is also a bulb:
+-    struct lifxd_bulb *bulb = lifxd_gateway_get_or_open_bulb(gw, addr);
+-
+-    if (!gw->write_ev || !gw->write_buf || !gw->refresh_ev || !bulb
++    if (!gw->write_ev || !gw->write_buf || !gw->refresh_ev
+         || event_add(gw->refresh_ev, &refresh_interval) != 0) {
+         lifxd_warn("can't allocate a new gateway bulb");
+         goto error_allocate;
+     }
+ 
+     lifxd_info(
+-        "gateway %s at [%s]:%hu",
+-        lifxd_addrtoa(gw->site),
+-        gw->ip_addr,
+-        gw->port
++        "gateway for site %s at [%s]:%hu",
++        lifxd_addrtoa(gw->site), gw->ip_addr, gw->port
+     );
+     LIST_INSERT_HEAD(&lifxd_gateways, gw, link);
+     return gw;
+@@ -242,13 +235,14 @@
+ }
+ 
+ struct lifxd_gateway *
+-lifxd_gateway_get(const uint8_t *site)
++lifxd_gateway_get(const struct sockaddr_storage *peer)
+ {
+-    assert(site);
++    assert(peer);
+ 
+     struct lifxd_gateway *gw, *next_gw;
+     LIST_FOREACH_SAFE(gw, &lifxd_gateways, link, next_gw) {
+-        if (!memcmp(gw->site, site, sizeof(gw->site))) {
++        if (peer->ss_family == gw->peer.ss_family
++            && !memcmp(&gw->peer, peer, peer->ss_len)) {
+             return gw;
+         }
+     }
+@@ -296,7 +290,6 @@
+         lifxd_addrtoa(hdr->target.device_addr),
+         lifxd_addrtoa(hdr->site)
+     );
+-    memcpy(gw->site, hdr->site, sizeof(gw->site));
+ }
+ 
+ void
+diff --git a/core/gateway.h b/core/gateway.h
+--- a/core/gateway.h
++++ b/core/gateway.h
+@@ -30,16 +30,24 @@
+ #pragma once
+ 
+ // Let's start with something simple for now, in the future this will need to
+-// account for each gateway response time and it would be interesting to see if
+-// aggressively querying the bulbs raises their power consumption:
+-enum { LIFXD_GATEWAY_REFRESH_INTERVAL_MSEC = 70 };
++// account for each gateway response time. According to my own tests,
++// aggressively polling a bulb doesn't raise it's consumption at all (it's
++// interesting to note that a turned off bulb still draw about 2W in ZigBee and
++// about 3W in WiFi).
++enum { LIFXD_GATEWAY_REFRESH_INTERVAL_MSEC = 100 };
+ 
+ // In the meantime skip a refresh if we have too many bytes in our write buffer:
+-enum { LIFXD_GATEWAY_WRITE_HIGH_WATERMARK = 1024 };
++enum { LIFXD_GATEWAY_WRITE_HIGH_WATERMARK = 256 };
+ 
+ struct lifxd_gateway {
+     LIST_ENTRY(lifxd_gateway)   link;
+     struct lifxd_bulb_list      bulbs;
++    // Multiple gateways can share the same site (that happens when bulbs are
++    // far away enough that ZigBee can't be used). Moreover the SET_PAN_GATEWAY
++    // packet doesn't include the device address in the header (i.e: site and
++    // device_addr have the same value) so we have no choice but to use the
++    // remote ip address to identify a gateway:
++    struct sockaddr_storage     peer;
+     char                        ip_addr[INET6_ADDRSTRLEN];
+     uint16_t                    port;
+     uint8_t                     site[LIFXD_ADDR_LENGTH];
+@@ -50,9 +58,8 @@
+ };
+ LIST_HEAD(lifxd_gateway_list, lifxd_gateway);
+ 
+-struct lifxd_gateway *lifxd_gateway_get(const uint8_t *);
++struct lifxd_gateway *lifxd_gateway_get(const struct sockaddr_storage *);
+ struct lifxd_gateway *lifxd_gateway_open(const struct sockaddr_storage *,
+-                                         const uint8_t *,
+                                          const uint8_t *);
+ void lifxd_gateway_close_all(void);
+ 
+diff --git a/core/lifxd.h b/core/lifxd.h
+--- a/core/lifxd.h
++++ b/core/lifxd.h
+@@ -30,6 +30,10 @@
+ #pragma once
+ 
+ #define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
++#define LIFXD_MSECS_TO_TV(v) {      \
++    .tv_sec = (v) / 1000,           \
++    .tv_usec = ((v) % 1000) * 1000  \
++}
+ 
+ enum lifxd_verbosity {
+     LIFXD_DEBUG = 0,
