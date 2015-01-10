@@ -1,11 +1,11 @@
 # HG changeset patch
-# Parent  89ba90d5bbd2696bb9089d9dc6b9ae29061a18ba
+# Parent  d159f8ff2166abf3fb6e7fbf869c8c210f72732d
 Fix build on GNU/Linux
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -24,7 +24,12 @@
+@@ -24,10 +24,18 @@
  
  SET(CMAKE_C_FLAGS "-pipe -Wextra -Wall -Wstrict-prototypes -std=c99")
  
@@ -19,6 +19,12 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  IF (CMAKE_BUILD_TYPE MATCHES "DEBUG")
      ADD_DEFINITIONS("-DQUEUE_MACRO_DEBUG=1")
++    IF (CMAKE_COMPILER_IS_GNUCC)
++        ADD_DEFINITIONS("-g3" "-ggdb")
++    ENDIF ()
+ ENDIF ()
+ 
+ INCLUDE_DIRECTORIES(${LIFXD_SOURCE_DIR}/compat/generic ${LIFXD_BINARY_DIR}/compat)
 diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
 --- a/CMakeScripts/CompatTimeMonotonic.cmake
 +++ b/CMakeScripts/CompatTimeMonotonic.cmake
@@ -68,7 +74,18 @@ diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
 diff --git a/core/broadcast.c b/core/broadcast.c
 --- a/core/broadcast.c
 +++ b/core/broadcast.c
-@@ -173,7 +173,6 @@
+@@ -70,6 +70,10 @@
+ 
+     while (true) {
+         struct sockaddr_storage peer;
++        // if we get back from recvfrom with a sockaddr_in the end of the struct
++        // will not be initialized and we will be comparing unintialized stuff
++        // in lifxd_gateway_get:
++        memset(&peer, 0, sizeof(peer));
+         ev_socklen_t addrlen = sizeof(peer);
+         union {
+             char buf[LIFXD_MAX_PACKET_SIZE];
+@@ -173,7 +177,6 @@
      assert(lifxd_broadcast_endpoint.socket != -1);
  
      struct sockaddr_in lifx_addr = {
@@ -76,7 +93,7 @@ diff --git a/core/broadcast.c b/core/broadcast.c
          .sin_family = AF_INET,
          .sin_addr = { INADDR_BROADCAST },
          .sin_port = htons(lifxd_opts.master_port)
-@@ -320,7 +319,6 @@
+@@ -320,7 +323,6 @@
      }
  
      struct sockaddr_in lifx_addr = {
@@ -101,7 +118,7 @@ diff --git a/core/gateway.c b/core/gateway.c
          gw
      );
 -    memcpy(&gw->peer, peer, peer->ss_len);
-+    memcpy(&gw->peer, peer, sizeof(*peer));
++    memcpy(&gw->peer, peer, sizeof(gw->peer));
      lifxd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
      gw->port = lifxd_sockaddrport(peer);
      memcpy(gw->site, site, sizeof(gw->site));
