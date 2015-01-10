@@ -1,0 +1,33 @@
+# HG changeset patch
+# Parent  77554a7df1912413796d237f96f36c82a78cb189
+Fix timezone display in log.c
+
+diff --git a/core/lifxd.h b/core/lifxd.h
+--- a/core/lifxd.h
++++ b/core/lifxd.h
+@@ -29,6 +29,7 @@
+ 
+ #pragma once
+ 
++#define LIFXD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
+ #define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+ #define LIFXD_MSECS_TO_TIMEVAL(v) { \
+     .tv_sec = (v) / 1000,           \
+diff --git a/core/log.c b/core/log.c
+--- a/core/log.c
++++ b/core/log.c
+@@ -60,11 +60,11 @@
+     }
+     // '2015-01-02T10:13:16.132222+00:00'
+     snprintf(
+-        strbuf, bufsz, "%d-%02d-%02dT%02d:%02d:%02d.%ld+%02ld:%02ld",
++        strbuf, bufsz, "%d-%02d-%02dT%02d:%02d:%02d.%ld%c%02ld:%02ld",
+         1900 + tm_now.tm_year, 1 + tm_now.tm_mon, tm_now.tm_mday,
+         tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec,
+-        now.tv_usec, tm_now.tm_gmtoff / 60 / 60,
+-        tm_now.tm_gmtoff % (60 * 60)
++        now.tv_usec, tm_now.tm_gmtoff >= 0 ? '+' : '-', // %+02ld doesn't work
++        LIFXD_ABS(tm_now.tm_gmtoff / 60 / 60), tm_now.tm_gmtoff % (60 * 60)
+     );
+     return;
+ error:
