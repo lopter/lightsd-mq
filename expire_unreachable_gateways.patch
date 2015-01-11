@@ -289,7 +289,7 @@ diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
 new file mode 100644
 --- /dev/null
 +++ b/compat/Darwin/time_monotonic.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,34 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -321,7 +321,9 @@ new file mode 100644
 +
 +#pragma once
 +
-+time_t lifxd_time_monotonic_msecs(void);
++typedef time_t lifxd_time_mono_t;
++
++lifxd_time_mono_t lifxd_time_monotonic_msecs(void);
 diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
 new file mode 100644
 --- /dev/null
@@ -371,7 +373,7 @@ diff --git a/compat/generic/time_monotonic.h b/compat/generic/time_monotonic.h
 new file mode 100644
 --- /dev/null
 +++ b/compat/generic/time_monotonic.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,34 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -403,7 +405,9 @@ new file mode 100644
 +
 +#pragma once
 +
-+time_t lifxd_time_monotonic_msecs(void);
++typedef time_t lifxd_time_mono_t;
++
++lifxd_time_mono_t lifxd_time_monotonic_msecs(void);
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
@@ -413,139 +417,532 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
  CONFIGURE_FILE(version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
  
  ADD_EXECUTABLE(
-@@ -9,6 +11,7 @@
+@@ -8,6 +10,8 @@
+     gateway.c
      lifxd.c
      log.c
-     wire_proto.c
 +    ${TIME_MONOTONIC_IMPL}
++    timer.c
+     wire_proto.c
  )
  
- TARGET_LINK_LIBRARIES(lifxd ${EVENT2_CORE_LIBRARY})
 diff --git a/core/broadcast.c b/core/broadcast.c
 --- a/core/broadcast.c
 +++ b/core/broadcast.c
-@@ -48,6 +48,7 @@
+@@ -45,6 +45,7 @@
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
++#include "time_monotonic.h"
  #include "bulb.h"
  #include "gateway.h"
  #include "broadcast.h"
-+#include "time_monotonic.h"
- #include "lifxd.h"
+@@ -54,12 +55,10 @@
+     evutil_socket_t socket;
+     struct event    *read_ev;
+     struct event    *write_ev;
+-    struct event    *discovery_timeout_ev;
+ } lifxd_broadcast_endpoint = {
+     .socket = -1,
+     .read_ev = NULL,
+     .write_ev = NULL,
+-    .discovery_timeout_ev = NULL
+ };
  
- static struct {
-@@ -155,6 +156,12 @@
+ static bool
+@@ -94,6 +93,7 @@
+             return false;
+         }
+ 
++        lifxd_time_mono_t received_at = lifxd_time_monotonic_msecs();
+         char peer_addr[INET6_ADDRSTRLEN];
+         lifxd_sockaddrtoa(&peer, peer_addr, sizeof(peer_addr));
+         short peer_port = lifxd_sockaddrport(&peer);
+@@ -120,10 +120,6 @@
+             );
+         }
+         if (read.hdr.packet_type == LIFXD_GET_PAN_GATEWAY) {
+-            lifxd_debug(
+-                "discarding GET_PAN_GATEWAY packet from [%s]:%hu",
+-                peer_addr, peer_port
+-            );
+             continue;
+         }
+ 
+@@ -145,16 +141,14 @@
+         }
+         struct lifxd_gateway *gw = lifxd_gateway_get(&peer);
+         if (!gw && read.hdr.packet_type == LIFXD_PAN_GATEWAY) {
+-            gw = lifxd_gateway_open(&peer, read.hdr.site);
++            gw = lifxd_gateway_open(&peer, read.hdr.site, received_at);
+             if (!gw) {
+                 lifxd_err(1, "can't allocate gateway");
+             }
+-            if (event_del(lifxd_broadcast_endpoint.discovery_timeout_ev)) {
+-                lifxd_err(1, "can't setup events");
+-            }
          }
          if (gw) {
              void *pkt = &read.buf[LIFXD_PACKET_HEADER_SIZE];
-+            gw->lastresp_at_msecs = lifxd_time_monotonic_msecs();
-+            lifxd_debug(
-+                "[%s]:%hu latency = %ld",
-+                peer_addr, peer_port,
-+                gw->lastresp_at_msecs - gw->lastreq_at_msecs
-+            );
++            gw->last_pkt_at = received_at;
              pkt_infos->decode(pkt);
              pkt_infos->handle(gw, &read.hdr, pkt);
          } else {
-@@ -196,8 +203,8 @@
+@@ -196,11 +190,7 @@
          sizeof(lifx_addr)
      );
      if (nbytes == sizeof(get_pan_gateway)) {
 -        struct timeval tv = LIFXD_MSECS_TO_TV(
 -            LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSEC
-+        struct timeval tv = LIFXD_MSECS_TO_TIMEVAL(
-+            LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSECS
-         );
-         if (event_del(lifxd_broadcast_endpoint.write_ev)
-             || event_add(lifxd_broadcast_endpoint.discovery_timeout_ev, &tv)) {
-@@ -257,7 +264,7 @@
+-        );
+-        if (event_del(lifxd_broadcast_endpoint.write_ev)
+-            || event_add(lifxd_broadcast_endpoint.discovery_timeout_ev, &tv)) {
++        if (event_del(lifxd_broadcast_endpoint.write_ev)) {
+             lifxd_err(1, "can't setup events");
+         }
+         return true;
+@@ -246,25 +236,6 @@
+     lifxd_broadcast_discovery();
+ }
  
-     lifxd_info(
-         "discovery didn't returned anything in %dms, restarting it",
+-static void
+-lifxd_broadcast_discovery_timeout_event_callback(evutil_socket_t socket,
+-                                                 short events,
+-                                                 void *ctx)
+-{
+-    (void)socket;
+-    (void)events;
+-    (void)ctx;
+-
+-    lifxd_info(
+-        "discovery didn't returned anything in %dms, restarting it",
 -        LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSEC
-+        LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSECS
+-    );
+-
+-    if (!lifxd_broadcast_discovery()) {
+-        lifxd_err(1, "can't start discovery");
+-    }
+-}
+-
+ void
+ lifxd_broadcast_close(void)
+ {
+@@ -278,11 +249,6 @@
+         event_free(lifxd_broadcast_endpoint.write_ev);
+         lifxd_broadcast_endpoint.write_ev = NULL;
+     }
+-    if (lifxd_broadcast_endpoint.discovery_timeout_ev) {
+-        event_del(lifxd_broadcast_endpoint.discovery_timeout_ev);
+-        event_free(lifxd_broadcast_endpoint.discovery_timeout_ev);
+-        lifxd_broadcast_endpoint.discovery_timeout_ev = NULL;
+-    }
+     if (lifxd_broadcast_endpoint.socket != -1) {
+         evutil_closesocket(lifxd_broadcast_endpoint.socket);
+         lifxd_broadcast_endpoint.socket = -1;
+@@ -347,16 +313,8 @@
+         lifxd_broadcast_event_callback,
+         NULL
      );
+-    lifxd_broadcast_endpoint.discovery_timeout_ev = event_new(
+-        lifxd_ev_base,
+-        -1,
+-        EV_PERSIST,
+-        lifxd_broadcast_discovery_timeout_event_callback,
+-        NULL
+-    );
+     if (!lifxd_broadcast_endpoint.read_ev
+-        || !lifxd_broadcast_endpoint.write_ev
+-        || !lifxd_broadcast_endpoint.discovery_timeout_ev) {
++        || !lifxd_broadcast_endpoint.write_ev) {
+         goto error;
+     }
  
-     if (!lifxd_broadcast_discovery()) {
 diff --git a/core/broadcast.h b/core/broadcast.h
 --- a/core/broadcast.h
 +++ b/core/broadcast.h
-@@ -29,7 +29,7 @@
+@@ -29,8 +29,6 @@
  
  #pragma once
  
 -enum { LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSEC = 2000 };
-+enum { LIFXD_BROADCAST_DISCOVERY_TIMEOUT_MSECS = 2000 };
- 
+-
  bool lifxd_broadcast_setup(void);
  void lifxd_broadcast_close(void);
+ bool lifxd_broadcast_discovery(void);
+diff --git a/core/bulb.c b/core/bulb.c
+--- a/core/bulb.c
++++ b/core/bulb.c
+@@ -40,19 +40,12 @@
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
++#include "time_monotonic.h"
+ #include "bulb.h"
+ #include "gateway.h"
+ #include "lifxd.h"
+ 
+-static struct lifxd_bulb_map lifxd_bulbs_table =
+-    RB_INITIALIZER(&lifxd_bulbs_by_addr);
+-
+-RB_GENERATE_STATIC(
+-    lifxd_bulb_map,
+-    lifxd_bulb,
+-    link,
+-    lifxd_bulb_cmp
+-);
++struct lifxd_bulb_map lifxd_bulbs_table = RB_INITIALIZER(&lifxd_bulbs_table);
+ 
+ struct lifxd_bulb *
+ lifxd_bulb_get(struct lifxd_gateway *gw, const uint8_t *addr)
+@@ -81,6 +74,8 @@
+     memcpy(bulb->addr, addr, sizeof(bulb->addr));
+     RB_INSERT(lifxd_bulb_map, &lifxd_bulbs_table, bulb);
+ 
++    bulb->last_light_state_at = lifxd_time_monotonic_msecs();
++
+     return bulb;
+ }
+ 
+@@ -91,10 +86,11 @@
+     assert(bulb->gw);
+ 
+     RB_REMOVE(lifxd_bulb_map, &lifxd_bulbs_table, bulb);
++    SLIST_REMOVE(&bulb->gw->bulbs, bulb, lifxd_bulb, link_by_gw);
+     lifxd_info(
+         "closed bulb \"%.*s\" on [%s]:%hu",
+-        sizeof(bulb->status.label),
+-        bulb->status.label,
++        sizeof(bulb->state.label),
++        bulb->state.label,
+         bulb->gw->ip_addr,
+         bulb->gw->port
+     );
+@@ -102,17 +98,19 @@
+ }
+ 
+ void
+-lifxd_bulb_set_light_status(struct lifxd_bulb *bulb,
+-                            const struct lifxd_light_status *status)
++lifxd_bulb_set_light_state(struct lifxd_bulb *bulb,
++                           const struct lifxd_light_state *state,
++                           lifxd_time_mono_t received_at)
+ {
+     assert(bulb);
+-    assert(status);
+-    memcpy(&bulb->status, status, sizeof(bulb->status));
++    assert(state);
++    bulb->last_light_state_at = received_at;
++    memcpy(&bulb->state, state, sizeof(bulb->state));
+ }
+ 
+ void
+ lifxd_bulb_set_power_state(struct lifxd_bulb *bulb, uint16_t power)
+ {
+     assert(bulb);
+-    bulb->status.power = power;
++    bulb->state.power = power;
+ }
+diff --git a/core/bulb.h b/core/bulb.h
+--- a/core/bulb.h
++++ b/core/bulb.h
+@@ -32,7 +32,7 @@
+ struct lifxd_gateway;
+ 
+ #pragma pack(push, 1)
+-struct lifxd_light_status {
++struct lifxd_light_state {
+     uint16_t    hue;
+     uint16_t    saturation;
+     uint16_t    brightness;
+@@ -49,20 +49,32 @@
+     SLIST_ENTRY(lifxd_bulb)     link_by_gw;
+     struct lifxd_gateway        *gw;
+     uint8_t                     addr[LIFXD_ADDR_LENGTH];
+-    struct lifxd_light_status   status;
++    struct lifxd_light_state    state;
++    lifxd_time_mono_t           last_light_state_at;
+ };
+ RB_HEAD(lifxd_bulb_map, lifxd_bulb);
+ SLIST_HEAD(lifxd_bulb_list, lifxd_bulb);
+ 
++extern struct lifxd_bulb_map lifxd_bulbs_table;
++
+ static inline int
+ lifxd_bulb_cmp(const struct lifxd_bulb *a, const struct lifxd_bulb *b)
+ {
+     return memcmp(a->addr, b->addr, sizeof(a->addr));
+ }
+ 
++RB_GENERATE_STATIC(
++    lifxd_bulb_map,
++    lifxd_bulb,
++    link,
++    lifxd_bulb_cmp
++);
++
+ struct lifxd_bulb *lifxd_bulb_get(struct lifxd_gateway *, const uint8_t *);
+ struct lifxd_bulb *lifxd_bulb_open(struct lifxd_gateway *, const uint8_t *);
+ void lifxd_bulb_close(struct lifxd_bulb *);
+ 
+-void lifxd_bulb_set_light_status(struct lifxd_bulb *, const struct lifxd_light_status *);
++void lifxd_bulb_set_light_state(struct lifxd_bulb *,
++                                const struct lifxd_light_state *,
++                                lifxd_time_mono_t);
+ void lifxd_bulb_set_power_state(struct lifxd_bulb *, uint16_t);
 diff --git a/core/gateway.c b/core/gateway.c
 --- a/core/gateway.c
 +++ b/core/gateway.c
-@@ -38,6 +38,7 @@
+@@ -38,22 +38,24 @@
  #include <stdint.h>
  #include <stdlib.h>
  #include <string.h>
+-#include <unistd.h>
 +#include <time.h>
- #include <unistd.h>
  
  #include <event2/event.h>
-@@ -48,6 +49,7 @@
+ #include <event2/buffer.h>
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
++#include "time_monotonic.h"
  #include "bulb.h"
  #include "gateway.h"
  #include "broadcast.h"
-+#include "time_monotonic.h"
++#include "timer.h"
  #include "lifxd.h"
  
- static struct lifxd_gateway_list lifxd_gateways = \
-@@ -108,6 +110,7 @@
+-static struct lifxd_gateway_list lifxd_gateways = \
++struct lifxd_gateway_list lifxd_gateways =
+     LIST_HEAD_INITIALIZER(&lifxd_gateways);
+ 
+-static void
++void
+ lifxd_gateway_close(struct lifxd_gateway *gw)
+ {
+     assert(gw);
+@@ -105,6 +107,7 @@
+             }
+             return;
+         }
++        gw->last_req_at = lifxd_time_monotonic_msecs();
          if (!evbuffer_get_length(gw->write_buf)) {
              event_del(gw->write_ev);
          }
-+        gw->lastreq_at_msecs = lifxd_time_monotonic_msecs();
-     }
+@@ -119,22 +122,23 @@
+ 
+     assert(ctx);
+ 
+-    struct lifxd_gateway *gw = (struct lifxd_gateway *)ctx;
++    struct lifxd_gateway *gw = ctx;
+ 
+-    int buflen = evbuffer_get_length(gw->write_buf);
+-    if (buflen < LIFXD_GATEWAY_WRITE_HIGH_WATERMARK) {
+-        struct lifxd_packet_header hdr;
+-        union lifxd_target target = { .addr = gw->site };
+-        lifxd_wire_setup_header(
+-            &hdr, LIFXD_TARGET_SITE, target, gw->site, LIFXD_GET_LIGHT_STATE
+-        );
+-        lifxd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
+-        lifxd_gateway_send_packet(gw, &hdr, NULL, 0);
+-        return;
+-    }
+-    lifxd_info(
+-        "refresh skipped on gateway [%s]:%hu, (buflen=%d)",
+-        gw->ip_addr, gw->port, buflen
++    struct lifxd_packet_header hdr;
++    union lifxd_target target = { .addr = gw->site };
++    lifxd_wire_setup_header(
++        &hdr, LIFXD_TARGET_SITE, target, gw->site, LIFXD_GET_LIGHT_STATE
++    );
++    lifxd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
++    lifxd_gateway_send_packet(gw, &hdr, NULL, 0);
++
++    int latency = gw->last_pkt_at - gw->last_req_at;
++    int timeout = LIFXD_MAX(LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS, latency);
++    struct timeval tv = LIFXD_MSECS_TO_TIMEVAL(timeout);
++    evtimer_add(gw->refresh_ev, &tv);
++    lifxd_debug(
++        "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
++        gw->ip_addr, gw->port, latency, timeout
+     );
  }
  
-@@ -199,8 +202,8 @@
+@@ -159,7 +163,9 @@
+ }
+ 
+ struct lifxd_gateway *
+-lifxd_gateway_open(const struct sockaddr_storage *peer, const uint8_t *site)
++lifxd_gateway_open(const struct sockaddr_storage *peer,
++                   const uint8_t *site,
++                   lifxd_time_mono_t received_at)
+ {
+     assert(peer);
+     assert(site);
+@@ -187,20 +193,18 @@
+         gw
+     );
+     gw->write_buf = evbuffer_new();
+-    gw->refresh_ev = event_new(
+-        lifxd_ev_base,
+-        -1,
+-        EV_PERSIST,
+-        lifxd_gateway_refresh_callback,
+-        gw
++    gw->refresh_ev = evtimer_new(
++        lifxd_ev_base, lifxd_gateway_refresh_callback, gw
+     );
+     memcpy(&gw->peer, peer, peer->ss_len);
+     lifxd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
      gw->port = lifxd_sockaddrport(peer);
      memcpy(gw->site, site, sizeof(gw->site));
++    gw->last_req_at = received_at;
++    gw->last_pkt_at = received_at;
  
 -    struct timeval refresh_interval = LIFXD_MSECS_TO_TV(
 -        LIFXD_GATEWAY_REFRESH_INTERVAL_MSEC
 +    struct timeval refresh_interval = LIFXD_MSECS_TO_TIMEVAL(
-+        LIFXD_GATEWAY_REFRESH_INTERVAL_MSECS
++        LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS
      );
  
      if (!gw->write_ev || !gw->write_buf || !gw->refresh_ev
+@@ -214,6 +218,11 @@
+         lifxd_addrtoa(gw->site), gw->ip_addr, gw->port
+     );
+     LIST_INSERT_HEAD(&lifxd_gateways, gw, link);
++
++    // In case this is the first bulb (re-)discovered, start the watchdog, it
++    // will stop by itself:
++    lifxd_timer_start_watchdog();
++
+     return gw;
+ 
+ error_allocate:
+@@ -227,7 +236,7 @@
+         event_free(gw->refresh_ev);
+     }
+ error_connect:
+-    close(gw->socket);
++    evutil_closesocket(gw->socket);
+ error_socket:
+     free(gw);
+     return NULL;
+@@ -299,7 +308,7 @@
+     assert(gw && hdr && pkt);
+ 
+     lifxd_debug(
+-        "SET_LIGHT_STATUS <-- [%s]:%hu - %s "
++        "SET_LIGHT_STATE <-- [%s]:%hu - %s "
+         "hue=%#hx, saturation=%#hx, brightness=%#hx, "
+         "kelvin=%d, dim=%#hx, power=%#hx, label=%.*s, tags=%#lx",
+         gw->ip_addr, gw->port, lifxd_addrtoa(hdr->target.device_addr),
+@@ -314,8 +323,10 @@
+         return;
+     }
+ 
+-    assert(sizeof(*pkt) == sizeof(b->status));
+-    lifxd_bulb_set_light_status(b, (const struct lifxd_light_status *)pkt);
++    assert(sizeof(*pkt) == sizeof(b->state));
++    lifxd_bulb_set_light_state(
++        b, (const struct lifxd_light_state *)pkt, gw->last_pkt_at
++    );
+ }
+ 
+ void
 diff --git a/core/gateway.h b/core/gateway.h
 --- a/core/gateway.h
 +++ b/core/gateway.h
-@@ -34,11 +34,13 @@
- // aggressively polling a bulb doesn't raise it's consumption at all (it's
- // interesting to note that a turned off bulb still draw about 2W in ZigBee and
- // about 3W in WiFi).
+@@ -29,15 +29,11 @@
+ 
+ #pragma once
+ 
+-// Let's start with something simple for now, in the future this will need to
+-// account for each gateway response time. According to my own tests,
+-// aggressively polling a bulb doesn't raise it's consumption at all (it's
+-// interesting to note that a turned off bulb still draw about 2W in ZigBee and
+-// about 3W in WiFi).
 -enum { LIFXD_GATEWAY_REFRESH_INTERVAL_MSEC = 100 };
-+enum { LIFXD_GATEWAY_REFRESH_INTERVAL_MSECS = 100 };
+-
+-// In the meantime skip a refresh if we have too many bytes in our write buffer:
+-enum { LIFXD_GATEWAY_WRITE_HIGH_WATERMARK = 256 };
++// Send GET_LIGHT_STATE to the gateway at most every this interval. FYI,
++// according to my own tests, aggressively polling a bulb doesn't raise its
++// consumption at all (and it's interesting to note that a turned off bulb
++// still draw about 2W in ZigBee and about 3W in WiFi).
++enum { LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 100 };
  
- // In the meantime skip a refresh if we have too many bytes in our write buffer:
- enum { LIFXD_GATEWAY_WRITE_HIGH_WATERMARK = 256 };
- 
-+enum { LIFXD_GATEWAY_TIMEOUT_MSECS = 5000 };
-+
  struct lifxd_gateway {
      LIST_ENTRY(lifxd_gateway)   link;
-     struct lifxd_bulb_list      bulbs;
-@@ -52,6 +54,8 @@
+@@ -52,15 +48,26 @@
      uint16_t                    port;
      uint8_t                     site[LIFXD_ADDR_LENGTH];
      evutil_socket_t             socket;
-+    time_t                      lastreq_at_msecs;
-+    time_t                      lastresp_at_msecs;
++    // Those two timers let us measure the latency of the gateway. If we aren't
++    // the only client on the network then this won't be accurate since we will
++    // get pushed packets we didn't ask for, but good enough for our purpose of
++    // rate limiting our requests to the gateway:
++    lifxd_time_mono_t           last_req_at;
++    lifxd_time_mono_t           last_pkt_at;
      struct event                *write_ev;
      struct evbuffer             *write_buf;
      struct event                *refresh_ev;
+ };
+ LIST_HEAD(lifxd_gateway_list, lifxd_gateway);
+ 
++extern struct lifxd_gateway_list lifxd_gateways;
++
+ struct lifxd_gateway *lifxd_gateway_get(const struct sockaddr_storage *);
+ struct lifxd_gateway *lifxd_gateway_open(const struct sockaddr_storage *,
+-                                         const uint8_t *);
++                                         const uint8_t *,
++                                         lifxd_time_mono_t);
++
++void lifxd_gateway_close(struct lifxd_gateway *);
+ void lifxd_gateway_close_all(void);
+ 
+ void lifxd_gateway_send_packet(struct lifxd_gateway *,
+diff --git a/core/lifxd.c b/core/lifxd.c
+--- a/core/lifxd.c
++++ b/core/lifxd.c
+@@ -47,10 +47,12 @@
+ #include <event2/event_struct.h>
+ 
+ #include "wire_proto.h"
++#include "time_monotonic.h"
+ #include "bulb.h"
+ #include "gateway.h"
+ #include "broadcast.h"
+ #include "version.h"
++#include "timer.h"
+ #include "lifxd.h"
+ 
+ struct lifxd_opts lifxd_opts = {
+@@ -65,6 +67,7 @@
+ void
+ lifxd_cleanup(void)
+ {
++    lifxd_timer_close();
+     lifxd_broadcast_close();
+     lifxd_gateway_close_all();
+     event_base_free(lifxd_ev_base);
+@@ -202,10 +205,12 @@
+     lifxd_configure_signal_handling();
+ 
+     lifxd_wire_load_packet_infos_map();
+-    if (!lifxd_broadcast_setup() || !lifxd_broadcast_discovery()) {
+-        lifxd_err(1, "can't start auto discovery");
++    if (!lifxd_timer_setup() || !lifxd_broadcast_setup()) {
++        lifxd_err(1, "can't setup lifxd");
+     }
+ 
++    lifxd_timer_start_discovery();
++
+     event_base_dispatch(lifxd_ev_base);
+ 
+     lifxd_cleanup();
 diff --git a/core/lifxd.h b/core/lifxd.h
 --- a/core/lifxd.h
 +++ b/core/lifxd.h
-@@ -30,7 +30,7 @@
+@@ -30,10 +30,11 @@
  #pragma once
  
  #define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -554,3 +951,279 @@ diff --git a/core/lifxd.h b/core/lifxd.h
      .tv_sec = (v) / 1000,           \
      .tv_usec = ((v) % 1000) * 1000  \
  }
++#define LIFXD_MAX(a, b) ((a) > (b) ? (a) : (b))
+ 
+ enum lifxd_verbosity {
+     LIFXD_DEBUG = 0,
+diff --git a/core/timer.c b/core/timer.c
+new file mode 100644
+--- /dev/null
++++ b/core/timer.c
+@@ -0,0 +1,211 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <assert.h>
++#include <err.h>
++#include <errno.h>
++#include <stdbool.h>
++#include <string.h>
++
++#include <event2/event.h>
++#include <event2/util.h>
++
++#include "wire_proto.h"
++#include "time_monotonic.h"
++#include "broadcast.h"
++#include "bulb.h"
++#include "gateway.h"
++#include "timer.h"
++#include "lifxd.h"
++
++static struct {
++    struct event *watchdog_interval_ev;
++    struct event *discovery_timeout_ev;
++} lifxd_timer_context = {
++    .watchdog_interval_ev = NULL,
++    .discovery_timeout_ev = NULL
++};
++
++static void
++lifxd_timer_discovery_timeout_event_callback(evutil_socket_t socket,
++                                             short events,
++                                             void *ctx)
++{
++    (void)socket;
++    (void)events;
++    (void)ctx;
++
++    int timeout = LIFXD_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS;
++    if (LIST_EMPTY(&lifxd_gateways)) {
++        lifxd_debug(
++            "discovery didn't returned anything in %dms, restarting it",
++            LIFXD_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS
++        );
++        timeout = LIFXD_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS;
++    } else {
++        lifxd_debug("sending periodic discovery packet");
++    }
++
++    struct timeval tv = LIFXD_MSECS_TO_TIMEVAL(timeout);
++    if (event_add(lifxd_timer_context.discovery_timeout_ev, &tv)
++        || !lifxd_broadcast_discovery()) {
++        lifxd_err(1, "can't start discovery");
++    }
++}
++
++static void
++lifxd_timer_watchdog_timeout_event_callback(evutil_socket_t socket,
++                                            short events,
++                                            void *ctx)
++{
++    (void)socket;
++    (void)events;
++    (void)ctx;
++
++    bool start_discovery = false;
++    lifxd_time_mono_t now = lifxd_time_monotonic_msecs();
++
++    struct lifxd_bulb *bulb, *next_bulb;
++    RB_FOREACH_SAFE(bulb, lifxd_bulb_map, &lifxd_bulbs_table, next_bulb) {
++        int light_state_lag = now - bulb->last_light_state_at;
++        if (light_state_lag >= LIFXD_TIMER_DEVICE_TIMEOUT_MSECS) {
++            lifxd_info(
++                "closing bulb \"%.s\" that hasn't been updated for %dms",
++                sizeof(bulb->state.label),
++                bulb->state.label,
++                light_state_lag
++            );
++            lifxd_bulb_close(bulb);
++            start_discovery = true;
++        }
++    }
++
++    // Repeat for the gateways, we could also look if we are removing the last
++    // bulb on the gateway but this will also support architectures where
++    // gateways aren't bulbs themselves:
++    struct lifxd_gateway *gw, *next_gw;
++    LIST_FOREACH_SAFE(gw, &lifxd_gateways, link, next_gw) {
++        int gw_lag = now - gw->last_pkt_at;
++        if (gw_lag >= LIFXD_TIMER_DEVICE_TIMEOUT_MSECS) {
++            lifxd_info(
++                "closing bulb gateway [%s]:%hu that "
++                "hasn't received traffic for %dms",
++                gw->ip_addr, gw->port,
++                gw_lag
++            );
++            lifxd_gateway_close(gw);
++            start_discovery = true;
++        }
++    }
++
++    // If anything happens restart a discovery right away, maybe something just
++    // moved on the network:
++    if (start_discovery) {
++        lifxd_broadcast_discovery();
++    }
++}
++
++bool
++lifxd_timer_setup(void)
++{
++    assert(!lifxd_timer_context.watchdog_interval_ev);
++    assert(!lifxd_timer_context.discovery_timeout_ev);
++
++    lifxd_timer_context.discovery_timeout_ev = event_new(
++        lifxd_ev_base,
++        -1,
++        0,
++        lifxd_timer_discovery_timeout_event_callback,
++        NULL
++    );
++    lifxd_timer_context.watchdog_interval_ev = event_new(
++        lifxd_ev_base,
++        -1,
++        EV_PERSIST,
++        lifxd_timer_watchdog_timeout_event_callback,
++        NULL
++    );
++
++    if (lifxd_timer_context.discovery_timeout_ev
++        && lifxd_timer_context.watchdog_interval_ev) {
++        return true;
++    }
++
++    int errsave = errno;
++    lifxd_timer_close();
++    errno = errsave;
++    return false;
++}
++
++void
++lifxd_timer_close(void)
++{
++    if (lifxd_timer_context.discovery_timeout_ev) {
++        event_del(lifxd_timer_context.discovery_timeout_ev);
++        event_free(lifxd_timer_context.discovery_timeout_ev);
++        lifxd_timer_context.discovery_timeout_ev = NULL;
++    }
++    if (lifxd_timer_context.watchdog_interval_ev) {
++        event_del(lifxd_timer_context.watchdog_interval_ev);
++        event_free(lifxd_timer_context.watchdog_interval_ev);
++        lifxd_timer_context.watchdog_interval_ev = NULL;
++    }
++}
++
++void
++lifxd_timer_start_watchdog(void)
++{
++    assert(!RB_EMPTY(&lifxd_bulbs_table) || !LIST_EMPTY(&lifxd_gateways));
++
++    if (!evtimer_pending(lifxd_timer_context.watchdog_interval_ev, NULL)) {
++        struct timeval tv = LIFXD_MSECS_TO_TIMEVAL(
++            LIFXD_TIMER_WATCHDOG_INTERVAL_MSECS
++        );
++        if (event_add(lifxd_timer_context.watchdog_interval_ev, &tv)) {
++            lifxd_err(1, "can't start watchdog");
++        }
++        lifxd_debug("starting watchdog timer");
++    }
++}
++
++void
++lifxd_timer_start_discovery(void)
++{
++    assert(!evtimer_pending(lifxd_timer_context.discovery_timeout_ev, NULL));
++
++    struct timeval tv = LIFXD_MSECS_TO_TIMEVAL(
++        LIFXD_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS
++    );
++    if (event_add(lifxd_timer_context.discovery_timeout_ev, &tv)) {
++        lifxd_err(1, "can't start discovery timer");
++    }
++    lifxd_debug("starting discovery timer");
++}
+diff --git a/core/timer.h b/core/timer.h
+new file mode 100644
+--- /dev/null
++++ b/core/timer.h
+@@ -0,0 +1,40 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++enum { LIFXD_TIMER_WATCHDOG_INTERVAL_MSECS = 200 };
++enum { LIFXD_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
++enum { LIFXD_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
++enum { LIFXD_TIMER_DEVICE_TIMEOUT_MSECS = 2000 };
++
++bool lifxd_timer_setup(void);
++void lifxd_timer_close(void);
++void lifxd_timer_start_watchdog(void);
++void lifxd_timer_start_discovery(void);
+diff --git a/core/wire_proto.c b/core/wire_proto.c
+--- a/core/wire_proto.c
++++ b/core/wire_proto.c
+@@ -42,6 +42,7 @@
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
++#include "time_monotonic.h"
+ #include "bulb.h"
+ #include "gateway.h"
+ #include "lifxd.h"
