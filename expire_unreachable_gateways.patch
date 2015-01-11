@@ -432,19 +432,20 @@ diff --git a/core/broadcast.c b/core/broadcast.c
  #include "lifxd.h"
  
  static struct {
-@@ -155,6 +156,11 @@
+@@ -155,6 +156,12 @@
          }
          if (gw) {
              void *pkt = &read.buf[LIFXD_PACKET_HEADER_SIZE];
 +            gw->lastresp_at_msecs = lifxd_time_monotonic_msecs();
 +            lifxd_debug(
 +                "[%s]:%hu latency = %ld",
++                peer_addr, peer_port,
 +                gw->lastresp_at_msecs - gw->lastreq_at_msecs
 +            );
              pkt_infos->decode(pkt);
              pkt_infos->handle(gw, &read.hdr, pkt);
          } else {
-@@ -196,8 +202,8 @@
+@@ -196,8 +203,8 @@
          sizeof(lifx_addr)
      );
      if (nbytes == sizeof(get_pan_gateway)) {
@@ -455,7 +456,7 @@ diff --git a/core/broadcast.c b/core/broadcast.c
          );
          if (event_del(lifxd_broadcast_endpoint.write_ev)
              || event_add(lifxd_broadcast_endpoint.discovery_timeout_ev, &tv)) {
-@@ -257,7 +263,7 @@
+@@ -257,7 +264,7 @@
  
      lifxd_info(
          "discovery didn't returned anything in %dms, restarting it",
