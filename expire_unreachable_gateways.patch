@@ -283,7 +283,7 @@ new file mode 100644
 +
 +    uint64_t time = mach_absolute_time();
 +
-+    return time * timebase.numer / timebase.denom * MSECS_IN_NSEC;
++    return time * timebase.numer / timebase.denom / MSECS_IN_NSEC;
 +}
 diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
 new file mode 100644
