@@ -720,21 +720,46 @@ diff --git a/core/gateway.c b/core/gateway.c
  lifxd_gateway_close(struct lifxd_gateway *gw)
  {
      assert(gw);
-@@ -105,6 +107,7 @@
+@@ -105,6 +107,12 @@
              }
              return;
          }
-+        gw->last_req_at = lifxd_time_monotonic_msecs();
++        // Callbacks are called in any order, so we keep two timers to make
++        // sure we can get the latency right, otherwise we could be compute the
++        // latency with last_pkt_at < last_req_at, which isn't true since the
++        // pkt will be for an answer the previous write:
++        gw->last_req_at = gw->next_req_at;
++        gw->next_req_at = lifxd_time_monotonic_msecs();
          if (!evbuffer_get_length(gw->write_buf)) {
              event_del(gw->write_ev);
          }
-@@ -119,22 +122,23 @@
+@@ -112,30 +120,25 @@
+ }
  
-     assert(ctx);
- 
+ static void
++lifxd_gateway_send_get_all_light_state(struct lifxd_gateway *gw)
++{
++    assert(gw);
++
++    struct lifxd_packet_header hdr;
++    union lifxd_target target = { .addr = gw->site };
++    lifxd_wire_setup_header(
++        &hdr, LIFXD_TARGET_SITE, target, gw->site, LIFXD_GET_LIGHT_STATE
++    );
++    lifxd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
++    lifxd_gateway_send_packet(gw, &hdr, NULL, 0);
++}
++
++static void
+ lifxd_gateway_refresh_callback(evutil_socket_t socket, short events, void *ctx)
+ {
+     (void)socket;
+     (void)events;
+-
+-    assert(ctx);
+-
 -    struct lifxd_gateway *gw = (struct lifxd_gateway *)ctx;
-+    struct lifxd_gateway *gw = ctx;
- 
+-
 -    int buflen = evbuffer_get_length(gw->write_buf);
 -    if (buflen < LIFXD_GATEWAY_WRITE_HIGH_WATERMARK) {
 -        struct lifxd_packet_header hdr;
@@ -749,25 +774,12 @@ diff --git a/core/gateway.c b/core/gateway.c
 -    lifxd_info(
 -        "refresh skipped on gateway [%s]:%hu, (buflen=%d)",
 -        gw->ip_addr, gw->port, buflen
-+    struct lifxd_packet_header hdr;
-+    union lifxd_target target = { .addr = gw->site };
-+    lifxd_wire_setup_header(
-+        &hdr, LIFXD_TARGET_SITE, target, gw->site, LIFXD_GET_LIGHT_STATE
-+    );
-+    lifxd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
-+    lifxd_gateway_send_packet(gw, &hdr, NULL, 0);
-+
-+    int latency = gw->last_pkt_at - gw->last_req_at;
-+    int timeout = LIFXD_MAX(LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS, latency);
-+    struct timeval tv = LIFXD_MSECS_TO_TIMEVAL(timeout);
-+    evtimer_add(gw->refresh_ev, &tv);
-+    lifxd_debug(
-+        "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
-+        gw->ip_addr, gw->port, latency, timeout
-     );
+-    );
++    lifxd_gateway_send_get_all_light_state((struct lifxd_gateway *)ctx);
  }
  
-@@ -159,7 +163,9 @@
+ static struct lifxd_bulb *
+@@ -159,7 +162,9 @@
  }
  
  struct lifxd_gateway *
@@ -778,7 +790,7 @@ diff --git a/core/gateway.c b/core/gateway.c
  {
      assert(peer);
      assert(site);
-@@ -187,20 +193,18 @@
+@@ -187,20 +192,19 @@
          gw
      );
      gw->write_buf = evbuffer_new();
@@ -796,6 +808,7 @@ diff --git a/core/gateway.c b/core/gateway.c
      gw->port = lifxd_sockaddrport(peer);
      memcpy(gw->site, site, sizeof(gw->site));
 +    gw->last_req_at = received_at;
++    gw->next_req_at = received_at;
 +    gw->last_pkt_at = received_at;
  
 -    struct timeval refresh_interval = LIFXD_MSECS_TO_TV(
@@ -835,7 +848,7 @@ diff --git a/core/gateway.c b/core/gateway.c
          "hue=%#hx, saturation=%#hx, brightness=%#hx, "
          "kelvin=%d, dim=%#hx, power=%#hx, label=%.*s, tags=%#lx",
          gw->ip_addr, gw->port, lifxd_addrtoa(hdr->target.device_addr),
-@@ -314,8 +323,10 @@
+@@ -314,8 +323,28 @@
          return;
      }
  
@@ -845,6 +858,24 @@ diff --git a/core/gateway.c b/core/gateway.c
 +    lifxd_bulb_set_light_state(
 +        b, (const struct lifxd_light_state *)pkt, gw->last_pkt_at
 +    );
++
++    int latency = gw->last_pkt_at - gw->last_req_at;
++    if (latency < LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
++        int timeout = LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
++        struct timeval tv = LIFXD_MSECS_TO_TIMEVAL(timeout);
++        evtimer_add(gw->refresh_ev, &tv);
++        lifxd_debug(
++            "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
++            gw->ip_addr, gw->port, latency, timeout
++        );
++        return;
++    }
++
++    lifxd_debug(
++        "[%s]:%hu latency is %dms, sending GET_LIGHT_STATE now",
++        gw->ip_addr, gw->port, latency
++    );
++    lifxd_gateway_send_get_all_light_state(gw);
  }
  
  void
@@ -868,19 +899,20 @@ diff --git a/core/gateway.h b/core/gateway.h
 +// according to my own tests, aggressively polling a bulb doesn't raise its
 +// consumption at all (and it's interesting to note that a turned off bulb
 +// still draw about 2W in ZigBee and about 3W in WiFi).
-+enum { LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 100 };
++enum { LIFXD_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 200 };
  
  struct lifxd_gateway {
      LIST_ENTRY(lifxd_gateway)   link;
-@@ -52,15 +48,26 @@
+@@ -52,15 +48,27 @@
      uint16_t                    port;
      uint8_t                     site[LIFXD_ADDR_LENGTH];
      evutil_socket_t             socket;
-+    // Those two timers let us measure the latency of the gateway. If we aren't
-+    // the only client on the network then this won't be accurate since we will
-+    // get pushed packets we didn't ask for, but good enough for our purpose of
-+    // rate limiting our requests to the gateway:
++    // Those three timers let us measure the latency of the gateway. If we
++    // aren't the only client on the network then this won't be accurate since
++    // we will get pushed packets we didn't ask for, but good enough for our
++    // purpose of rate limiting our requests to the gateway:
 +    lifxd_time_mono_t           last_req_at;
++    lifxd_time_mono_t           next_req_at;
 +    lifxd_time_mono_t           last_pkt_at;
      struct event                *write_ev;
      struct evbuffer             *write_buf;
@@ -942,7 +974,7 @@ diff --git a/core/lifxd.c b/core/lifxd.c
 diff --git a/core/lifxd.h b/core/lifxd.h
 --- a/core/lifxd.h
 +++ b/core/lifxd.h
-@@ -30,10 +30,11 @@
+@@ -30,7 +30,7 @@
  #pragma once
  
  #define LIFXD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -951,10 +983,6 @@ diff --git a/core/lifxd.h b/core/lifxd.h
      .tv_sec = (v) / 1000,           \
      .tv_usec = ((v) % 1000) * 1000  \
  }
-+#define LIFXD_MAX(a, b) ((a) > (b) ? (a) : (b))
- 
- enum lifxd_verbosity {
-     LIFXD_DEBUG = 0,
 diff --git a/core/timer.c b/core/timer.c
 new file mode 100644
 --- /dev/null
