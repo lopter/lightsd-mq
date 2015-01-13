@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  d159f8ff2166abf3fb6e7fbf869c8c210f72732d
+# Parent 94766dce679132c997bf13377d0cb17e778a17b5
 Fix build on GNU/Linux
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -25,56 +25,10 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ENDIF ()
  
  INCLUDE_DIRECTORIES(${LIFXD_SOURCE_DIR}/compat/generic ${LIFXD_BINARY_DIR}/compat)
-diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
---- a/CMakeScripts/CompatTimeMonotonic.cmake
-+++ b/CMakeScripts/CompatTimeMonotonic.cmake
-@@ -4,7 +4,7 @@
-     SET(COMPAT_TIME_MONOTONIC_IMPL "${LIFXD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.c")
-     SET(COMPAT_TIME_MONOTONIC_H "${LIFXD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.h")
-     SET(GENERIC_TIME_MONOTONIC_IMPL "${LIFXD_SOURCE_DIR}/compat/generic/time_monotonic.c")
--    SET(GENERIC_TIME_MONOTONIC_IMPL "${LIFXD_SOURCE_DIR}/compat/generic/time_monotonic.h")
-+    SET(GENERIC_TIME_MONOTONIC_H "${LIFXD_SOURCE_DIR}/compat/generic/time_monotonic.h")
- 
-     SET(CMAKE_REQUIRED_QUIET TRUE)
-     MESSAGE(STATUS "Looking for clock_gettime")
-@@ -13,11 +13,11 @@
- 
-     IF (HAVE_CLOCK_GETTIME)
-         MESSAGE(STATUS "Looking for clock_gettime - found")
-+        FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" DESTINATION "${LIFXD_BINARY_DIR}/compat/")
-         SET(
-             TIME_MONOTONIC_IMPL "${GENERIC_TIME_MONOTONIC_IMPL}"
-             CACHE INTERNAL "lifxd_time_monotonic (POSIX generic implementation)"
-         )
--        FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" "${LIFXD_BINARY_DIR}/compat/")
-     ELSEIF (EXISTS "${COMPAT_TIME_MONOTONIC_IMPL}")
-         MESSAGE(STATUS "Looking for clock_gettime - not found, using built-in compatibilty file")
-         FILE(COPY "${COMPAT_TIME_MONOTONIC_H}" DESTINATION "${LIFXD_BINARY_DIR}/compat/")
-diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
---- a/CMakeScripts/FindEndian.cmake
-+++ b/CMakeScripts/FindEndian.cmake
-@@ -2,6 +2,7 @@
- 
- IF (NOT ENDIAN_H_PATH)
-     SET(COMPAT_ENDIAN_H "${LIFXD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/endian.h")
-+    SET(GENERIC_ENDIAN_H "${LIFXD_SOURCE_DIR}/compat/generic/endian.h")
- 
-     SET(CMAKE_REQUIRED_QUIET TRUE)
-     MESSAGE(STATUS "Looking for endian.h")
-@@ -9,7 +10,8 @@
-     UNSET(CMAKE_REQUIRED_QUIET)
- 
-     IF (HAVE_ENDIAN_H)
--        MESSAGE(STATUS "Looking for clock_gettime - found")
-+        MESSAGE(STATUS "Looking for endan.h - found")
-+        SET(ENDIAN_H_PATH "using native headers" CACHE INTERNAL "endian.h path")
-     ELSEIF (EXISTS "${COMPAT_ENDIAN_H}")
-         MESSAGE(STATUS "Looking for endian.h - not found, using built-in compatibility file")
-         FILE(COPY "${COMPAT_ENDIAN_H}" DESTINATION "${LIFXD_BINARY_DIR}/compat/")
 diff --git a/core/broadcast.c b/core/broadcast.c
 --- a/core/broadcast.c
 +++ b/core/broadcast.c
-@@ -70,6 +70,10 @@
+@@ -68,6 +68,10 @@
  
      while (true) {
          struct sockaddr_storage peer;
@@ -85,7 +39,7 @@ diff --git a/core/broadcast.c b/core/broadcast.c
          ev_socklen_t addrlen = sizeof(peer);
          union {
              char buf[LIFXD_MAX_PACKET_SIZE];
-@@ -173,7 +177,6 @@
+@@ -165,7 +169,6 @@
      assert(lifxd_broadcast_endpoint.socket != -1);
  
      struct sockaddr_in lifx_addr = {
@@ -93,7 +47,7 @@ diff --git a/core/broadcast.c b/core/broadcast.c
          .sin_family = AF_INET,
          .sin_addr = { INADDR_BROADCAST },
          .sin_port = htons(lifxd_opts.master_port)
-@@ -320,7 +323,6 @@
+@@ -284,7 +287,6 @@
      }
  
      struct sockaddr_in lifx_addr = {
@@ -104,7 +58,7 @@ diff --git a/core/broadcast.c b/core/broadcast.c
 diff --git a/core/gateway.c b/core/gateway.c
 --- a/core/gateway.c
 +++ b/core/gateway.c
-@@ -177,7 +177,7 @@
+@@ -179,7 +179,7 @@
          lifxd_warn("can't open a new socket");
          goto error_socket;
      }
@@ -113,16 +67,16 @@ diff --git a/core/gateway.c b/core/gateway.c
          || evutil_make_socket_nonblocking(gw->socket) == -1) {
          lifxd_warn("can't open a new socket");
          goto error_connect;
-@@ -197,7 +197,7 @@
-         lifxd_gateway_refresh_callback,
-         gw
+@@ -195,7 +195,7 @@
+     gw->refresh_ev = evtimer_new(
+         lifxd_ev_base, lifxd_gateway_refresh_callback, gw
      );
 -    memcpy(&gw->peer, peer, peer->ss_len);
 +    memcpy(&gw->peer, peer, sizeof(gw->peer));
      lifxd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
      gw->port = lifxd_sockaddrport(peer);
      memcpy(gw->site, site, sizeof(gw->site));
-@@ -244,7 +244,7 @@
+@@ -250,7 +250,7 @@
      struct lifxd_gateway *gw, *next_gw;
      LIST_FOREACH_SAFE(gw, &lifxd_gateways, link, next_gw) {
          if (peer->ss_family == gw->peer.ss_family
@@ -131,7 +85,7 @@ diff --git a/core/gateway.c b/core/gateway.c
              return gw;
          }
      }
-@@ -269,11 +269,12 @@
+@@ -275,11 +275,12 @@
  {
      assert(gw);
      assert(hdr);
