@@ -1,0 +1,3 @@
+rename_project_to_lightsd.patch
+dont_restart_discovery_on_write_error.patch
+lightsd_jsonrpc_proto.patch

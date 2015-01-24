@@ -1,0 +1,258 @@
+# HG changeset patch
+# Parent 9367f79d6ea11e0de8ec62de0cacfb08b42f0c68
+Add a TCP/JSON-RPC API
+
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -12,6 +12,8 @@
+ 
+ ADD_EXECUTABLE(
+     lightsd
++    accept.c
++    client.c
+     lightsd.c
+     log.c
+     ${TIME_MONOTONIC_IMPL}
+diff --git a/core/accept.c b/core/accept.c
+new file mode 100644
+--- /dev/null
++++ b/core/accept.c
+@@ -0,0 +1,34 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++
++#include <event2/listener.h>
++
++#include "lightsd.h"
+diff --git a/core/accept.h b/core/accept.h
+new file mode 100644
+--- /dev/null
++++ b/core/accept.h
+@@ -0,0 +1,41 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++struct lgtd_accept {
++    SLIST_ENTRY(lgtd_accept)    link;
++    const char                  *addr;
++    uint16_t                    port;
++    struct evconnlistener       *listener;
++};
++SLIST_HEAD(lgtd_accept_list
++
++bool lgtd_accept_setup(const char *, long);
++void lgtd_accept_close_all(void);
+diff --git a/core/client.c b/core/client.c
+new file mode 100644
+--- /dev/null
++++ b/core/client.c
+@@ -0,0 +1,29 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
+diff --git a/core/client.h b/core/client.h
+new file mode 100644
+--- /dev/null
++++ b/core/client.h
+@@ -0,0 +1,42 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++struct lgtd_client {
++    LIST_ENTRY(lgt_client)  link;
++    struct bufferevent      *io;
++    char                    ip_addr[INET6_ADDRSTRLEN];
++    uint16_t                port;
++};
++LIST_HEAD(lgtd_client_list, lgtd_client);
++
++struct lgtd_client *lgtd_client_open(const struct sockaddr *,
++                                     ev_socklen_t,
++                                     evutil_socket_t);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -51,8 +51,9 @@
+ #include "lifx/bulb.h"
+ #include "lifx/gateway.h"
+ #include "lifx/broadcast.h"
++#include "lifx/timer.h"
+ #include "version.h"
+-#include "lifx/timer.h"
++#include "accept.h"
+ #include "lightsd.h"
+ 
+ struct lgtd_opts lgtd_opts = {
+@@ -131,7 +132,8 @@
+ lgtd_usage(const char *progname)
+ {
+     printf(
+-        "Usage: %s [-v debug|info|warning|error] [-f] [-t] [-h] [-V]\n",
++        "Usage: %s -l addr:port [-l ...] [-f] [-t] [-h] [-V] "
++        "[-v debug|info|warning|error]\n",
+         progname
+     );
+     exit(0);
+@@ -140,7 +142,11 @@
+ int
+ main(int argc, char *argv[])
+ {
++    lgtd_configure_libevent();
++    lgtd_configure_signal_handling();
++
+     static const struct option long_opts[] = {
++        {"listen",          required_argument, NULL, 'l'},
+         {"foreground",      no_argument,       NULL, 'f'},
+         {"no-timestamps",   no_argument,       NULL, 't'},
+         {"help",            no_argument,       NULL, 'h'},
+@@ -148,12 +154,28 @@
+         {"version",         no_argument,       NULL, 'V'},
+         {NULL,              0,                 NULL, 0}
+     };
+-    const char short_opts[] = "fthv:V";
++    const char short_opts[] = "lfthv:V";
+ 
+     for (int rv = getopt_long(argc, argv, short_opts, long_opts, NULL);
+          rv != -1;
+          rv = getopt_long(argc, argv, short_opts, long_opts, NULL)) {
+         switch (rv) {
++        case 'l':
++            errno = 0;
++            char *sep = strrchr(optarg, ':');
++            if (!sep || !sep[1]) {
++                lgtd_usage(argv[0]);
++            }
++            long port = strtol(sep + 1, NULL, 10);
++            if (!errno && port <= UINT16_MAX && port > 0) {
++                if (lgtd_accept_setup(optarg != sep ? optarg : NULL, port)) {
++                    break;
++                }
++                exit(1);
++            }
++            lgtd_errx(
++                1, "The master port must be between 1 and %d", UINT16_MAX
++            );
+         case 'f':
+             lgtd_opts.foreground = true;
+             break;
+@@ -187,9 +209,6 @@
+     argc -= optind;
+     argv += optind;
+ 
+-    lgtd_configure_libevent();
+-    lgtd_configure_signal_handling();
+-
+     lgtd_lifx_wire_load_packet_infos_map();
+     if (!lgtd_lifx_timer_setup() || !lgtd_lifx_broadcast_setup()) {
+         lgtd_err(1, "can't setup lgtd_lifx");
