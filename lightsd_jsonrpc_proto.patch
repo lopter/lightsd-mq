@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 9367f79d6ea11e0de8ec62de0cacfb08b42f0c68
+# Parent 4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
 Add a TCP/JSON-RPC API
 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
@@ -9,16 +9,16 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
  
  ADD_EXECUTABLE(
      lightsd
-+    accept.c
 +    client.c
++    listen.c
      lightsd.c
      log.c
      ${TIME_MONOTONIC_IMPL}
-diff --git a/core/accept.c b/core/accept.c
+diff --git a/core/client.c b/core/client.c
 new file mode 100644
 --- /dev/null
-+++ b/core/accept.c
-@@ -0,0 +1,34 @@
++++ b/core/client.c
+@@ -0,0 +1,126 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -49,14 +49,106 @@ new file mode 100644
 +// POSSIBILITY OF SUCH DAMAGE.
 +
 +#include <sys/queue.h>
++#include <assert.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <stdint.h>
 +
-+#include <event2/listener.h>
++#include <event2/bufferevent.h>
 +
++#include "client.h"
 +#include "lightsd.h"
-diff --git a/core/accept.h b/core/accept.h
++
++struct lgtd_client_list lgtd_clients = LIST_HEAD_INITIALIZER(&lgtd_clients);
++
++static void
++lgtd_client_close(struct lgtd_client *client)
++{
++    assert(client);
++    assert(client->io);
++
++    LIST_REMOVE(client, link);
++    bufferevent_free(client->io);
++    free(client);
++}
++
++void
++lgtd_client_close_all(void)
++{
++    struct lgtd_client *client, *next_client;
++    LIST_FOREACH_SAFE(client, &lgtd_clients, link, next_client) {
++        lgtd_client_close(client);
++    }
++}
++
++static void
++lgtd_client_read_callback(struct bufferevent *bev, void *ctx)
++{
++    assert(ctx);
++
++    struct lgtd_client *client = ctx;
++}
++
++static void
++lgtd_client_write_callback(struct bufferevent *bev, void *ctx)
++{
++    assert(ctx);
++
++    struct lgtd_client *client = ctx;
++}
++
++static void
++lgtd_client_event_callback(struct bufferevent *bev, short events, void *ctx)
++{
++    (void)bev;
++    assert(ctx);
++
++    struct lgtd_client *client = ctx;
++
++    if (events & (BEV_EVENT_ERROR|BEV_EVENT_EOF)) {
++        lgtd_info(
++            "lost connection with client [%s]:%hu",
++            client->ip_addr, client->port
++        );
++        lgtd_client_close(client);
++    }
++}
++
++struct lgtd_client *
++lgtd_client_open(evutil_socket_t peer, const struct sockaddr_storage *peer_addr)
++{
++    assert(peer != -1);
++    assert(peer_addr);
++
++    struct lgtd_client *client = calloc(1, sizeof(*client));
++    if (!client) {
++        return NULL;
++    }
++    client->io = bufferevent_socket_new(
++        lgtd_ev_base,
++        peer,
++        BEV_OPT_CLOSE_ON_FREE
++    );
++    if (!client->io) {
++        return NULL;
++    }
++    bufferevent_setcb(
++        client->io,
++        lgtd_client_read_callback,
++        lgtd_client_write_callback,
++        lgtd_client_event_callback,
++        client
++    );
++
++    lgtd_sockaddrtoa(peer_addr, client->ip_addr, sizeof(client->ip_addr));
++    client->port = lgtd_sockaddrport(peer_addr);
++
++    return client;
++}
+diff --git a/core/client.h b/core/client.h
 new file mode 100644
 --- /dev/null
-+++ b/core/accept.h
++++ b/core/client.h
 @@ -0,0 +1,41 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
@@ -89,21 +181,101 @@ new file mode 100644
 +
 +#pragma once
 +
-+struct lgtd_accept {
-+    SLIST_ENTRY(lgtd_accept)    link;
-+    const char                  *addr;
-+    uint16_t                    port;
-+    struct evconnlistener       *listener;
++struct lgtd_client {
++    LIST_ENTRY(lgtd_client)  link;
++    struct bufferevent      *io;
++    char                    ip_addr[INET6_ADDRSTRLEN];
++    uint16_t                port;
 +};
-+SLIST_HEAD(lgtd_accept_list
++LIST_HEAD(lgtd_client_list, lgtd_client);
 +
-+bool lgtd_accept_setup(const char *, long);
-+void lgtd_accept_close_all(void);
-diff --git a/core/client.c b/core/client.c
++struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr_storage *);
++void lgtd_client_close_all(void);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -51,8 +51,10 @@
+ #include "lifx/bulb.h"
+ #include "lifx/gateway.h"
+ #include "lifx/broadcast.h"
++#include "lifx/timer.h"
+ #include "version.h"
+-#include "lifx/timer.h"
++#include "client.h"
++#include "listen.h"
+ #include "lightsd.h"
+ 
+ struct lgtd_opts lgtd_opts = {
+@@ -66,6 +68,8 @@
+ void
+ lgtd_cleanup(void)
+ {
++    lgtd_listen_close_all();
++    lgtd_client_close_all();
+     lgtd_lifx_timer_close();
+     lgtd_lifx_broadcast_close();
+     lgtd_lifx_gateway_close_all();
+@@ -131,7 +135,8 @@
+ lgtd_usage(const char *progname)
+ {
+     printf(
+-        "Usage: %s [-v debug|info|warning|error] [-f] [-t] [-h] [-V]\n",
++        "Usage: %s -l addr:port [-l ...] [-f] [-t] [-h] [-V] "
++        "[-v debug|info|warning|error]\n",
+         progname
+     );
+     exit(0);
+@@ -140,7 +145,11 @@
+ int
+ main(int argc, char *argv[])
+ {
++    lgtd_configure_libevent();
++    lgtd_configure_signal_handling();
++
+     static const struct option long_opts[] = {
++        {"listen",          required_argument, NULL, 'l'},
+         {"foreground",      no_argument,       NULL, 'f'},
+         {"no-timestamps",   no_argument,       NULL, 't'},
+         {"help",            no_argument,       NULL, 'h'},
+@@ -148,12 +157,22 @@
+         {"version",         no_argument,       NULL, 'V'},
+         {NULL,              0,                 NULL, 0}
+     };
+-    const char short_opts[] = "fthv:V";
++    const char short_opts[] = "l:fthv:V";
+ 
+     for (int rv = getopt_long(argc, argv, short_opts, long_opts, NULL);
+          rv != -1;
+          rv = getopt_long(argc, argv, short_opts, long_opts, NULL)) {
+         switch (rv) {
++        case 'l':
++            (void)0;
++            char *sep = strrchr(optarg, ':');
++            if (!sep || !sep[1]) {
++                lgtd_usage(argv[0]);
++            }
++            *sep = '\0';
++            if (!lgtd_listen_open(optarg, sep + 1)) {
++                exit(1);
++            }
+         case 'f':
+             lgtd_opts.foreground = true;
+             break;
+@@ -187,9 +206,6 @@
+     argc -= optind;
+     argv += optind;
+ 
+-    lgtd_configure_libevent();
+-    lgtd_configure_signal_handling();
+-
+     lgtd_lifx_wire_load_packet_infos_map();
+     if (!lgtd_lifx_timer_setup() || !lgtd_lifx_broadcast_setup()) {
+         lgtd_err(1, "can't setup lgtd_lifx");
+diff --git a/core/listen.c b/core/listen.c
 new file mode 100644
 --- /dev/null
-+++ b/core/client.c
-@@ -0,0 +1,29 @@
++++ b/core/listen.c
+@@ -0,0 +1,146 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -133,11 +305,128 @@ new file mode 100644
 +// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 +// POSSIBILITY OF SUCH DAMAGE.
 +
-diff --git a/core/client.h b/core/client.h
++#include <sys/queue.h>
++#include <assert.h>
++#include <err.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <unistd.h>
++
++#include <event2/listener.h>
++#include <event2/util.h>
++
++#include "client.h"
++#include "listen.h"
++#include "lightsd.h"
++
++struct lgtd_listen_list lgtd_listeners =
++    SLIST_HEAD_INITIALIZER(&lgtd_listeners);
++
++static void
++lgtd_listen_accept_new_client(struct evconnlistener *evlistener,
++                              evutil_socket_t peer,
++                              struct sockaddr *peer_addr,
++                              int addrlen,
++                              void *ctx)
++{
++    (void)evlistener;
++    (void)addrlen;
++
++    struct lgtd_listen *listener = ctx;
++    struct lgtd_client *client = lgtd_client_open(
++        peer, (struct sockaddr_storage *)peer_addr
++    );
++    if (client) {
++        lgtd_info(
++            "accepted new client [%s]:%hu", client->ip_addr, client->port
++        );
++        return;
++    }
++    lgtd_warn(
++        "can't accept new client on %s:%s", listener->addr, listener->port
++    );
++}
++
++void
++lgtd_listen_close_all(void)
++{
++    while (!SLIST_EMPTY(&lgtd_listeners)) {
++        struct lgtd_listen *listener = SLIST_FIRST(&lgtd_listeners);
++        SLIST_REMOVE_HEAD(&lgtd_listeners, link);
++        evconnlistener_free(listener->evlistener);
++        free(listener);
++    }
++}
++
++bool
++lgtd_listen_open(const char *addr, const char *port)
++{
++    assert(addr);
++    assert(port);
++
++    struct evutil_addrinfo *res = NULL, hints = {
++        .ai_family = AF_UNSPEC,
++        .ai_socktype = SOCK_STREAM,
++        .ai_protocol = IPPROTO_TCP,
++        .ai_flags = EVUTIL_AI_NUMERICSERV|EVUTIL_AI_PASSIVE
++    };
++
++    int err = evutil_getaddrinfo(addr, port, &hints, &res);
++    if (err) {
++        lgtd_warnx(
++            "can't listen on %s:%s: %s", addr, port, evutil_gai_strerror(err)
++        );
++        return false;
++    }
++
++    struct lgtd_listen *listener;
++    struct evconnlistener *evlistener;
++    for (struct evutil_addrinfo *it = res; it; it = it->ai_next) {
++        evlistener = NULL;
++        listener = calloc(1, sizeof(*listener));
++        if (!listener) {
++            goto error;
++        }
++        evlistener = evconnlistener_new_bind(
++            lgtd_ev_base,
++            lgtd_listen_accept_new_client,
++            listener,
++            LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE,
++            -1,
++            it->ai_addr,
++            it->ai_addrlen
++        );
++        if (!evlistener) {
++            goto error;
++        }
++        listener->evlistener = evlistener;
++        listener->addr = addr;
++        listener->port = port;
++        SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
++        lgtd_info(
++            "listening on %s:%s (%s)",
++            addr, port, it->ai_family == AF_INET ? "IPv4" : "IPv6"
++        );
++    }
++
++    evutil_freeaddrinfo(res);
++
++    return true;
++
++error:
++    lgtd_warn("can't listen on %s:%s", addr, port);
++    if (evlistener) {
++        evconnlistener_free(evlistener);
++    }
++    free(listener);
++    evutil_freeaddrinfo(res);
++    return false;
++}
+diff --git a/core/listen.h b/core/listen.h
 new file mode 100644
 --- /dev/null
-+++ b/core/client.h
-@@ -0,0 +1,42 @@
++++ b/core/listen.h
+@@ -0,0 +1,41 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -169,90 +458,13 @@ new file mode 100644
 +
 +#pragma once
 +
-+struct lgtd_client {
-+    LIST_ENTRY(lgt_client)  link;
-+    struct bufferevent      *io;
-+    char                    ip_addr[INET6_ADDRSTRLEN];
-+    uint16_t                port;
++struct lgtd_listen {
++    SLIST_ENTRY(lgtd_listen)    link;
++    const char                  *addr;
++    const char                  *port;
++    struct evconnlistener       *evlistener;
 +};
-+LIST_HEAD(lgtd_client_list, lgtd_client);
++SLIST_HEAD(lgtd_listen_list, lgtd_listen);
 +
-+struct lgtd_client *lgtd_client_open(const struct sockaddr *,
-+                                     ev_socklen_t,
-+                                     evutil_socket_t);
-diff --git a/core/lightsd.c b/core/lightsd.c
---- a/core/lightsd.c
-+++ b/core/lightsd.c
-@@ -51,8 +51,9 @@
- #include "lifx/bulb.h"
- #include "lifx/gateway.h"
- #include "lifx/broadcast.h"
-+#include "lifx/timer.h"
- #include "version.h"
--#include "lifx/timer.h"
-+#include "accept.h"
- #include "lightsd.h"
- 
- struct lgtd_opts lgtd_opts = {
-@@ -131,7 +132,8 @@
- lgtd_usage(const char *progname)
- {
-     printf(
--        "Usage: %s [-v debug|info|warning|error] [-f] [-t] [-h] [-V]\n",
-+        "Usage: %s -l addr:port [-l ...] [-f] [-t] [-h] [-V] "
-+        "[-v debug|info|warning|error]\n",
-         progname
-     );
-     exit(0);
-@@ -140,7 +142,11 @@
- int
- main(int argc, char *argv[])
- {
-+    lgtd_configure_libevent();
-+    lgtd_configure_signal_handling();
-+
-     static const struct option long_opts[] = {
-+        {"listen",          required_argument, NULL, 'l'},
-         {"foreground",      no_argument,       NULL, 'f'},
-         {"no-timestamps",   no_argument,       NULL, 't'},
-         {"help",            no_argument,       NULL, 'h'},
-@@ -148,12 +154,28 @@
-         {"version",         no_argument,       NULL, 'V'},
-         {NULL,              0,                 NULL, 0}
-     };
--    const char short_opts[] = "fthv:V";
-+    const char short_opts[] = "lfthv:V";
- 
-     for (int rv = getopt_long(argc, argv, short_opts, long_opts, NULL);
-          rv != -1;
-          rv = getopt_long(argc, argv, short_opts, long_opts, NULL)) {
-         switch (rv) {
-+        case 'l':
-+            errno = 0;
-+            char *sep = strrchr(optarg, ':');
-+            if (!sep || !sep[1]) {
-+                lgtd_usage(argv[0]);
-+            }
-+            long port = strtol(sep + 1, NULL, 10);
-+            if (!errno && port <= UINT16_MAX && port > 0) {
-+                if (lgtd_accept_setup(optarg != sep ? optarg : NULL, port)) {
-+                    break;
-+                }
-+                exit(1);
-+            }
-+            lgtd_errx(
-+                1, "The master port must be between 1 and %d", UINT16_MAX
-+            );
-         case 'f':
-             lgtd_opts.foreground = true;
-             break;
-@@ -187,9 +209,6 @@
-     argc -= optind;
-     argv += optind;
- 
--    lgtd_configure_libevent();
--    lgtd_configure_signal_handling();
--
-     lgtd_lifx_wire_load_packet_infos_map();
-     if (!lgtd_lifx_timer_setup() || !lgtd_lifx_broadcast_setup()) {
-         lgtd_err(1, "can't setup lgtd_lifx");
++bool lgtd_listen_open(const char *, const char *);
++void lgtd_listen_close_all(void);
