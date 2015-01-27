@@ -5,11 +5,13 @@ Add a TCP/JSON-RPC API
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,10 @@
  
  ADD_EXECUTABLE(
      lightsd
 +    client.c
++    jsmn.c
++    jsonrpc.c
 +    listen.c
      lightsd.c
      log.c
@@ -18,7 +20,7 @@ diff --git a/core/client.c b/core/client.c
 new file mode 100644
 --- /dev/null
 +++ b/core/client.c
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,173 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -50,13 +52,18 @@ new file mode 100644
 +
 +#include <sys/queue.h>
 +#include <assert.h>
++#include <err.h>
 +#include <stdbool.h>
 +#include <stdlib.h>
 +#include <stdint.h>
 +
++#include <event2/buffer.h>
 +#include <event2/bufferevent.h>
++#include <event2/event.h>
 +
++#include "jsmn.h"
 +#include "client.h"
++#include "jsonrpc.h"
 +#include "lightsd.h"
 +
 +struct lgtd_client_list lgtd_clients = LIST_HEAD_INITIALIZER(&lgtd_clients);
@@ -87,14 +94,57 @@ new file mode 100644
 +    assert(ctx);
 +
 +    struct lgtd_client *client = ctx;
-+}
 +
-+static void
-+lgtd_client_write_callback(struct bufferevent *bev, void *ctx)
-+{
-+    assert(ctx);
++    struct evbuffer *input = bufferevent_get_input(bev);
++    size_t bufsz = evbuffer_get_contiguous_space(input);
++    // Get the actual pointer to the beginning of the evbuf:
++    const char *buf = (char *)evbuffer_pullup(input, bufsz);
++    jsmnerr_t rv;
 +
-+    struct lgtd_client *client = ctx;
++retry_after_pullup:
++    rv = jsmn_parse(
++        &client->jsmn_ctx,
++        buf,
++        bufsz,
++        client->jsmn_tokens,
++        LGTD_ARRAY_SIZE(client->jsmn_tokens)
++    );
++    switch (rv) {
++    case JSMN_ERROR_NOMEM:
++        lgtd_warnx(
++            "dropping client [%s]:%hu: request too big, not "
++            "enough parser tokens", client->ip_addr, client->port
++        );
++        lgtd_client_close(client);
++        break;
++    case JSMN_ERROR_INVAL:
++        lgtd_warnx(
++            "dropping client [%s]:%hu: invalid json",
++            client->ip_addr, client->port
++        );
++        lgtd_client_close(client);
++        break;
++    case JSMN_ERROR_PART:
++        if (evbuffer_get_length(input) > LGTD_CLIENT_MAX_REQUEST_BUF_SIZE) {
++            lgtd_warnx(
++                "dropping client [%s]:%hu: request too big",
++                client->ip_addr, client->port
++            );
++            lgtd_client_close(client);
++            break;
++        } else if (bufsz >= evbuffer_get_length(input)) {
++            break; // We pulled up everything already, wait for more data
++        }
++        // pullup and resume parsing:
++        buf = (char *)evbuffer_pullup(input, -1);
++        bufsz = evbuffer_get_length(input);
++        goto retry_after_pullup;
++    default:
++        lgtd_jsonrpc_dispatch_request(client, buf, rv);
++        evbuffer_drain(input, bufsz);
++        jsmn_init(&client->jsmn_ctx);
++        break;
++    }
 +}
 +
 +static void
@@ -125,9 +175,7 @@ new file mode 100644
 +        return NULL;
 +    }
 +    client->io = bufferevent_socket_new(
-+        lgtd_ev_base,
-+        peer,
-+        BEV_OPT_CLOSE_ON_FREE
++        lgtd_ev_base, peer, BEV_OPT_CLOSE_ON_FREE
 +    );
 +    if (!client->io) {
 +        return NULL;
@@ -135,13 +183,14 @@ new file mode 100644
 +    bufferevent_setcb(
 +        client->io,
 +        lgtd_client_read_callback,
-+        lgtd_client_write_callback,
++        NULL,
 +        lgtd_client_event_callback,
 +        client
 +    );
-+
 +    lgtd_sockaddrtoa(peer_addr, client->ip_addr, sizeof(client->ip_addr));
 +    client->port = lgtd_sockaddrport(peer_addr);
++    jsmn_init(&client->jsmn_ctx);
++    bufferevent_enable(client->io, EV_READ|EV_WRITE|EV_TIMEOUT);
 +
 +    return client;
 +}
@@ -149,7 +198,7 @@ diff --git a/core/client.h b/core/client.h
 new file mode 100644
 --- /dev/null
 +++ b/core/client.h
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,46 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -181,32 +230,610 @@ new file mode 100644
 +
 +#pragma once
 +
++enum { LGTD_CLIENT_JSMN_TOKENS_NUM = 48 };
++enum { LGTD_CLIENT_MAX_REQUEST_BUF_SIZE = 2048 };
++
 +struct lgtd_client {
 +    LIST_ENTRY(lgtd_client)  link;
 +    struct bufferevent      *io;
 +    char                    ip_addr[INET6_ADDRSTRLEN];
 +    uint16_t                port;
++    jsmn_parser             jsmn_ctx;
++    jsmntok_t               jsmn_tokens[LGTD_CLIENT_JSMN_TOKENS_NUM];
 +};
 +LIST_HEAD(lgtd_client_list, lgtd_client);
 +
 +struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr_storage *);
 +void lgtd_client_close_all(void);
+diff --git a/core/jsmn.c b/core/jsmn.c
+new file mode 100644
+--- /dev/null
++++ b/core/jsmn.c
+@@ -0,0 +1,333 @@
++/*
++ * Copyright (c) 2010 Serge A. Zaitsev
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include <stdlib.h>
++
++#include "jsmn.h"
++
++/**
++ * Allocates a fresh unused token from the token pull.
++ */
++static jsmntok_t *jsmn_alloc_token(jsmn_parser *parser,
++		jsmntok_t *tokens, size_t num_tokens) {
++	jsmntok_t *tok;
++	if (parser->toknext >= num_tokens) {
++		return NULL;
++	}
++	tok = &tokens[parser->toknext++];
++	tok->start = tok->end = -1;
++	tok->size = 0;
++#ifdef JSMN_PARENT_LINKS
++	tok->parent = -1;
++#endif
++	return tok;
++}
++
++/**
++ * Fills token type and boundaries.
++ */
++static void jsmn_fill_token(jsmntok_t *token, jsmntype_t type,
++                            int start, int end) {
++	token->type = type;
++	token->start = start;
++	token->end = end;
++	token->size = 0;
++}
++
++/**
++ * Fills next available token with JSON primitive.
++ */
++static jsmnerr_t jsmn_parse_primitive(jsmn_parser *parser, const char *js,
++		size_t len, jsmntok_t *tokens, size_t num_tokens) {
++	jsmntok_t *token;
++	int start;
++
++	start = parser->pos;
++
++	for (; parser->pos < len && js[parser->pos] != '\0'; parser->pos++) {
++		switch (js[parser->pos]) {
++#ifndef JSMN_STRICT
++			/* In strict mode primitive must be followed by "," or "}" or "]" */
++			case ':':
++#endif
++			case '\t' : case '\r' : case '\n' : case ' ' :
++			case ','  : case ']'  : case '}' :
++				goto found;
++		}
++		if (js[parser->pos] < 32 || js[parser->pos] >= 127) {
++			parser->pos = start;
++			return JSMN_ERROR_INVAL;
++		}
++	}
++#ifdef JSMN_STRICT
++	/* In strict mode primitive must be followed by a comma/object/array */
++	parser->pos = start;
++	return JSMN_ERROR_PART;
++#endif
++
++found:
++	if (tokens == NULL) {
++		parser->pos--;
++		return 0;
++	}
++	token = jsmn_alloc_token(parser, tokens, num_tokens);
++	if (token == NULL) {
++		parser->pos = start;
++		return JSMN_ERROR_NOMEM;
++	}
++	jsmn_fill_token(token, JSMN_PRIMITIVE, start, parser->pos);
++#ifdef JSMN_PARENT_LINKS
++	token->parent = parser->toksuper;
++#endif
++	parser->pos--;
++	return 0;
++}
++
++/**
++ * Filsl next token with JSON string.
++ */
++static jsmnerr_t jsmn_parse_string(jsmn_parser *parser, const char *js,
++		size_t len, jsmntok_t *tokens, size_t num_tokens) {
++	jsmntok_t *token;
++
++	int start = parser->pos;
++
++	parser->pos++;
++
++	/* Skip starting quote */
++	for (; parser->pos < len && js[parser->pos] != '\0'; parser->pos++) {
++		char c = js[parser->pos];
++
++		/* Quote: end of string */
++		if (c == '\"') {
++			if (tokens == NULL) {
++				return 0;
++			}
++			token = jsmn_alloc_token(parser, tokens, num_tokens);
++			if (token == NULL) {
++				parser->pos = start;
++				return JSMN_ERROR_NOMEM;
++			}
++			jsmn_fill_token(token, JSMN_STRING, start+1, parser->pos);
++#ifdef JSMN_PARENT_LINKS
++			token->parent = parser->toksuper;
++#endif
++			return 0;
++		}
++
++		/* Backslash: Quoted symbol expected */
++		if (c == '\\' && parser->pos + 1 < len) {
++			int i;
++			parser->pos++;
++			switch (js[parser->pos]) {
++				/* Allowed escaped symbols */
++				case '\"': case '/' : case '\\' : case 'b' :
++				case 'f' : case 'r' : case 'n'  : case 't' :
++					break;
++				/* Allows escaped symbol \uXXXX */
++				case 'u':
++					parser->pos++;
++					for(i = 0; i < 4 && parser->pos < len && js[parser->pos] != '\0'; i++) {
++						/* If it isn't a hex character we have an error */
++						if(!((js[parser->pos] >= 48 && js[parser->pos] <= 57) || /* 0-9 */
++									(js[parser->pos] >= 65 && js[parser->pos] <= 70) || /* A-F */
++									(js[parser->pos] >= 97 && js[parser->pos] <= 102))) { /* a-f */
++							parser->pos = start;
++							return JSMN_ERROR_INVAL;
++						}
++						parser->pos++;
++					}
++					parser->pos--;
++					break;
++				/* Unexpected symbol */
++				default:
++					parser->pos = start;
++					return JSMN_ERROR_INVAL;
++			}
++		}
++	}
++	parser->pos = start;
++	return JSMN_ERROR_PART;
++}
++
++/**
++ * Parse JSON string and fill tokens.
++ */
++jsmnerr_t jsmn_parse(jsmn_parser *parser, const char *js, size_t len,
++		jsmntok_t *tokens, unsigned int num_tokens) {
++	jsmnerr_t r;
++	int i;
++	jsmntok_t *token;
++	int count = 0;
++
++	for (; parser->pos < len && js[parser->pos] != '\0'; parser->pos++) {
++		char c;
++		jsmntype_t type;
++
++		c = js[parser->pos];
++		switch (c) {
++			case '{': case '[':
++				count++;
++				if (tokens == NULL) {
++					break;
++				}
++				token = jsmn_alloc_token(parser, tokens, num_tokens);
++				if (token == NULL)
++					return JSMN_ERROR_NOMEM;
++				if (parser->toksuper != -1) {
++					tokens[parser->toksuper].size++;
++#ifdef JSMN_PARENT_LINKS
++					token->parent = parser->toksuper;
++#endif
++				}
++				token->type = (c == '{' ? JSMN_OBJECT : JSMN_ARRAY);
++				token->start = parser->pos;
++				parser->toksuper = parser->toknext - 1;
++				break;
++			case '}': case ']':
++				if (tokens == NULL)
++					break;
++				type = (c == '}' ? JSMN_OBJECT : JSMN_ARRAY);
++#ifdef JSMN_PARENT_LINKS
++				if (parser->toknext < 1) {
++					return JSMN_ERROR_INVAL;
++				}
++				token = &tokens[parser->toknext - 1];
++				for (;;) {
++					if (token->start != -1 && token->end == -1) {
++						if (token->type != type) {
++							return JSMN_ERROR_INVAL;
++						}
++						token->end = parser->pos + 1;
++						parser->toksuper = token->parent;
++						break;
++					}
++					if (token->parent == -1) {
++						break;
++					}
++					token = &tokens[token->parent];
++				}
++#else
++				for (i = parser->toknext - 1; i >= 0; i--) {
++					token = &tokens[i];
++					if (token->start != -1 && token->end == -1) {
++						if (token->type != type) {
++							return JSMN_ERROR_INVAL;
++						}
++						parser->toksuper = -1;
++						token->end = parser->pos + 1;
++						break;
++					}
++				}
++				/* Error if unmatched closing bracket */
++				if (i == -1) return JSMN_ERROR_INVAL;
++				for (; i >= 0; i--) {
++					token = &tokens[i];
++					if (token->start != -1 && token->end == -1) {
++						parser->toksuper = i;
++						break;
++					}
++				}
++#endif
++				break;
++			case '\"':
++				r = jsmn_parse_string(parser, js, len, tokens, num_tokens);
++				if (r < 0) return r;
++				count++;
++				if (parser->toksuper != -1 && tokens != NULL)
++					tokens[parser->toksuper].size++;
++				break;
++			case '\t' : case '\r' : case '\n' : case ' ':
++				break;
++			case ':':
++				parser->toksuper = parser->toknext - 1;
++				break;
++			case ',':
++				if (tokens != NULL &&
++						tokens[parser->toksuper].type != JSMN_ARRAY &&
++						tokens[parser->toksuper].type != JSMN_OBJECT) {
++#ifdef JSMN_PARENT_LINKS
++					parser->toksuper = tokens[parser->toksuper].parent;
++#else
++					for (i = parser->toknext - 1; i >= 0; i--) {
++						if (tokens[i].type == JSMN_ARRAY || tokens[i].type == JSMN_OBJECT) {
++							if (tokens[i].start != -1 && tokens[i].end == -1) {
++								parser->toksuper = i;
++								break;
++							}
++						}
++					}
++#endif
++				}
++				break;
++#ifdef JSMN_STRICT
++			/* In strict mode primitives are: numbers and booleans */
++			case '-': case '0': case '1' : case '2': case '3' : case '4':
++			case '5': case '6': case '7' : case '8': case '9':
++			case 't': case 'f': case 'n' :
++				/* And they must not be keys of the object */
++				if (tokens != NULL) {
++					jsmntok_t *t = &tokens[parser->toksuper];
++					if (t->type == JSMN_OBJECT ||
++							(t->type == JSMN_STRING && t->size != 0)) {
++						return JSMN_ERROR_INVAL;
++					}
++				}
++#else
++			/* In non-strict mode every unquoted value is a primitive */
++			default:
++#endif
++				r = jsmn_parse_primitive(parser, js, len, tokens, num_tokens);
++				if (r < 0) return r;
++				count++;
++				if (parser->toksuper != -1 && tokens != NULL)
++					tokens[parser->toksuper].size++;
++				break;
++
++#ifdef JSMN_STRICT
++			/* Unexpected char in strict mode */
++			default:
++				return JSMN_ERROR_INVAL;
++#endif
++		}
++	}
++
++	for (i = parser->toknext - 1; i >= 0; i--) {
++		/* Unmatched opened object or array */
++		if (tokens[i].start != -1 && tokens[i].end == -1) {
++			return JSMN_ERROR_PART;
++		}
++	}
++
++	return count;
++}
++
++/**
++ * Creates a new parser based over a given  buffer with an array of tokens
++ * available.
++ */
++void jsmn_init(jsmn_parser *parser) {
++	parser->pos = 0;
++	parser->toknext = 0;
++	parser->toksuper = -1;
++}
++
+diff --git a/core/jsmn.h b/core/jsmn.h
+new file mode 100644
+--- /dev/null
++++ b/core/jsmn.h
+@@ -0,0 +1,97 @@
++/*
++ * Copyright (c) 2010 Serge A. Zaitsev
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#ifndef __JSMN_H_
++#define __JSMN_H_
++
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * JSON type identifier. Basic types are:
++ * 	o Object
++ * 	o Array
++ * 	o String
++ * 	o Other primitive: number, boolean (true/false) or null
++ */
++typedef enum {
++	JSMN_PRIMITIVE = 0,
++	JSMN_OBJECT = 1,
++	JSMN_ARRAY = 2,
++	JSMN_STRING = 3
++} jsmntype_t;
++
++typedef enum {
++	/* Not enough tokens were provided */
++	JSMN_ERROR_NOMEM = -1,
++	/* Invalid character inside JSON string */
++	JSMN_ERROR_INVAL = -2,
++	/* The string is not a full JSON packet, more bytes expected */
++	JSMN_ERROR_PART = -3
++} jsmnerr_t;
++
++/**
++ * JSON token description.
++ * @param		type	type (object, array, string etc.)
++ * @param		start	start position in JSON data string
++ * @param		end		end position in JSON data string
++ */
++typedef struct {
++	jsmntype_t type;
++	int start;
++	int end;
++	int size;
++#ifdef JSMN_PARENT_LINKS
++	int parent;
++#endif
++} jsmntok_t;
++
++/**
++ * JSON parser. Contains an array of token blocks available. Also stores
++ * the string being parsed now and current position in that string
++ */
++typedef struct {
++	unsigned int pos; /* offset in the JSON string */
++	unsigned int toknext; /* next token to allocate */
++	int toksuper; /* superior token node, e.g parent object or array */
++} jsmn_parser;
++
++/**
++ * Create JSON parser over an array of tokens
++ */
++void jsmn_init(jsmn_parser *parser);
++
++/**
++ * Run JSON parser. It parses a JSON data string into and array of tokens, each describing
++ * a single JSON object.
++ */
++jsmnerr_t jsmn_parse(jsmn_parser *parser, const char *js, size_t len,
++		jsmntok_t *tokens, unsigned int num_tokens);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* __JSMN_H_ */
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+new file mode 100644
+--- /dev/null
++++ b/core/jsonrpc.c
+@@ -0,0 +1,90 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++#include <arpa/inet.h>
++#include <assert.h>
++#include <err.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++
++#include <event2/util.h>
++
++#include "jsmn.h"
++#include "client.h"
++#include "lightsd.h"
++
++static int
++dump(const char *js, jsmntok_t *t, size_t count, int indent)
++{
++    int i, j, k;
++    if (count == 0) {
++        return 0;
++    }
++    if (t->type == JSMN_PRIMITIVE) {
++        printf("%.*s", t->end - t->start, js+t->start);
++        return 1;
++    } else if (t->type == JSMN_STRING) {
++        printf("'%.*s'", t->end - t->start, js+t->start);
++        return 1;
++    } else if (t->type == JSMN_OBJECT) {
++        printf("\n");
++        j = 0;
++        for (i = 0; i < t->size; i++) {
++            for (k = 0; k < indent; k++) printf("  ");
++            j += dump(js, t+1+j, count-j, indent+1);
++            printf(": ");
++            j += dump(js, t+1+j, count-j, indent+1);
++            printf("\n");
++        }
++        return j+1;
++    } else if (t->type == JSMN_ARRAY) {
++        j = 0;
++        printf("\n");
++        for (i = 0; i < t->size; i++) {
++            for (k = 0; k < indent-1; k++) printf("  ");
++            printf("   - ");
++            j += dump(js, t+1+j, count-j, indent+1);
++            printf("\n");
++        }
++        return j+1;
++    }
++    return 0;
++}
++
++void
++lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, const char *json, int count)
++{
++    assert(client);
++    assert(count > 0);
++
++    dump(json, client->jsmn_tokens, count, 0);
++}
+diff --git a/core/jsonrpc.h b/core/jsonrpc.h
+new file mode 100644
+--- /dev/null
++++ b/core/jsonrpc.h
+@@ -0,0 +1,32 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++void lgtd_jsonrpc_dispatch_request(struct lgtd_client *, const char *, int);
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
-@@ -51,8 +51,10 @@
+@@ -51,8 +51,11 @@
  #include "lifx/bulb.h"
  #include "lifx/gateway.h"
  #include "lifx/broadcast.h"
 +#include "lifx/timer.h"
  #include "version.h"
 -#include "lifx/timer.h"
++#include "jsmn.h"
 +#include "client.h"
 +#include "listen.h"
  #include "lightsd.h"
  
  struct lgtd_opts lgtd_opts = {
-@@ -66,6 +68,8 @@
+@@ -66,6 +69,8 @@
  void
  lgtd_cleanup(void)
  {
@@ -215,7 +842,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      lgtd_lifx_timer_close();
      lgtd_lifx_broadcast_close();
      lgtd_lifx_gateway_close_all();
-@@ -131,7 +135,8 @@
+@@ -131,7 +136,8 @@
  lgtd_usage(const char *progname)
  {
      printf(
@@ -225,7 +852,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          progname
      );
      exit(0);
-@@ -140,7 +145,11 @@
+@@ -140,7 +146,11 @@
  int
  main(int argc, char *argv[])
  {
@@ -237,7 +864,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          {"foreground",      no_argument,       NULL, 'f'},
          {"no-timestamps",   no_argument,       NULL, 't'},
          {"help",            no_argument,       NULL, 'h'},
-@@ -148,12 +157,22 @@
+@@ -148,12 +158,22 @@
          {"version",         no_argument,       NULL, 'V'},
          {NULL,              0,                 NULL, 0}
      };
@@ -261,7 +888,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          case 'f':
              lgtd_opts.foreground = true;
              break;
-@@ -187,9 +206,6 @@
+@@ -187,12 +207,9 @@
      argc -= optind;
      argv += optind;
  
@@ -270,12 +897,16 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 -
      lgtd_lifx_wire_load_packet_infos_map();
      if (!lgtd_lifx_timer_setup() || !lgtd_lifx_broadcast_setup()) {
-         lgtd_err(1, "can't setup lgtd_lifx");
+-        lgtd_err(1, "can't setup lgtd_lifx");
++        lgtd_err(1, "can't setup lightsd");
+     }
+ 
+     lgtd_lifx_timer_start_discovery();
 diff --git a/core/listen.c b/core/listen.c
 new file mode 100644
 --- /dev/null
 +++ b/core/listen.c
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,147 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -315,6 +946,7 @@ new file mode 100644
 +#include <event2/listener.h>
 +#include <event2/util.h>
 +
++#include "jsmn.h"
 +#include "client.h"
 +#include "listen.h"
 +#include "lightsd.h"
@@ -468,3 +1100,19 @@ new file mode 100644
 +
 +bool lgtd_listen_open(const char *, const char *);
 +void lgtd_listen_close_all(void);
+diff --git a/lifx/broadcast.c b/lifx/broadcast.c
+--- a/lifx/broadcast.c
++++ b/lifx/broadcast.c
+@@ -286,6 +286,12 @@
+     if (err) {
+         goto error;
+     }
++    err = evutil_make_listen_socket_reuseable(
++        lgtd_lifx_broadcast_endpoint.socket
++    );
++    if (err) {
++        goto error;
++    }
+ 
+     err = evutil_make_socket_nonblocking(lgtd_lifx_broadcast_endpoint.socket);
+     if (err == -1) {
