@@ -2,10 +2,63 @@
 # Parent 4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
 Add a TCP/JSON-RPC API
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -16,6 +16,8 @@
+ 
+ SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${LIGHTSD_SOURCE_DIR}/CMakeScripts)
+ 
++ENABLE_TESTING()
++
+ ### Platform checks ############################################################
+ 
+ # TODO: we need at least 2.0.19-stable because of the logging defines
+@@ -29,6 +31,9 @@
+ 
+ ### Global definitions #########################################################
+ 
++INCLUDE(AddAllSubdirectories)
++INCLUDE(AddTestFromSources)
++
+ SET(CMAKE_C_FLAGS "-pipe -Wextra -Wall -Wstrict-prototypes -std=c99")
+ 
+ # Only relevant for the GNU libc:
+@@ -49,3 +54,4 @@
+ 
+ ADD_SUBDIRECTORY(core)
+ ADD_SUBDIRECTORY(lifx)
++ADD_SUBDIRECTORY(tests)
+diff --git a/CMakeScripts/AddAllSubdirectories.cmake b/CMakeScripts/AddAllSubdirectories.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/AddAllSubdirectories.cmake
+@@ -0,0 +1,8 @@
++FUNCTION(ADD_ALL_SUBDIRECTORIES)
++    FILE(GLOB SUBDIRECTORIES "*")
++    FOREACH (ENTRY ${SUBDIRECTORIES})
++        IF (IS_DIRECTORY ${ENTRY})
++            ADD_SUBDIRECTORY(${ENTRY})
++        ENDIF ()
++    ENDFOREACH ()
++ENDFUNCTION()
+diff --git a/CMakeScripts/AddTestFromSources.cmake b/CMakeScripts/AddTestFromSources.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/AddTestFromSources.cmake
+@@ -0,0 +1,8 @@
++FUNCTION(ADD_TEST_FROM_C_SOURCES)
++    STRING(LENGTH ${ARGV0} TEST_NAME_LEN)
++    STRING(LENGTH "test_" PREFIX_LEN)
++    MATH(EXPR TEST_NAME_LEN "${TEST_NAME_LEN} - 2 - ${PREFIX_LEN}")
++    STRING(SUBSTRING ${ARGV0} ${PREFIX_LEN} ${TEST_NAME_LEN} TEST_NAME)
++    ADD_EXECUTABLE(${TEST_NAME} ${ARGV})
++    ADD_TEST(test_${TEST_NAME} ${TEST_NAME})
++ENDFUNCTION()
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
-@@ -12,6 +12,10 @@
+@@ -12,8 +12,13 @@
  
  ADD_EXECUTABLE(
      lightsd
@@ -15,12 +68,15 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 +    listen.c
      lightsd.c
      log.c
++    router.c
      ${TIME_MONOTONIC_IMPL}
+ )
+ 
 diff --git a/core/client.c b/core/client.c
 new file mode 100644
 --- /dev/null
 +++ b/core/client.c
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,177 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -122,6 +178,8 @@ new file mode 100644
 +            "dropping client [%s]:%hu: invalid json",
 +            client->ip_addr, client->port
 +        );
++        // TODO: consume remaining data and send a proper error instead of
++        // closing the connection:
 +        lgtd_client_close(client);
 +        break;
 +    case JSMN_ERROR_PART:
@@ -200,7 +258,7 @@ diff --git a/core/client.h b/core/client.h
 new file mode 100644
 --- /dev/null
 +++ b/core/client.h
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,50 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -244,6 +302,10 @@ new file mode 100644
 +    jsmntok_t               jsmn_tokens[LGTD_CLIENT_JSMN_TOKENS_NUM];
 +};
 +LIST_HEAD(lgtd_client_list, lgtd_client);
++
++#define LGTD_CLIENT_WRITE_STRING(client, s) do {        \
++    bufferevent_write((client)->io, s, strlen((s)));    \
++} while(0)
 +
 +struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr_storage *);
 +void lgtd_client_close_all(void);
@@ -691,7 +753,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,331 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -729,64 +791,305 @@ new file mode 100644
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <stdint.h>
++#include <string.h>
 +
++#include <event2/bufferevent.h>
 +#include <event2/util.h>
 +
 +#include "jsmn.h"
 +#include "client.h"
++#include "jsonrpc.h"
 +#include "lightsd.h"
 +
-+static int
-+dump(const char *js, jsmntok_t *t, size_t count, int indent)
++static bool
++lgtd_jsonrpc_type_number(const jsmntok_t *t, const char *json)
 +{
-+    int i, j, k;
-+    if (count == 0) {
-+        return 0;
++    if (t->type != JSMN_PRIMITIVE) {
++        return false;
 +    }
-+    if (t->type == JSMN_PRIMITIVE) {
-+        printf("%.*s", t->end - t->start, js+t->start);
-+        return 1;
-+    } else if (t->type == JSMN_STRING) {
-+        printf("'%.*s'", t->end - t->start, js+t->start);
-+        return 1;
-+    } else if (t->type == JSMN_OBJECT) {
-+        printf("\n");
-+        j = 0;
-+        for (i = 0; i < t->size; i++) {
-+            for (k = 0; k < indent; k++) printf("  ");
-+            j += dump(js, t+1+j, count-j, indent+1);
-+            printf(": ");
-+            j += dump(js, t+1+j, count-j, indent+1);
-+            printf("\n");
-+        }
-+        return j+1;
-+    } else if (t->type == JSMN_ARRAY) {
-+        j = 0;
-+        printf("\n");
-+        for (i = 0; i < t->size; i++) {
-+            for (k = 0; k < indent-1; k++) printf("  ");
-+            printf("   - ");
-+            j += dump(js, t+1+j, count-j, indent+1);
-+            printf("\n");
-+        }
-+        return j+1;
++
++    char c = json[t->start];
++    return c == '-' || (c >= '0' && c <= '9');
++}
++
++static bool
++lgtd_jsonrpc_type_bool(const jsmntok_t *t, const char *json)
++{
++    if (t->type != JSMN_PRIMITIVE) {
++        return false;
 +    }
-+    return 0;
++
++    char c = json[t->start];
++    return c == 't' || c == 'f';
++}
++
++static bool
++lgtd_jsonrpc_type_null(const jsmntok_t *t, const char *json)
++{
++    return memcmp(
++        &json[t->start], "null", LGTD_MIN(t->size, (int)sizeof("null"))
++    );
++}
++
++static bool
++lgtd_jsonrpc_type_string(const jsmntok_t *t, const char *json)
++{
++    (void)json;
++    return t->type == JSMN_STRING;
++}
++
++static bool
++lgtd_jsonrpc_type_object_or_array(const jsmntok_t *t, const char *json)
++{
++    (void)json;
++    return t->type == JSMN_OBJECT || t->type == JSMN_ARRAY;
++}
++
++static bool
++lgtd_jsonrpc_type_string_number_string_or_null(const jsmntok_t *t,
++                                               const char *json)
++{
++    return lgtd_jsonrpc_type_number(t, json)
++        || lgtd_jsonrpc_type_null(t, json)
++        || t->type == JSMN_STRING;
++}
++
++static int
++lgtd_jsonrpc_consume_object_or_array(const jsmntok_t *tokens,
++                                     int ti,
++                                     int parsed,
++                                     const char *json)
++{
++    assert(tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY);
++    assert(ti < parsed);
++
++    int obj_size = tokens[ti++].size;
++    while (obj_size-- && ti < parsed) {
++        if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
++            ti = lgtd_jsonrpc_consume_object_or_array(tokens, ti, parsed, json);
++        } else {
++            ti += tokens[ti].size + 1;
++        }
++    }
++    return ti;
++}
++
++static bool
++lgtd_jsonrpc_extract_values_from_schema_and_dict(void *output,
++                                                 const struct lgtd_jsonrpc_node *schema,
++                                                 int schema_size,
++                                                 const jsmntok_t *tokens,
++                                                 int ntokens,
++                                                 const char *json)
++{
++    if (tokens[0].type != JSMN_OBJECT) {
++        return false;
++    }
++
++    for (int ti = 1; ti < ntokens;) {
++        if (tokens[ti].type != JSMN_STRING) {
++            return false;
++        }
++
++        for (int si = 0; si != schema_size; si++) {
++            if (tokens[ti].type != JSMN_STRING) { // make sure it's a key?
++                return false;
++            }
++            int tokenlen = LGTD_JSONRPC_TOKEN_LEN(&tokens[ti]);
++            int diff = memcmp(
++                schema[si].key,
++                &json[tokens[ti].start],
++                LGTD_MIN(schema[si].keylen, tokenlen)
++            );
++            if (!diff) {
++                if (schema[si].keylen != tokenlen) {
++                    return false;
++                }
++                ti++; // keys looks good, move to the value
++                if (!schema[si].type_cmp(&tokens[ti], json)) {
++                    return false;
++                }
++                if (schema[si].value_offset != -1) {
++                    const jsmntok_t *seen = LGTD_JSONRPC_GET_JSMNTOK(
++                        output, schema[si].value_offset
++                    );
++                    if (seen) { // duplicate key
++                        return false;
++                    }
++                    LGTD_JSONRPC_SET_JSMNTOK(
++                        output, schema[si].value_offset, &tokens[ti]
++                    );
++                }
++                break;
++            }
++        }
++
++        if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
++            // if it's an object or an array we need to skip everything in it:
++            ti = lgtd_jsonrpc_consume_object_or_array(
++                tokens, ti, ntokens, json
++            );
++        } else {
++            ti++;
++        }
++    }
++
++    for (int si = 0; si != LGTD_ARRAY_SIZE(schema); si++) {
++        if (!schema[si].optional) {
++            const jsmntok_t *seen = LGTD_JSONRPC_GET_JSMNTOK(
++                output, schema[si].value_offset
++            );
++            if (!seen) {
++                return false;
++            }
++        }
++    }
++
++    return true;
 +}
 +
 +void
-+lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, const char *json, int count)
++lgtd_jsonrpc_send_error(struct lgtd_client *client,
++                        enum lgtd_jsonrpc_error_code code,
++                        const char *message)
 +{
-+    assert(client);
-+    assert(count > 0);
++    char str_code[8] = { 0 };
 +
-+    dump(json, client->jsmn_tokens, count, 0);
++    snprintf(str_code, sizeof(str_code), "%d", code);
++    LGTD_CLIENT_WRITE_STRING(client, "{\"code\": ");
++    LGTD_CLIENT_WRITE_STRING(client, str_code);
++    LGTD_CLIENT_WRITE_STRING(client, ", \"message\": \"");
++    LGTD_CLIENT_WRITE_STRING(client, message);
++    LGTD_CLIENT_WRITE_STRING(client, "\"}");
++}
++
++static void
++lgtd_jsonrpc_check_and_call_set_light(struct lgtd_client *client,
++                                      const struct lgtd_jsonrpc_request *request,
++                                      const char *json)
++{
++    struct lgtd_jsonrpc_set_light_args {
++        const jsmntok_t *on;
++    } params = { 0 };
++    static const struct lgtd_jsonrpc_node schema[] = {
++        LGTD_JSONRPC_NODE(
++            "on",
++            offsetof(struct lgtd_jsonrpc_set_light_args, on),
++            lgtd_jsonrpc_type_bool,
++            false
++        ),
++    };
++
++    bool ok = lgtd_jsonrpc_extract_values_from_schema_and_dict(
++        &params,
++        schema,
++        LGTD_ARRAY_SIZE(schema),
++        request->params,
++        // XXX will be wrong if we have sub-dicts or sub-arrays:
++        request->params->size,
++        json
++    );
++    if (!ok) {
++        lgtd_jsonrpc_send_error(
++            client, LGTD_JSONRPC_INVALID_PARAMS, "Invalid parameters"
++        );
++        return;
++    }
++
++    // Parse each value and call actual code
++}
++
++void
++lgtd_jsonrpc_dispatch_request(struct lgtd_client *client,
++                              const char *json,
++                              int parsed)
++{
++    static const struct lgtd_jsonrpc_node request_schema[] = {
++        LGTD_JSONRPC_NODE(
++            "jsonrpc", -1, lgtd_jsonrpc_type_string, false
++        ),
++        LGTD_JSONRPC_NODE(
++            "method",
++            offsetof(struct lgtd_jsonrpc_request, method),
++            lgtd_jsonrpc_type_string,
++            false
++        ),
++        LGTD_JSONRPC_NODE(
++            "params",
++            offsetof(struct lgtd_jsonrpc_request, params),
++            lgtd_jsonrpc_type_object_or_array,
++            true
++        ),
++        LGTD_JSONRPC_NODE(
++            "id",
++            offsetof(struct lgtd_jsonrpc_request, id),
++            lgtd_jsonrpc_type_string_number_string_or_null,
++            true
++        )
++    };
++    static const struct lgtd_jsonrpc_method methods[] = {
++        LGTD_JSONRPC_METHOD(
++            "set_light", 1, lgtd_jsonrpc_check_and_call_set_light
++        ),
++    };
++
++    assert(client);
++    assert(parsed > 0);
++
++    const jsmntok_t *tokens = client->jsmn_tokens;
++
++    struct lgtd_jsonrpc_request request; // TODO: batch request
++    memset(&request, 0, sizeof(request));
++    bool ok = lgtd_jsonrpc_extract_values_from_schema_and_dict(
++        &request,
++        request_schema,
++        LGTD_ARRAY_SIZE(request_schema),
++        tokens,
++        parsed,
++        json
++    );
++    if (!ok) {
++        lgtd_jsonrpc_send_error(
++            client, LGTD_JSONRPC_INVALID_REQUEST, "Invalid request"
++        );
++        return;
++    }
++
++    assert(request->method);
++    assert(request->id);
++
++    for (int i = 0; i != LGTD_ARRAY_SIZE(methods); i++) {
++        int parsed_method_namelen = LGTD_JSONRPC_TOKEN_LEN(request.method);
++        if (parsed_method_namelen != methods[i].namelen) {
++            continue;
++        }
++        int diff = memcmp(
++            methods[i].name, &json[request.method->start], methods[i].namelen
++        );
++        if (!diff) {
++            int params_count = request.params->size;
++            if (params_count != methods[i].params_count) {
++                lgtd_jsonrpc_send_error(
++                    client,
++                    LGTD_JSONRPC_INVALID_PARAMS,
++                    "Invalid number of parameters"
++                );
++                return;
++            }
++            methods[i].method(client, &request, json);
++            return;
++        }
++    }
++
++    lgtd_jsonrpc_send_error(
++        client, LGTD_JSONRPC_METHOD_NOT_FOUND, "Method not found"
++    );
 +}
 diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,91 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -818,7 +1121,66 @@ new file mode 100644
 +
 +#pragma once
 +
++struct lgtd_jsonrpc_request {
++    const jsmntok_t *method;
++    const jsmntok_t *params;
++    const jsmntok_t *id;
++};
++
++struct lgtd_jsonrpc_node {
++    const char      *key;
++    int             keylen;
++    int             value_offset;
++    bool            (*type_cmp)(const jsmntok_t *, const char *);
++    bool            optional;
++};
++
++#define LGTD_JSONRPC_SET_JSMNTOK(object, value_offset, value) do {          \
++    *(const jsmntok_t **)(&(((char *)(object))[value_offset])) = (value);   \
++} while (0)
++
++#define LGTD_JSONRPC_GET_JSMNTOK(object, value_offset)          \
++    *(const jsmntok_t **)(&((char *)(object))[value_offset]);   \
++
++#define LGTD_JSONRPC_NODE(key_, value_offset_, fn_type_cmp, optional_)   { \
++    .key = (key_),                                                          \
++    .keylen = sizeof((key_)) - 1,                                           \
++    .value_offset = (value_offset_),                                        \
++    .type_cmp = (fn_type_cmp),                                              \
++    .optional = (optional_)                                                 \
++}
++
++#define LGTD_JSONRPC_TOKEN_LEN(t) ((t)->end - (t)->start)
++
++struct lgtd_jsonrpc_method {
++    const char  *name;
++    int         namelen;
++    int         params_count;
++    void        (*method)(struct lgtd_client *,
++                          const struct lgtd_jsonrpc_request *,
++                          const char *);
++};
++
++#define LGTD_JSONRPC_METHOD(name_, params_count_, method_) {    \
++    .name = (name_),                                            \
++    .namelen = sizeof((name_)) -1,                              \
++    .params_count = (params_count_),                            \
++    .method = (method_)                                         \
++}
++
++enum lgtd_jsonrpc_error_code {
++    LGTD_JSONRPC_SUCCESS = 0,
++    LGTD_JSONRPC_PARSE_ERROR = -32700,
++    LGTD_JSONRPC_INVALID_REQUEST = -32600,
++    LGTD_JSONRPC_METHOD_NOT_FOUND = -32601,
++    LGTD_JSONRPC_INVALID_PARAMS = -32602,
++    LGTD_JSONRPC_INTERNAL_ERROR = -32603,
++    LGTD_JSONRPC_SERVER_ERROR = -32000 // (to -32099)
++};
++
 +void lgtd_jsonrpc_dispatch_request(struct lgtd_client *, const char *, int);
++
++void lgtd_jsonrpc_send_error(struct lgtd_client *, enum lgtd_jsonrpc_error_code, const char *);
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -904,6 +1266,30 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      }
  
      lgtd_lifx_timer_start_discovery();
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -34,6 +34,7 @@
+ #endif
+ 
+ #define LGTD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
++#define LGTD_MIN(a, b) ((a) < (b) ? (a) : (b))
+ #define LGTD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+ #define LGTD_MSECS_TO_TIMEVAL(v) { \
+     .tv_sec = (v) / 1000,           \
+@@ -50,9 +51,9 @@
+ enum { LGTD_ERROR_MSG_BUFSIZE = 2048 };
+ 
+ struct lgtd_opts {
+-    bool                    foreground;
+-    bool                    log_timestamps;
+-    enum lgtd_verbosity    verbosity;
++    bool                foreground;
++    bool                log_timestamps;
++    enum lgtd_verbosity verbosity;
+ };
+ 
+ extern struct lgtd_opts lgtd_opts;
 diff --git a/core/listen.c b/core/listen.c
 new file mode 100644
 --- /dev/null
@@ -1119,6 +1505,468 @@ diff --git a/core/log.c b/core/log.c
  }
  
  const char *
+diff --git a/core/router.c b/core/router.c
+new file mode 100644
+--- /dev/null
++++ b/core/router.c
+@@ -0,0 +1,86 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <arpa/inet.h>
++#include <assert.h>
++#include <err.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <string.h>
++
++#include <event2/util.h>
++
++#include "lifx/wire_proto.h"
++#include "time_monotonic.h"
++#include "lifx/bulb.h"
++#include "lifx/gateway.h"
++#include "lightsd.h"
++
++static void
++lgtd_router_broadcast(enum lgtd_lifx_packet_type pkt_type,
++                      void *pkt,
++                      size_t pkt_size)
++{
++    struct lgtd_lifx_packet_header hdr;
++    union lgtd_lifx_target target = { .tags = 0 };
++
++    struct lgtd_lifx_gateway *gw;
++    LIST_FOREACH(gw, &lgtd_lifx_gateways, link) {
++        const struct lgtd_lifx_packet_infos *pkt_infos;
++        pkt_infos = lgtd_lifx_wire_setup_header(
++            &hdr, LGTD_LIFX_TARGET_ALL_DEVICES, target, gw->site, pkt_type
++        );
++        assert(pkt_infos);
++        lgtd_lifx_gateway_send_packet(gw, &hdr, pkt, pkt_size);
++    }
++}
++
++bool
++lgtd_router_send(const char *target,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt,
++                 size_t pkt_size)
++{
++    assert(target);
++    assert(pkt_size >= 0);
++    if (pkt_size) {
++        assert(pkt);
++    }
++
++    if (!strcmp(target, "*")) {
++        lgtd_router_broadcast(pkt_type, pkt, pkt_size);
++        return true;
++    }
++
++    return false;
++}
+diff --git a/core/router.h b/core/router.h
+new file mode 100644
+--- /dev/null
++++ b/core/router.h
+@@ -0,0 +1,32 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++bool lgtd_router_send(const char *, enum lgtd_lifx_packet_type, void *, size_t);
+diff --git a/docs/conf.py b/docs/conf.py
+new file mode 100644
+--- /dev/null
++++ b/docs/conf.py
+@@ -0,0 +1,259 @@
++#!/usr/bin/env python3
++# -*- coding: utf-8 -*-
++#
++# lightsd documentation build configuration file, created by
++# sphinx-quickstart on Wed Jan 28 00:04:24 2015.
++#
++# This file is execfile()d with the current directory set to its
++# containing dir.
++#
++# Note that not all possible configuration values are present in this
++# autogenerated file.
++#
++# All configuration values have a default; values that are commented out
++# serve to show the default.
++
++import sys
++import os
++
++# If extensions (or modules to document with autodoc) are in another directory,
++# add these directories to sys.path here. If the directory is relative to the
++# documentation root, use os.path.abspath to make it absolute, like shown here.
++#sys.path.insert(0, os.path.abspath('.'))
++
++# -- General configuration ------------------------------------------------
++
++# If your documentation needs a minimal Sphinx version, state it here.
++#needs_sphinx = '1.0'
++
++# Add any Sphinx extension module names here, as strings. They can be
++# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
++# ones.
++extensions = []
++
++# Add any paths that contain templates here, relative to this directory.
++templates_path = ['_templates']
++
++# The suffix of source filenames.
++source_suffix = '.rst'
++
++# The encoding of source files.
++#source_encoding = 'utf-8-sig'
++
++# The master toctree document.
++master_doc = 'index'
++
++# General information about the project.
++project = 'lightsd'
++copyright = '2015, Louis Opter'
++
++# The version info for the project you're documenting, acts as replacement for
++# |version| and |release|, also used in various other places throughout the
++# built documents.
++#
++# The short X.Y version.
++version = '0.0.1'
++# The full version, including alpha/beta/rc tags.
++release = '0.0.1'
++
++# The language for content autogenerated by Sphinx. Refer to documentation
++# for a list of supported languages.
++#language = None
++
++# There are two options for replacing |today|: either, you set today to some
++# non-false value, then it is used:
++#today = ''
++# Else, today_fmt is used as the format for a strftime call.
++#today_fmt = '%B %d, %Y'
++
++# List of patterns, relative to source directory, that match files and
++# directories to ignore when looking for source files.
++exclude_patterns = ['_build']
++
++# The reST default role (used for this markup: `text`) to use for all
++# documents.
++#default_role = None
++
++# If true, '()' will be appended to :func: etc. cross-reference text.
++#add_function_parentheses = True
++
++# If true, the current module name will be prepended to all description
++# unit titles (such as .. function::).
++#add_module_names = True
++
++# If true, sectionauthor and moduleauthor directives will be shown in the
++# output. They are ignored by default.
++#show_authors = False
++
++# The name of the Pygments (syntax highlighting) style to use.
++pygments_style = 'sphinx'
++
++# A list of ignored prefixes for module index sorting.
++#modindex_common_prefix = []
++
++# If true, keep warnings as "system message" paragraphs in the built documents.
++#keep_warnings = False
++
++
++# -- Options for HTML output ----------------------------------------------
++
++# The theme to use for HTML and HTML Help pages.  See the documentation for
++# a list of builtin themes.
++html_theme = 'nature'
++
++# Theme options are theme-specific and customize the look and feel of a theme
++# further.  For a list of options available for each theme, see the
++# documentation.
++#html_theme_options = {}
++
++# Add any paths that contain custom themes here, relative to this directory.
++#html_theme_path = []
++
++# The name for this set of Sphinx documents.  If None, it defaults to
++# "<project> v<release> documentation".
++#html_title = None
++
++# A shorter title for the navigation bar.  Default is the same as html_title.
++#html_short_title = None
++
++# The name of an image file (relative to this directory) to place at the top
++# of the sidebar.
++#html_logo = None
++
++# The name of an image file (within the static path) to use as favicon of the
++# docs.  This file should be a Windows icon file (.ico) being 16x16 or 32x32
++# pixels large.
++#html_favicon = None
++
++# Add any paths that contain custom static files (such as style sheets) here,
++# relative to this directory. They are copied after the builtin static files,
++# so a file named "default.css" will overwrite the builtin "default.css".
++html_static_path = ['_static']
++
++# Add any extra paths that contain custom files (such as robots.txt or
++# .htaccess) here, relative to this directory. These files are copied
++# directly to the root of the documentation.
++#html_extra_path = []
++
++# If not '', a 'Last updated on:' timestamp is inserted at every page bottom,
++# using the given strftime format.
++#html_last_updated_fmt = '%b %d, %Y'
++
++# If true, SmartyPants will be used to convert quotes and dashes to
++# typographically correct entities.
++#html_use_smartypants = True
++
++# Custom sidebar templates, maps document names to template names.
++#html_sidebars = {}
++
++# Additional templates that should be rendered to pages, maps page names to
++# template names.
++#html_additional_pages = {}
++
++# If false, no module index is generated.
++#html_domain_indices = True
++
++# If false, no index is generated.
++#html_use_index = True
++
++# If true, the index is split into individual pages for each letter.
++#html_split_index = False
++
++# If true, links to the reST sources are added to the pages.
++#html_show_sourcelink = True
++
++# If true, "Created using Sphinx" is shown in the HTML footer. Default is True.
++#html_show_sphinx = True
++
++# If true, "(C) Copyright ..." is shown in the HTML footer. Default is True.
++#html_show_copyright = True
++
++# If true, an OpenSearch description file will be output, and all pages will
++# contain a <link> tag referring to it.  The value of this option must be the
++# base URL from which the finished HTML is served.
++#html_use_opensearch = ''
++
++# This is the file name suffix for HTML files (e.g. ".xhtml").
++#html_file_suffix = None
++
++# Output file base name for HTML help builder.
++htmlhelp_basename = 'lightsddoc'
++
++
++# -- Options for LaTeX output ---------------------------------------------
++
++latex_elements = {
++# The paper size ('letterpaper' or 'a4paper').
++#'papersize': 'letterpaper',
++
++# The font size ('10pt', '11pt' or '12pt').
++#'pointsize': '10pt',
++
++# Additional stuff for the LaTeX preamble.
++#'preamble': '',
++}
++
++# Grouping the document tree into LaTeX files. List of tuples
++# (source start file, target name, title,
++#  author, documentclass [howto, manual, or own class]).
++latex_documents = [
++  ('index', 'lightsd.tex', 'lightsd Documentation',
++   'Louis Opter', 'manual'),
++]
++
++# The name of an image file (relative to this directory) to place at the top of
++# the title page.
++#latex_logo = None
++
++# For "manual" documents, if this is true, then toplevel headings are parts,
++# not chapters.
++#latex_use_parts = False
++
++# If true, show page references after internal links.
++#latex_show_pagerefs = False
++
++# If true, show URL addresses after external links.
++#latex_show_urls = False
++
++# Documents to append as an appendix to all manuals.
++#latex_appendices = []
++
++# If false, no module index is generated.
++#latex_domain_indices = True
++
++
++# -- Options for manual page output ---------------------------------------
++
++# One entry per manual page. List of tuples
++# (source start file, name, description, authors, manual section).
++man_pages = [
++    ('index', 'lightsd', 'lightsd Documentation',
++     ['Louis Opter'], 1)
++]
++
++# If true, show URL addresses after external links.
++#man_show_urls = False
++
++
++# -- Options for Texinfo output -------------------------------------------
++
++# Grouping the document tree into Texinfo files. List of tuples
++# (source start file, target name, title, author,
++#  dir menu entry, description, category)
++texinfo_documents = [
++  ('index', 'lightsd', 'lightsd Documentation',
++   'Louis Opter', 'lightsd', 'One line description of project.',
++   'Miscellaneous'),
++]
++
++# Documents to append as an appendix to all manuals.
++#texinfo_appendices = []
++
++# If false, no module index is generated.
++#texinfo_domain_indices = True
++
++# How to display URL addresses: 'footnote', 'no', or 'inline'.
++#texinfo_show_urls = 'footnote'
++
++# If true, do not generate a @detailmenu in the "Top" node's menu.
++#texinfo_no_detailmenu = False
+diff --git a/docs/index.rst b/docs/index.rst
+new file mode 100644
+--- /dev/null
++++ b/docs/index.rst
+@@ -0,0 +1,16 @@
++The lights daemon documentation
++===============================
++
++Contents:
++
++.. toctree::
++   :maxdepth: 2
++
++   protocol
++
++Indices and tables
++==================
++
++* :ref:`genindex`
++* :ref:`modindex`
++* :ref:`search`
+diff --git a/docs/protocol.rst b/docs/protocol.rst
+new file mode 100644
+--- /dev/null
++++ b/docs/protocol.rst
+@@ -0,0 +1,44 @@
++The lights daemon protocol
++==========================
++
++The lightsd protocol is implemented on top of `JSON-RPC 2.0`_.
++
++Targeting bulbs
++---------------
++
++Commands that manipulate bulbs will take a *target* argument to define on which
++bulb(s) the operation should apply:
++
+++-----------------------------+--------------------------------------------+
++| ``\*``                      | targets all bulbs                          |
+++-----------------------------+--------------------------------------------+
++| ``#TagName``                | targets bulbs tagged with *TagName*        |
+++-----------------------------+--------------------------------------------+
++| ``124f31a5``                | directly target the bulb with the given id |
+++-----------------------------+--------------------------------------------+
++| ``[\*, #Kitchen, 123456]`` | compose different targets together         |
+++-----------------------------+--------------------------------------------+
++
++Available methods
++-----------------
++
++.. function:: get_light(target)
++
++   Foo.
++
++.. function:: set_light(on)
++
++   :param bool on: turn the light on when true or off when false.
++
++.. function:: idle()
++
++   Bar.
++
++Notifications
++-------------
++
++lightsd will push a notification whenever the status of a bulb changes.
++
++.. _JSON-RPC 2.0: http://www.jsonrpc.org/specification
++
++.. vim: set tw=80 spelllang=en spell:
 diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 --- a/lifx/broadcast.c
 +++ b/lifx/broadcast.c
@@ -1135,3 +1983,446 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
  
      err = evutil_make_socket_nonblocking(lgtd_lifx_broadcast_endpoint.socket);
      if (err == -1) {
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -84,14 +84,16 @@
+     ((void (*)(struct lgtd_lifx_gateway *,              \
+                const struct lgtd_lifx_packet_header *,  \
+                const void *))(x))
+-#define REQUEST_ONLY                                    \
+-    .decode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
++#define NO_PAYLOAD                                          \
++    .decode = lgtd_lifx_wire_null_packet_encoder_decoder
++#define REQUEST_ONLY                                        \
+     .encode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
+     .handle = lgtd_lifx_wire_null_packet_handler
+ 
+     static struct lgtd_lifx_packet_infos packet_table[] = {
+         {
+             REQUEST_ONLY,
++            NO_PAYLOAD,
+             .name = "GET_PAN_GATEWAY",
+             .type = LGTD_LIFX_GET_PAN_GATEWAY
+         },
+@@ -105,6 +107,7 @@
+         },
+         {
+             REQUEST_ONLY,
++            NO_PAYLOAD,
+             .name = "GET_LIGHT_STATUS",
+             .type = LGTD_LIFX_GET_LIGHT_STATE
+         },
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -195,7 +195,7 @@
+ 
+ static inline int
+ lgtd_lifx_packet_infos_cmp(struct lgtd_lifx_packet_infos *a,
+-                       struct lgtd_lifx_packet_infos *b)
++                           struct lgtd_lifx_packet_infos *b)
+ {
+     return a->type - b->type;
+ }
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/CMakeLists.txt
+@@ -0,0 +1,1 @@
++ADD_ALL_SUBDIRECTORIES()
+diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/CMakeLists.txt
+@@ -0,0 +1,1 @@
++ADD_ALL_SUBDIRECTORIES()
+diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/CMakeLists.txt
+@@ -0,0 +1,20 @@
++INCLUDE_DIRECTORIES(
++    ${LIGHTSD_SOURCE_DIR}
++    ${LIGHTSD_SOURCE_DIR}/core/
++    ${LIGHTSD_BINARY_DIR}
++    ${LIGHTSD_BINARY_DIR}/core/
++)
++
++FUNCTION(ADD_JSONRPC_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(
++        ${TEST_SOURCE}
++        ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
++        ${LIGHTSD_SOURCE_DIR}/core/log.c
++        ${CMAKE_CURRENT_SOURCE_DIR}/../utils.c
++    )
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_JSONRPC_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c
+@@ -0,0 +1,46 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    jsmntok_t tokens[32];
++    const char json[] = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"hello\","
++        "\"id\": \"42\""
++    "}");
++    int parsed = parse_json(
++        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
++    );
++
++    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
++    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++
++    if (!ok) {
++        errx(1, "return value should be true");
++    }
++
++    if (!req.method) {
++        errx(1, "missing method");
++    }
++    if (req.method->end - req.method->start != sizeof("hello") - 1
++        || memcmp(&json[req.method->start], "hello", sizeof("hello") - 1)) {
++        errx(1, "wrong method name");
++    }
++
++    if (req.params) {
++        errx(1, "params should be null");
++    }
++
++    if (!req.id) {
++        errx(1, "missing id");
++    }
++    if (req.id->end - req.id->start != 2
++        || memcmp(&json[req.id->start], "42", 2)) {
++        errx(1, "wrong id");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c
+@@ -0,0 +1,41 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    jsmntok_t tokens[32];
++    const char json[] = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"hello\""
++    "}");
++    int parsed = parse_json(
++        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
++    );
++
++    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
++    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++
++    if (!ok) {
++        errx(1, "return value should be true");
++    }
++
++    if (!req.method) {
++        errx(1, "missing method");
++    }
++    if (req.method->end - req.method->start != sizeof("hello") - 1
++        || memcmp(&json[req.method->start], "hello", sizeof("hello") - 1)) {
++        errx(1, "wrong method name");
++    }
++
++    if (req.params) {
++        errx(1, "params should be null");
++    }
++
++    if (req.id) {
++        errx(1, "id should be null");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
+@@ -0,0 +1,52 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    jsmntok_t tokens[32];
++    const char json[] = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"hello\","
++        "\"params\": [\"on\", 12345, null, {\"lol\": \"wut\"}],"
++        "\"id\": \"42\""
++    "}");
++    int parsed = parse_json(
++        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
++    );
++
++    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
++    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++
++    if (!ok) {
++        errx(1, "return value should be true");
++    }
++
++    if (!req.method) {
++        errx(1, "missing method");
++    }
++    if (req.method->end - req.method->start != sizeof("hello") - 1
++        || memcmp(&json[req.method->start], "hello", sizeof("hello") - 1)) {
++        errx(1, "wrong method name");
++    }
++
++    if (!req.params) {
++        errx(1, "missing params");
++    }
++    const char params[] = "[\"on\", 12345, null, {\"lol\": \"wut\"}]"; 
++    if (req.params->end - req.params->start != sizeof(params) - 1
++        || memcmp(&json[req.params->start], params, req.params->size)) {
++        errx(1, "wrong params");
++    }
++
++    if (!req.id) {
++        errx(1, "missing id");
++    }
++    if (req.id->end - req.id->start != 2
++        || memcmp(&json[req.id->start], "42", 2)) {
++        errx(1, "wrong id");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
+@@ -0,0 +1,52 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    jsmntok_t tokens[32];
++    const char json[] = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"hello\","
++        "\"params\": {\"on\": true},"
++        "\"id\": \"42\""
++    "}");
++    int parsed = parse_json(
++        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
++    );
++
++    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
++    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++
++    if (!ok) {
++        errx(1, "return value should be true");
++    }
++
++    if (!req.method) {
++        errx(1, "missing method");
++    }
++    if (req.method->end - req.method->start != sizeof("hello") - 1
++        || memcmp(&json[req.method->start], "hello", sizeof("hello") - 1)) {
++        errx(1, "wrong method name");
++    }
++
++    if (!req.params) {
++        errx(1, "missing params");
++    }
++    const char params[] = "{\"on\": true}";
++    if (req.params->end - req.params->start != sizeof(params) - 1
++        || memcmp(&json[req.params->start], params, req.params->size)) {
++        errx(1, "wrong params");
++    }
++
++    if (!req.id) {
++        errx(1, "missing id");
++    }
++    if (req.id->end - req.id->start != 2
++        || memcmp(&json[req.id->start], "42", 2)) {
++        errx(1, "wrong id");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c
+@@ -0,0 +1,47 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    jsmntok_t tokens[32];
++    const char json[] = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"hello\","
++        "\"params\": {\"on\": true}"
++    "}");
++    int parsed = parse_json(
++        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
++    );
++
++    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
++    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++
++    if (!ok) {
++        errx(1, "return value should be true");
++    }
++
++    if (!req.method) {
++        errx(1, "missing method");
++    }
++    if (req.method->end - req.method->start != sizeof("hello") - 1
++        || memcmp(&json[req.method->start], "hello", sizeof("hello") - 1)) {
++        errx(1, "wrong method name");
++    }
++
++    if (!req.params) {
++        errx(1, "missing params");
++    }
++    const char params[] = "{\"on\": true}";
++    if (req.params->end - req.params->start != sizeof(params) - 1
++        || memcmp(&json[req.params->start], params, req.params->size)) {
++        errx(1, "wrong params");
++    }
++
++    if (req.id) {
++        errx(1, "id should be NULL");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_send_error.c b/tests/core/jsonrpc/test_jsonrpc_send_error.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_send_error.c
+@@ -0,0 +1,18 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    struct lgtd_client client = { .io = NULL };
++
++    lgtd_jsonrpc_send_error(
++        &client, LGTD_JSONRPC_INVALID_REQUEST, "Invalid Request"
++    );
++
++    const char *expected =
++        "{\"code\": -32600, \"message\": \"Invalid Request\"}";
++
++    return memcmp(client_write_buf, expected, strlen(expected));
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
+@@ -0,0 +1,25 @@
++#pragma once
++
++#define TEST_REQUEST_INITIALIZER { (void *)-1, (void *)-1, (void *)-1 }
++
++static inline int
++parse_json(jsmntok_t *tokens, size_t capacity, const char *json , size_t len)
++{
++    jsmn_parser ctx;
++    jsmn_init(&ctx);
++    return jsmn_parse(&ctx, json, len, tokens, capacity);
++}
++
++static char client_write_buf[4096] = { 0 };
++static int client_write_buf_idx = 0;
++
++int
++bufferevent_write(struct bufferevent *bev, const void *data, size_t nbytes)
++{
++    (void)bev;
++    int to_write = LGTD_MIN(nbytes, sizeof(client_write_buf));
++    memcpy(&client_write_buf[client_write_buf_idx], data, to_write);
++    client_write_buf_idx += to_write;
++    return 0;
++}
++
+diff --git a/tests/core/utils.c b/tests/core/utils.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/utils.c
+@@ -0,0 +1,18 @@
++#include <stdbool.h>
++
++#include <event2/event.h>
++
++#include "lightsd.h"
++
++struct lgtd_opts lgtd_opts = {
++    .foreground = false,
++    .log_timestamps = false,
++    .verbosity = LGTD_DEBUG
++}; 
++
++struct event_base *lgtd_ev_base = NULL;
++
++void
++lgtd_cleanup(void)
++{
++}
+diff --git a/tests/lightsc b/tests/lightsc
+new file mode 100755
+--- /dev/null
++++ b/tests/lightsc
+@@ -0,0 +1,20 @@
++#!/usr/bin/env python
++
++import json
++import socket
++
++
++def main():
++    # Example echo method
++    payload = {
++        "method": "echo",
++        "params": ["echome!"],
++        "jsonrpc": "2.0",
++        "id": 0,
++    }
++    s = socket.create_connection(("localhost", 1234))
++    s.send(json.dumps(payload).encode("utf-8"))
++    s.close()
++
++if __name__ == "__main__":
++    main()
