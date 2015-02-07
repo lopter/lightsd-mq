@@ -753,7 +753,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,348 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -963,6 +963,47 @@ new file mode 100644
 +    LGTD_CLIENT_WRITE_STRING(client, "\"}");
 +}
 +
++static bool
++lgtd_jsonrpc_check_and_extract_request(struct lgtd_jsonrpc_request *request,
++                                       const jsmntok_t *tokens,
++                                       int ntokens,
++                                       const char * json)
++{
++    static const struct lgtd_jsonrpc_node request_schema[] = {
++        LGTD_JSONRPC_NODE(
++            "jsonrpc", -1, lgtd_jsonrpc_type_string, false
++        ),
++        LGTD_JSONRPC_NODE(
++            "method",
++            offsetof(struct lgtd_jsonrpc_request, method),
++            lgtd_jsonrpc_type_string,
++            false
++        ),
++        LGTD_JSONRPC_NODE(
++            "params",
++            offsetof(struct lgtd_jsonrpc_request, params),
++            lgtd_jsonrpc_type_object_or_array,
++            true
++        ),
++        LGTD_JSONRPC_NODE(
++            "id",
++            offsetof(struct lgtd_jsonrpc_request, id),
++            lgtd_jsonrpc_type_string_number_string_or_null,
++            true
++        )
++    };
++
++    memset(request, 0, sizeof(*request));
++    return lgtd_jsonrpc_extract_values_from_schema_and_dict(
++        request,
++        request_schema,
++        LGTD_ARRAY_SIZE(request_schema),
++        tokens,
++        ntokens,
++        json
++    );
++}
++
 +static void
 +lgtd_jsonrpc_check_and_call_set_light(struct lgtd_client *client,
 +                                      const struct lgtd_jsonrpc_request *request,
@@ -1004,29 +1045,6 @@ new file mode 100644
 +                              const char *json,
 +                              int parsed)
 +{
-+    static const struct lgtd_jsonrpc_node request_schema[] = {
-+        LGTD_JSONRPC_NODE(
-+            "jsonrpc", -1, lgtd_jsonrpc_type_string, false
-+        ),
-+        LGTD_JSONRPC_NODE(
-+            "method",
-+            offsetof(struct lgtd_jsonrpc_request, method),
-+            lgtd_jsonrpc_type_string,
-+            false
-+        ),
-+        LGTD_JSONRPC_NODE(
-+            "params",
-+            offsetof(struct lgtd_jsonrpc_request, params),
-+            lgtd_jsonrpc_type_object_or_array,
-+            true
-+        ),
-+        LGTD_JSONRPC_NODE(
-+            "id",
-+            offsetof(struct lgtd_jsonrpc_request, id),
-+            lgtd_jsonrpc_type_string_number_string_or_null,
-+            true
-+        )
-+    };
 +    static const struct lgtd_jsonrpc_method methods[] = {
 +        LGTD_JSONRPC_METHOD(
 +            "set_light", 1, lgtd_jsonrpc_check_and_call_set_light
@@ -1038,12 +1056,11 @@ new file mode 100644
 +
 +    const jsmntok_t *tokens = client->jsmn_tokens;
 +
-+    struct lgtd_jsonrpc_request request; // TODO: batch request
-+    memset(&request, 0, sizeof(request));
-+    bool ok = lgtd_jsonrpc_extract_values_from_schema_and_dict(
++    // TODO: batch requests
++
++    struct lgtd_jsonrpc_request request;
++    bool ok = lgtd_jsonrpc_check_and_extract_request(
 +        &request,
-+        request_schema,
-+        LGTD_ARRAY_SIZE(request_schema),
 +        tokens,
 +        parsed,
 +        json
@@ -1055,8 +1072,8 @@ new file mode 100644
 +        return;
 +    }
 +
-+    assert(request->method);
-+    assert(request->id);
++    assert(request.method);
++    assert(request.id);
 +
 +    for (int i = 0; i != LGTD_ARRAY_SIZE(methods); i++) {
 +        int parsed_method_namelen = LGTD_JSONRPC_TOKEN_LEN(request.method);
@@ -2066,7 +2083,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c b/tests
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,48 @@
 +#include "jsonrpc.c"
 +
 +#include "test_jsonrpc_utils.h"
@@ -2085,7 +2102,9 @@ new file mode 100644
 +    );
 +
 +    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
-+    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++    bool ok = lgtd_jsonrpc_check_and_extract_request(
++        &req, tokens, parsed, json
++    );
 +
 +    if (!ok) {
 +        errx(1, "return value should be true");
@@ -2117,7 +2136,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_par
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,43 @@
 +#include "jsonrpc.c"
 +
 +#include "test_jsonrpc_utils.h"
@@ -2135,7 +2154,9 @@ new file mode 100644
 +    );
 +
 +    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
-+    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++    bool ok = lgtd_jsonrpc_check_and_extract_request(
++        &req, tokens, parsed, json
++    );
 +
 +    if (!ok) {
 +        errx(1, "return value should be true");
@@ -2163,7 +2184,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c b/te
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,54 @@
 +#include "jsonrpc.c"
 +
 +#include "test_jsonrpc_utils.h"
@@ -2183,7 +2204,9 @@ new file mode 100644
 +    );
 +
 +    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
-+    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++    bool ok = lgtd_jsonrpc_check_and_extract_request(
++        &req, tokens, parsed, json
++    );
 +
 +    if (!ok) {
 +        errx(1, "return value should be true");
@@ -2220,7 +2243,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c b/test
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,54 @@
 +#include "jsonrpc.c"
 +
 +#include "test_jsonrpc_utils.h"
@@ -2240,7 +2263,9 @@ new file mode 100644
 +    );
 +
 +    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
-+    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++    bool ok = lgtd_jsonrpc_check_and_extract_request(
++        &req, tokens, parsed, json
++    );
 +
 +    if (!ok) {
 +        errx(1, "return value should be true");
@@ -2277,7 +2302,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,49 @@
 +#include "jsonrpc.c"
 +
 +#include "test_jsonrpc_utils.h"
@@ -2296,7 +2321,9 @@ new file mode 100644
 +    );
 +
 +    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
-+    bool ok = lgtd_jsonrpc_extract_request(&req, tokens, parsed, json);
++    bool ok = lgtd_jsonrpc_check_and_extract_request(
++        &req, tokens, parsed, json
++    );
 +
 +    if (!ok) {
 +        errx(1, "return value should be true");
