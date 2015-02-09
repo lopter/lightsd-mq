@@ -58,7 +58,7 @@ new file mode 100644
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
-@@ -12,8 +12,13 @@
+@@ -12,8 +12,14 @@
  
  ADD_EXECUTABLE(
      lightsd
@@ -68,6 +68,7 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 +    listen.c
      lightsd.c
      log.c
++    proto.c
 +    router.c
      ${TIME_MONOTONIC_IMPL}
  )
@@ -753,7 +754,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,348 @@
+@@ -0,0 +1,419 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -799,6 +800,7 @@ new file mode 100644
 +#include "jsmn.h"
 +#include "client.h"
 +#include "jsonrpc.h"
++#include "proto.h"
 +#include "lightsd.h"
 +
 +static bool
@@ -846,8 +848,8 @@ new file mode 100644
 +}
 +
 +static bool
-+lgtd_jsonrpc_type_string_number_string_or_null(const jsmntok_t *t,
-+                                               const char *json)
++lgtd_jsonrpc_type_string_number_or_null(const jsmntok_t *t,
++                                        const char *json)
 +{
 +    return lgtd_jsonrpc_type_number(t, json)
 +        || lgtd_jsonrpc_type_null(t, json)
@@ -948,18 +950,50 @@ new file mode 100644
 +    return true;
 +}
 +
++static void
++lgtd_jsonrpc_write_id(struct lgtd_client *client,
++                      const struct lgtd_jsonrpc_request *request,
++                      const char *json)
++{
++    int start, stop;
++    if (request->id->type == JSMN_STRING) { // get the quotes
++        start = request->id->start - 1;
++        stop = request->id->end + 1;
++    } else {
++        start = request->id->start;
++        stop = request->id->end;
++    }
++    bufferevent_write(client->io, &json[start], stop - start);
++}
++
 +void
 +lgtd_jsonrpc_send_error(struct lgtd_client *client,
++                        const struct lgtd_jsonrpc_request *request,
++                        const char *json,
 +                        enum lgtd_jsonrpc_error_code code,
 +                        const char *message)
 +{
++    LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
++    lgtd_jsonrpc_write_id(client, request, json);
++    LGTD_CLIENT_WRITE_STRING(client, ", \"error\": {\"code\": ");
 +    char str_code[8] = { 0 };
-+
 +    snprintf(str_code, sizeof(str_code), "%d", code);
-+    LGTD_CLIENT_WRITE_STRING(client, "{\"code\": ");
 +    LGTD_CLIENT_WRITE_STRING(client, str_code);
 +    LGTD_CLIENT_WRITE_STRING(client, ", \"message\": \"");
 +    LGTD_CLIENT_WRITE_STRING(client, message);
++    LGTD_CLIENT_WRITE_STRING(client, "\"}");
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client,
++                           const struct lgtd_jsonrpc_request *request,
++                           const char *json,
++                           const char *result)
++{
++    LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
++    lgtd_jsonrpc_write_id(client, request, json);
++    LGTD_CLIENT_WRITE_STRING(client, ", \"result\": \"");
++    LGTD_CLIENT_WRITE_STRING(client, result);
 +    LGTD_CLIENT_WRITE_STRING(client, "\"}");
 +}
 +
@@ -967,7 +1001,7 @@ new file mode 100644
 +lgtd_jsonrpc_check_and_extract_request(struct lgtd_jsonrpc_request *request,
 +                                       const jsmntok_t *tokens,
 +                                       int ntokens,
-+                                       const char * json)
++                                       const char *json)
 +{
 +    static const struct lgtd_jsonrpc_node request_schema[] = {
 +        LGTD_JSONRPC_NODE(
@@ -988,7 +1022,7 @@ new file mode 100644
 +        LGTD_JSONRPC_NODE(
 +            "id",
 +            offsetof(struct lgtd_jsonrpc_request, id),
-+            lgtd_jsonrpc_type_string_number_string_or_null,
++            lgtd_jsonrpc_type_string_number_or_null,
 +            true
 +        )
 +    };
@@ -1005,20 +1039,20 @@ new file mode 100644
 +}
 +
 +static void
-+lgtd_jsonrpc_check_and_call_set_light(struct lgtd_client *client,
-+                                      const struct lgtd_jsonrpc_request *request,
-+                                      const char *json)
++lgtd_jsonrpc_check_and_call_power_on(struct lgtd_client *client,
++                                     const struct lgtd_jsonrpc_request *request,
++                                     const char *json)
 +{
-+    struct lgtd_jsonrpc_set_light_args {
-+        const jsmntok_t *on;
++    struct lgtd_jsonrpc_power_on_args {
++        const jsmntok_t *target;
 +    } params = { 0 };
 +    static const struct lgtd_jsonrpc_node schema[] = {
 +        LGTD_JSONRPC_NODE(
-+            "on",
-+            offsetof(struct lgtd_jsonrpc_set_light_args, on),
-+            lgtd_jsonrpc_type_bool,
++            "target",
++            offsetof(struct lgtd_jsonrpc_power_on_args, target),
++            lgtd_jsonrpc_type_string,
 +            false
-+        ),
++        )
 +    };
 +
 +    bool ok = lgtd_jsonrpc_extract_values_from_schema_and_dict(
@@ -1032,12 +1066,40 @@ new file mode 100644
 +    );
 +    if (!ok) {
 +        lgtd_jsonrpc_send_error(
-+            client, LGTD_JSONRPC_INVALID_PARAMS, "Invalid parameters"
++            client,
++            request,
++            json,
++            LGTD_JSONRPC_INVALID_PARAMS,
++            "Invalid parameters"
 +        );
 +        return;
 +    }
 +
-+    // Parse each value and call actual code
++    char *target = strndup(
++        &json[params.target->start], LGTD_JSONRPC_TOKEN_LEN(params.target)
++    );
++    if (!target) {
++        lgtd_jsonrpc_send_error(
++            client,
++            request,
++            json,
++            LGTD_JSONRPC_INTERNAL_ERROR,
++            "Shit's on fire, yo"
++        );
++        return;
++    }
++
++    ok = lgtd_proto_power_on(target);
++    free(target);
++    if (!ok) {
++        lgtd_jsonrpc_send_error(
++            client,
++            request,
++            json,
++            LGTD_JSONRPC_INVALID_PARAMS,
++            "Invalid or unsupported target"
++        );
++    }
 +}
 +
 +void
@@ -1047,7 +1109,7 @@ new file mode 100644
 +{
 +    static const struct lgtd_jsonrpc_method methods[] = {
 +        LGTD_JSONRPC_METHOD(
-+            "set_light", 1, lgtd_jsonrpc_check_and_call_set_light
++            "power_on", 1, lgtd_jsonrpc_check_and_call_power_on
 +        ),
 +    };
 +
@@ -1067,7 +1129,11 @@ new file mode 100644
 +    );
 +    if (!ok) {
 +        lgtd_jsonrpc_send_error(
-+            client, LGTD_JSONRPC_INVALID_REQUEST, "Invalid request"
++            client,
++            &request,
++            json,
++            LGTD_JSONRPC_INVALID_REQUEST,
++            "Invalid request"
 +        );
 +        return;
 +    }
@@ -1088,6 +1154,8 @@ new file mode 100644
 +            if (params_count != methods[i].params_count) {
 +                lgtd_jsonrpc_send_error(
 +                    client,
++                    &request,
++                    json,
 +                    LGTD_JSONRPC_INVALID_PARAMS,
 +                    "Invalid number of parameters"
 +                );
@@ -1099,14 +1167,18 @@ new file mode 100644
 +    }
 +
 +    lgtd_jsonrpc_send_error(
-+        client, LGTD_JSONRPC_METHOD_NOT_FOUND, "Method not found"
++        client,
++        &request,
++        json,
++        LGTD_JSONRPC_METHOD_NOT_FOUND,
++        "Method not found"
 +    );
 +}
 diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.h
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,95 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1197,7 +1269,11 @@ new file mode 100644
 +
 +void lgtd_jsonrpc_dispatch_request(struct lgtd_client *, const char *, int);
 +
-+void lgtd_jsonrpc_send_error(struct lgtd_client *, enum lgtd_jsonrpc_error_code, const char *);
++void lgtd_jsonrpc_send_error(struct lgtd_client *,
++                             const struct lgtd_jsonrpc_request *,
++                             const char *,
++                             enum lgtd_jsonrpc_error_code,
++                             const char *);
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -1522,11 +1598,104 @@ diff --git a/core/log.c b/core/log.c
  }
  
  const char *
+diff --git a/core/proto.c b/core/proto.c
+new file mode 100644
+--- /dev/null
++++ b/core/proto.c
+@@ -0,0 +1,50 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <arpa/inet.h>
++#include <assert.h>
++#include <err.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <string.h>
++
++#include "lifx/wire_proto.h"
++#include "router.h"
++#include "lightsd.h"
++
++bool
++lgtd_proto_power_on(const char *target)
++{
++    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
++    return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
++}
+diff --git a/core/proto.h b/core/proto.h
+new file mode 100644
+--- /dev/null
++++ b/core/proto.h
+@@ -0,0 +1,33 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++// All rights reserved.
++//
++// Redistribution and use in source and binary forms, with or without
++// modification, are permitted provided that the following conditions are met:
++//
++// 1. Redistributions of source code must retain the above copyright notice,
++//    this list of conditions and the following disclaimer.
++//
++// 2. Redistributions in binary form must reproduce the above copyright notice,
++//    this list of conditions and the following disclaimer in the documentation
++//    and/or other materials provided with the distribution.
++//
++// 3. Neither the name of the copyright holder nor the names of its contributors
++//    may be used to endorse or promote products derived from this software
++//    without specific prior written permission.
++//
++// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++// POSSIBILITY OF SUCH DAMAGE.
++
++#pragma once
++
++bool lgtd_proto_power_on(const char *);
++bool lgtd_proto_power_off(const char *);
 diff --git a/core/router.c b/core/router.c
 new file mode 100644
 --- /dev/null
 +++ b/core/router.c
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,79 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1576,9 +1745,7 @@ new file mode 100644
 +#include "lightsd.h"
 +
 +static void
-+lgtd_router_broadcast(enum lgtd_lifx_packet_type pkt_type,
-+                      void *pkt,
-+                      size_t pkt_size)
++lgtd_router_broadcast(enum lgtd_lifx_packet_type pkt_type, void *pkt)
 +{
 +    struct lgtd_lifx_packet_header hdr;
 +    union lgtd_lifx_target target = { .tags = 0 };
@@ -1590,24 +1757,19 @@ new file mode 100644
 +            &hdr, LGTD_LIFX_TARGET_ALL_DEVICES, target, gw->site, pkt_type
 +        );
 +        assert(pkt_infos);
-+        lgtd_lifx_gateway_send_packet(gw, &hdr, pkt, pkt_size);
++        lgtd_lifx_gateway_send_packet(gw, &hdr, pkt, pkt_infos->size);
 +    }
 +}
 +
 +bool
 +lgtd_router_send(const char *target,
 +                 enum lgtd_lifx_packet_type pkt_type,
-+                 void *pkt,
-+                 size_t pkt_size)
++                 void *pkt)
 +{
 +    assert(target);
-+    assert(pkt_size >= 0);
-+    if (pkt_size) {
-+        assert(pkt);
-+    }
 +
 +    if (!strcmp(target, "*")) {
-+        lgtd_router_broadcast(pkt_type, pkt, pkt_size);
++        lgtd_router_broadcast(pkt_type, pkt);
 +        return true;
 +    }
 +
@@ -1649,7 +1811,7 @@ new file mode 100644
 +
 +#pragma once
 +
-+bool lgtd_router_send(const char *, enum lgtd_lifx_packet_type, void *, size_t);
++bool lgtd_router_send(const char *, enum lgtd_lifx_packet_type, void *);
 diff --git a/docs/conf.py b/docs/conf.py
 new file mode 100644
 --- /dev/null
@@ -1939,7 +2101,7 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 new file mode 100644
 --- /dev/null
 +++ b/docs/protocol.rst
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,55 @@
 +The lights daemon protocol
 +==========================
 +
@@ -1968,9 +2130,20 @@ new file mode 100644
 +
 +   Foo.
 +
-+.. function:: set_light(on)
++.. function:: set_light_from_hsbk(target, h, s, b, k)
 +
-+   :param bool on: turn the light on when true or off when false.
++   :param float h: Hue from 0. to 360.
++   :param float s: Saturation from 0. to 1.
++   :param float b: Brightness from 0. to 1.
++   :param int k: Temperature (in Kelvin) from 2500 to 9000.
++
++.. function:: power_on(target)
++
++   Power on the designated bulb(s).
++
++.. function:: power_off(target)
++
++   Power off the designated bulb(s).
 +
 +.. function:: idle()
 +
@@ -2008,11 +2181,11 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
                 const struct lgtd_lifx_packet_header *,  \
                 const void *))(x))
 -#define REQUEST_ONLY                                    \
--    .decode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
 +#define NO_PAYLOAD                                          \
-+    .decode = lgtd_lifx_wire_null_packet_encoder_decoder
++    .encode = lgtd_lifx_wire_null_packet_encoder_decoder
 +#define REQUEST_ONLY                                        \
-     .encode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
+     .decode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
+-    .encode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
      .handle = lgtd_lifx_wire_null_packet_handler
  
      static struct lgtd_lifx_packet_infos packet_table[] = {
@@ -2030,6 +2203,20 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
              .name = "GET_LIGHT_STATUS",
              .type = LGTD_LIFX_GET_LIGHT_STATE
          },
+@@ -117,6 +120,13 @@
+             .handle = HANDLER(lgtd_lifx_gateway_handle_light_status)
+         },
+         {
++            REQUEST_ONLY,
++            NO_PAYLOAD, // well it has a payload, but it's just 0 or 1...
++            .size = sizeof(struct lgtd_lifx_packet_power_state),
++            .name = "SET_POWER_STATE",
++            .type = LGTD_LIFX_SET_POWER_STATE,
++        },
++        {
+             .name = "POWER_STATE",
+             .type = LGTD_LIFX_POWER_STATE,
+             .size = sizeof(struct lgtd_lifx_packet_power_state),
 diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 --- a/lifx/wire_proto.h
 +++ b/lifx/wire_proto.h
@@ -2442,8 +2629,8 @@ new file mode 100755
 +def main():
 +    # Example echo method
 +    payload = {
-+        "method": "echo",
-+        "params": ["echome!"],
++        "method": "power_on",
++        "params": {"target": "*"},
 +        "jsonrpc": "2.0",
 +        "id": 0,
 +    }
