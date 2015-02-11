@@ -1,5 +1,6 @@
 # HG changeset patch
 # Parent 4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
+# Parent  4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
 Add a TCP/JSON-RPC API
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -754,7 +755,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,421 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -814,7 +815,7 @@ new file mode 100644
 +    return c == '-' || (c >= '0' && c <= '9');
 +}
 +
-+static bool
++static bool __attribute__((unused))
 +lgtd_jsonrpc_type_bool(const jsmntok_t *t, const char *json)
 +{
 +    if (t->type != JSMN_PRIMITIVE) {
@@ -889,6 +890,7 @@ new file mode 100644
 +    }
 +
 +    for (int ti = 1; ti < ntokens;) {
++        lgtd_debug("Looking at token ti=%d", ti);
 +        if (tokens[ti].type != JSMN_STRING) {
 +            return false;
 +        }
@@ -934,6 +936,7 @@ new file mode 100644
 +        } else {
 +            ti++;
 +        }
++        lgtd_debug("Looking at token ti=%d", ti);
 +    }
 +
 +    for (int si = 0; si != LGTD_ARRAY_SIZE(schema); si++) {
@@ -981,7 +984,7 @@ new file mode 100644
 +    LGTD_CLIENT_WRITE_STRING(client, str_code);
 +    LGTD_CLIENT_WRITE_STRING(client, ", \"message\": \"");
 +    LGTD_CLIENT_WRITE_STRING(client, message);
-+    LGTD_CLIENT_WRITE_STRING(client, "\"}");
++    LGTD_CLIENT_WRITE_STRING(client, "\"}}");
 +}
 +
 +void
@@ -2543,7 +2546,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_send_error.c b/tests/core/jsonrpc/t
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_send_error.c
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,32 @@
 +#include "jsonrpc.c"
 +
 +#include "test_jsonrpc_utils.h"
@@ -2552,21 +2555,35 @@ new file mode 100644
 +main(void)
 +{
 +    struct lgtd_client client = { .io = NULL };
++    jsmntok_t token = { .start = 1, .end = 3, .type = JSMN_STRING };
++    struct lgtd_jsonrpc_request req = { .id = &token };
 +
 +    lgtd_jsonrpc_send_error(
-+        &client, LGTD_JSONRPC_INVALID_REQUEST, "Invalid Request"
++        &client, &req, "\"42\"",LGTD_JSONRPC_INVALID_REQUEST, "Invalid Request"
 +    );
 +
-+    const char *expected =
-+        "{\"code\": -32600, \"message\": \"Invalid Request\"}";
++    const char *expected = (
++        "{"
++        "\"jsonrpc\": \"2.0\", "
++        "\"id\": \"42\", "
++        "\"error\": {\"code\": -32600, \"message\": \"Invalid Request\"}"
++        "}"
++    );
 +
-+    return memcmp(client_write_buf, expected, strlen(expected));
++    int diff = memcmp(client_write_buf, expected, strlen(expected));
++    if (diff) {
++        printf("expected: %s\n", expected);
++        printf("received: %s\n", client_write_buf);
++        return 1;
++    }
++
++    return 0;
 +}
 diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,33 @@
 +#pragma once
 +
 +#define TEST_REQUEST_INITIALIZER { (void *)-1, (void *)-1, (void *)-1 }
@@ -2592,6 +2609,14 @@ new file mode 100644
 +    return 0;
 +}
 +
++bool
++lgtd_proto_power_on(const char *target)
++{
++    if (!target) {
++        errx(1, "missing target");
++    }
++    return true;
++}
 diff --git a/tests/core/utils.c b/tests/core/utils.c
 new file mode 100644
 --- /dev/null
