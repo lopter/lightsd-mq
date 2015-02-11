@@ -755,7 +755,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,421 @@
+@@ -0,0 +1,420 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -890,7 +890,6 @@ new file mode 100644
 +    }
 +
 +    for (int ti = 1; ti < ntokens;) {
-+        lgtd_debug("Looking at token ti=%d", ti);
 +        if (tokens[ti].type != JSMN_STRING) {
 +            return false;
 +        }
@@ -936,7 +935,6 @@ new file mode 100644
 +        } else {
 +            ti++;
 +        }
-+        lgtd_debug("Looking at token ti=%d", ti);
 +    }
 +
 +    for (int si = 0; si != LGTD_ARRAY_SIZE(schema); si++) {
@@ -1063,8 +1061,9 @@ new file mode 100644
 +        schema,
 +        LGTD_ARRAY_SIZE(schema),
 +        request->params,
-+        // XXX will be wrong if we have sub-dicts or sub-arrays:
-+        request->params->size,
++        // XXX will be wrong if we have sub-dicts or sub-arrays.
++        // NOTE: + 1 to account for the params object itself (i.e: the braces):
++        request->params->size + 1,
 +        json
 +    );
 +    if (!ok) {
@@ -1698,7 +1697,7 @@ diff --git a/core/router.c b/core/router.c
 new file mode 100644
 --- /dev/null
 +++ b/core/router.c
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,83 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1753,14 +1752,18 @@ new file mode 100644
 +    struct lgtd_lifx_packet_header hdr;
 +    union lgtd_lifx_target target = { .tags = 0 };
 +
++    const struct lgtd_lifx_packet_infos *pkt_infos = NULL;
 +    struct lgtd_lifx_gateway *gw;
 +    LIST_FOREACH(gw, &lgtd_lifx_gateways, link) {
-+        const struct lgtd_lifx_packet_infos *pkt_infos;
 +        pkt_infos = lgtd_lifx_wire_setup_header(
 +            &hdr, LGTD_LIFX_TARGET_ALL_DEVICES, target, gw->site, pkt_type
 +        );
 +        assert(pkt_infos);
 +        lgtd_lifx_gateway_send_packet(gw, &hdr, pkt, pkt_infos->size);
++    }
++
++    if (pkt_infos) {
++        lgtd_debug("broadcasting %s", pkt_infos->name);
 +    }
 +}
 +
