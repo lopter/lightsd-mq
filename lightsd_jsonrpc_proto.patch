@@ -59,8 +59,12 @@ new file mode 100644
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
-@@ -12,8 +12,14 @@
+@@ -10,10 +10,18 @@
  
+ CONFIGURE_FILE(version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
+ 
++ADD_DEFINITIONS("-DJSMN_STRICT=1")
++
  ADD_EXECUTABLE(
      lightsd
 +    client.c
@@ -755,7 +759,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,469 @@
+@@ -0,0 +1,502 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -820,18 +824,51 @@ new file mode 100644
 +}
 +
 +static bool
-+lgtd_jsonrpc_type_float(const jsmntok_t *t, const char *json)
++lgtd_jsonrpc_type_float_between_zero_and_one(const jsmntok_t *t,
++                                             const char *json)
 +{
 +    if (t->type != JSMN_PRIMITIVE) {
 +        return false;
 +    }
 +
 +    int i = t->start;
-+    if (json[i] == '-') {
-+        i++;
-+    }
++    bool dot_seen = false;
++    bool first_digit_is_one = false;
 +    for (; i < t->end; i++) {
++        if (json[i] == '.') {
++            if (dot_seen) {
++                return false;
++            }
++            dot_seen = true;
++        } else if (dot_seen) {
++            if (json[i] < '0' || json[i] > '9') {
++                return false;
++            } if (first_digit_is_one && json[i] != '0') {
++                return false;
++            }
++        } else {
++            if (first_digit_is_one) {
++                return false;
++            } else if (json[i] == '1') {
++                first_digit_is_one = true;
++            } else if (json[i] != '0') {
++                return false;
++            }
++        }
 +    }
++
++    return true;
++}
++
++static bool
++lgtd_jsonrpc_type_number(const jsmntok_t *t, const char *json)
++{
++    if (t->type != JSMN_PRIMITIVE) {
++        return false;
++    }
++
++    char c = json[t->start];
++    return c == '-' || (c >= '0' && c <= '9');
 +}
 +
 +static bool __attribute__((unused))
