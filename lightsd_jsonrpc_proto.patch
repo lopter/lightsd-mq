@@ -759,7 +759,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,502 @@
+@@ -0,0 +1,572 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -824,8 +824,8 @@ new file mode 100644
 +}
 +
 +static bool
-+lgtd_jsonrpc_type_float_between_zero_and_one(const jsmntok_t *t,
-+                                             const char *json)
++lgtd_jsonrpc_type_float_between_0_and_1(const jsmntok_t *t,
++                                        const char *json)
 +{
 +    if (t->type != JSMN_PRIMITIVE) {
 +        return false;
@@ -858,6 +858,35 @@ new file mode 100644
 +    }
 +
 +    return true;
++}
++
++static bool
++lgtd_jsonrpc_type_float_between_0_and_360(const jsmntok_t *t,
++                                          const char *json)
++{
++    if (t->type != JSMN_PRIMITIVE) {
++        return false;
++    }
++
++    char c = json[t->start];
++    if (c != '-' || (c > '9' && c < '0')) {
++        return false;
++    }
++
++    const char *endptr = NULL;
++    errno = 0;
++    long intpart = strtol(&json[t->start], (char **)&endptr, 10);
++    if ((endptr != json + t->end && *endptr != '.')
++        || errno == ERANGE || intpart < 0 || intpart > 360
++        || (intpart == 0 && c == '-')) {
++        return false;
++    }
++    if (endptr == json + t->end) {
++        return true;
++    }
++    long fracpart = strtol(++endptr, (char **)&endptr, 10);
++    return endptr == json + t->end && errno != ERANGE
++        && fracpart >= 0 && (intpart < 360 || fracpart == 0);
 +}
 +
 +static bool
@@ -931,6 +960,27 @@ new file mode 100644
 +        }
 +    }
 +    return ti;
++}
++
++static uint16_t
++lgtd_jsonrpc_float_range_to_uint16(const char *s, int len, int start, int stop)
++{
++    assert(s);
++    assert(len > 0);
++    assert(start < stop);
++
++    int range = stop * 10E5 - start * 10E5;
++    const char *dot = NULL;
++    long fracpart = 0;
++    long intpart = strtol(s, (char **)&dot, 10) * 10E5;
++    if (dot - s != len && *dot == '.') {
++        for (int i = dot - s, multiplier = 10E4;
++             i != len && multiplier != 0;
++             i++, multiplier /= 10) {
++            fracpart += (s[i] - '0') * multiplier;
++        }
++    }
++    return ((intpart + fracpart) * UINT16_MAX) / range;
 +}
 +
 +static bool
@@ -1104,14 +1154,17 @@ new file mode 100644
 +}
 +
 +static void
-+lgtd_jsonrpc_check_and_call_set_brigthness(struct lgtd_client *client,
-+                                           const struct lgtd_jsonrpc_request *request,
-+                                           const char *json)
++lgtd_jsonrpc_check_and_call_set_light_from_hsbk(struct lgtd_client *client,
++                                                const struct lgtd_jsonrpc_request *request,
++                                                const char *json)
 +{
 +    struct lgtd_jsonrpc_set_brightness_args {
 +        const jsmntok_t *target;
-+        const jsmntok_t *value;
-+    } params = { NULL, NULL };
++        const jsmntok_t *h;
++        const jsmntok_t *s;
++        const jsmntok_t *b;
++        const jsmntok_t *k;
++    } params = { NULL, NULL, NULL, NULL, NULL };
 +    static const struct lgtd_jsonrpc_node schema[] = {
 +        LGTD_JSONRPC_NODE(
 +            "target",
@@ -1120,9 +1173,27 @@ new file mode 100644
 +            false
 +        ),
 +        LGTD_JSONRPC_NODE(
-+            "value",
-+            offsetof(struct lgtd_jsonrpc_set_brightness_args, value),
-+            lgtd_jsonrpc_type_string,
++            "h",
++            offsetof(struct lgtd_jsonrpc_set_brightness_args, h),
++            lgtd_jsonrpc_type_float_between_0_and_360,
++            false
++        ),
++        LGTD_JSONRPC_NODE(
++            "s",
++            offsetof(struct lgtd_jsonrpc_set_brightness_args, s),
++            lgtd_jsonrpc_type_float_between_0_and_1,
++            false
++        ),
++        LGTD_JSONRPC_NODE(
++            "b",
++            offsetof(struct lgtd_jsonrpc_set_brightness_args, b),
++            lgtd_jsonrpc_type_float_between_0_and_1,
++            false
++        ),
++        LGTD_JSONRPC_NODE(
++            "k",
++            offsetof(struct lgtd_jsonrpc_set_brightness_args, b),
++            lgtd_jsonrpc_type_integer,
 +            false
 +        ),
 +    };
@@ -1142,7 +1213,6 @@ new file mode 100644
 +        );
 +        return;
 +    }
-+
 +
 +    if (LGTD_JSONRPC_TOKEN_LEN(params.value) > 6) { // 6 with the quotes
 +        goto error_invalid_value;
@@ -1176,8 +1246,7 @@ new file mode 100644
 +        return;
 +    }
 +
-+    ok = lgtd_proto_set_brightness(target, value);
-+
++    ok = lgtd_proto_set_light_from_hsbk(target, h, s, b, k);
 +    free(target);
 +    if (!ok) {
 +        lgtd_jsonrpc_send_error(
@@ -1205,7 +1274,8 @@ new file mode 100644
 +{
 +    static const struct lgtd_jsonrpc_method methods[] = {
 +        LGTD_JSONRPC_METHOD(
-+            "set_brightness", 2, lgtd_jsonrpc_check_and_call_set_brigthness
++            "set_light_from_hsbk", 5, // t, h, s, b, k
++            lgtd_jsonrpc_check_and_call_set_light_from_hsbk
 +        ),
 +    };
 +
@@ -1695,7 +1765,7 @@ diff --git a/core/proto.c b/core/proto.c
 new file mode 100644
 --- /dev/null
 +++ b/core/proto.c
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,68 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1755,13 +1825,11 @@ new file mode 100644
 +}
 +
 +bool
-+lgtd_proto_set_brightness(const char *target, int value)
++lgtd_proto_set_light_from_hsbk(const char *target, int h, int s, int b, int k)
 +{
 +    assert(target);
-+    assert(value >= 0);
-+    assert(value <= 1000);
 +
-+    if (value == 0) {
++    if (b == 0) {
 +        return lgtd_proto_power_off(target);
 +    }
 +    return lgtd_proto_power_on(target);
@@ -1802,7 +1870,7 @@ new file mode 100644
 +
 +#pragma once
 +
-+bool lgtd_proto_set_brightness(const char *, int);
++bool lgtd_proto_set_light_from_hsbk(const char *, int, int, int, int);
 diff --git a/core/router.c b/core/router.c
 new file mode 100644
 --- /dev/null
@@ -2217,25 +2285,27 @@ diff --git a/docs/internal-apis.rst b/docs/internal-apis.rst
 new file mode 100644
 --- /dev/null
 +++ b/docs/internal-apis.rst
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,15 @@
 +lightds internal APIs
 +=====================
 +
 +lgtd_proto_*
 +------------
 +
-+.. function:: lgtd_proto_set_brightness(target, value)
++.. function:: lgtd_proto_set_light_from_hsbk(target, h, s, b, k)
 +
 +   :param string target: targeted bulbs;
-+   :param int value: brightness value from 0 (0%) to 1000 (100%), a value of 0
-+                     turns the target(s) off.
++   :param int h: Hue from 0 (0°) to 65535 (360°);
++   :param int s: Saturation from 0 to 65535;
++   :param int b: Brightness from 0 to 65535;
++   :param int k: Temperature in Kelvin (max 9000K).
 +
 +.. vim: set tw=80 spelllang=en spell:
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 new file mode 100644
 --- /dev/null
 +++ b/docs/protocol.rst
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,47 @@
 +The lights daemon protocol
 +==========================
 +
@@ -2266,24 +2336,10 @@ new file mode 100644
 +
 +.. function:: set_light_from_hsbk(target, h, s, b, k)
 +
-+   :param float h: Hue from 0. to 360.
-+   :param float s: Saturation from 0. to 1.
-+   :param float b: Brightness from 0. to 1.
++   :param float h: Hue from 0 to 360.
++   :param float s: Saturation from 0 to 1.
++   :param float b: Brightness from 0 to 1.
 +   :param int k: Temperature (in Kelvin) from 2500 to 9000.
-+
-+.. function:: set_brightness(target, value)
-+
-+   :param string value: Brightness from 0. to 1.
-+
-+   Set the brightness of the given bulbs from 0.000 to 1.000. The precision is
-+   limited to 10E-3 and any value more accurate than that will be considered
-+   invalid.
-+
-+   A brightness of 0. will turn off the bulbs, otherwise the range is mapped to
-+   what each bulb supports.
-+
-+   .. note:: Just use whatever string formating feature you language has to
-+             format the value.
 +
 +.. function:: idle()
 +
@@ -2958,6 +3014,233 @@ new file mode 100644
 +        printf("expected: %s\n", expected);
 +        printf("received: %s\n", client_write_buf);
 +        return 1;
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
+@@ -0,0 +1,26 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++static void
++test_float(const char *json)
++{
++    jsmntok_t tokens[8];
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    if (lgtd_jsonrpc_type_float_between_0_and_1(tokens, json)) {
++        errx(1, "%s was considered as a valid float >= 0 and <= 1", json);
++    }
++}
++
++int
++main(void)
++{
++    test_float("1.1234");
++    test_float("-0.1234");
++    test_float("1.00000001");
++    test_float("2.0000");
++    test_float("10");
++    test_float("0.0.1");
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
+@@ -0,0 +1,25 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++static void
++test_float(const char *json)
++{
++    jsmntok_t tokens[8];
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    if (!lgtd_jsonrpc_type_float_between_0_and_1(tokens, json)) {
++        errx(1, "%s wasn't considered as a valid float >= 0 and <= 1", json);
++    }
++}
++
++int
++main(void)
++{
++    test_float("0.1234");
++    test_float("1.0000000");
++    test_float("0.9999");
++    test_float("0.01");
++    test_float("000.01");
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
+@@ -0,0 +1,27 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++static void
++test_float(const char *json)
++{
++    jsmntok_t tokens[8];
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    if (lgtd_jsonrpc_type_float_between_0_and_360(tokens, json)) {
++        errx(1, "%s was considered as a valid float >= 0 and <= 360", json);
++    }
++}
++
++int
++main(void)
++{
++    test_float("-1.1234");
++    test_float("-0.1234");
++    test_float("0.1.234");
++    test_float("0.1a234");
++    test_float("360a");
++    test_float("360.1");
++    test_float(" 213");
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
+@@ -0,0 +1,29 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++static void
++test_float(const char *json)
++{
++    jsmntok_t tokens[8];
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    if (!lgtd_jsonrpc_type_float_between_0_and_360(tokens, json)) {
++        errx(1, "%s wasn't considered as a valid float >= 0 and <= 360", json);
++    }
++}
++
++int
++main(void)
++{
++    test_float("1.1234");
++    test_float("1.00000001");
++    test_float("2.0000");
++    test_float("10");
++    test_float("0.1");
++    test_float("0");
++    test_float("231.");
++    test_float("359.1");
++    test_float("360");
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer.c b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
+@@ -0,0 +1,20 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    const char *json = "1234";
++    jsmntok_t tokens[8];
++
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
++
++    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++
++    if (!ok) {
++        errx(1, "%s wasn't considered as a valid integer", json);
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
+@@ -0,0 +1,20 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    const char *json = "-1a";
++    jsmntok_t tokens[8];
++
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
++
++    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++
++    if (ok) {
++        errx(1, "%s wasn't considered invalid", json);
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
+@@ -0,0 +1,20 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    const char *json = "9999999999";
++    jsmntok_t tokens[8];
++
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
++
++    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++
++    if (ok) {
++        errx(1, "%s wasn't considered invalid", json);
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
+@@ -0,0 +1,20 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    const char *json = "-9999999999";
++    jsmntok_t tokens[8];
++
++    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
++
++    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++
++    if (ok) {
++        errx(1, "%s wasn't considered invalid", json);
 +    }
 +
 +    return 0;
