@@ -759,7 +759,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,572 @@
+@@ -0,0 +1,653 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -869,7 +869,7 @@ new file mode 100644
 +    }
 +
 +    char c = json[t->start];
-+    if (c != '-' || (c > '9' && c < '0')) {
++    if (c != '-' && (c > '9' || c < '0')) {
 +        return false;
 +    }
 +
@@ -962,7 +962,7 @@ new file mode 100644
 +    return ti;
 +}
 +
-+static uint16_t
++static int
 +lgtd_jsonrpc_float_range_to_uint16(const char *s, int len, int start, int stop)
 +{
 +    assert(s);
@@ -974,7 +974,7 @@ new file mode 100644
 +    long fracpart = 0;
 +    long intpart = strtol(s, (char **)&dot, 10) * 10E5;
 +    if (dot - s != len && *dot == '.') {
-+        for (int i = dot - s, multiplier = 10E4;
++        for (int i = dot - s + 1, multiplier = 10E4;
 +             i != len && multiplier != 0;
 +             i++, multiplier /= 10) {
 +            fracpart += (s[i] - '0') * multiplier;
@@ -996,26 +996,26 @@ new file mode 100644
 +    }
 +
 +    for (int ti = 1; ti < ntokens;) {
++        // make sure it's a key:
 +        if (tokens[ti].type != JSMN_STRING) {
 +            return false;
 +        }
 +
 +        for (int si = 0; si != schema_size; si++) {
-+            if (tokens[ti].type != JSMN_STRING) { // make sure it's a key?
-+                return false;
-+            }
 +            int tokenlen = LGTD_JSONRPC_TOKEN_LEN(&tokens[ti]);
++            if (schema[si].keylen != tokenlen) {
++                continue;
++            }
 +            int diff = memcmp(
-+                schema[si].key,
-+                &json[tokens[ti].start],
-+                LGTD_MIN(schema[si].keylen, tokenlen)
++                schema[si].key, &json[tokens[ti].start], tokenlen
 +            );
 +            if (!diff) {
-+                if (schema[si].keylen != tokenlen) {
-+                    return false;
-+                }
 +                ti++; // keys looks good, move to the value
 +                if (!schema[si].type_cmp(&tokens[ti], json)) {
++                    lgtd_debug(
++                        "jsonrpc client sent an invalid value for %s",
++                        schema[si].key
++                    );
 +                    return false;
 +                }
 +                if (schema[si].value_offset != -1) {
@@ -1023,6 +1023,10 @@ new file mode 100644
 +                        output, schema[si].value_offset
 +                    );
 +                    if (seen) { // duplicate key
++                        lgtd_debug(
++                            "jsonrpc client sent duplicate parameter %s",
++                            schema[si].key
++                        );
 +                        return false;
 +                    }
 +                    LGTD_JSONRPC_SET_JSMNTOK(
@@ -1049,8 +1053,10 @@ new file mode 100644
 +                output, schema[si].value_offset
 +            );
 +            if (!seen) {
++                lgtd_debug("missing jsonrpc parameter %s", schema[si].key);
 +                return false;
 +            }
++            lgtd_debug("got jsonrpc parameter %s", schema[si].key);
 +        }
 +    }
 +
@@ -1153,6 +1159,24 @@ new file mode 100644
 +    return false;
 +}
 +
++static char *
++lgtd_jsonrpc_dup_target(struct lgtd_client *client,
++                        const struct lgtd_jsonrpc_request *request,
++                        const char *json,
++                        const jsmntok_t *t)
++{
++    char *target = strndup(
++        &json[t->start], LGTD_JSONRPC_TOKEN_LEN(t)
++    );
++    if (!target) {
++        lgtd_jsonrpc_send_error(
++            client, request, json, LGTD_JSONRPC_INTERNAL_ERROR,
++            "Shit's on fire, yo"
++        );
++    }
++    return target;
++}
++
 +static void
 +lgtd_jsonrpc_check_and_call_set_light_from_hsbk(struct lgtd_client *client,
 +                                                const struct lgtd_jsonrpc_request *request,
@@ -1173,26 +1197,26 @@ new file mode 100644
 +            false
 +        ),
 +        LGTD_JSONRPC_NODE(
-+            "h",
++            "hue",
 +            offsetof(struct lgtd_jsonrpc_set_brightness_args, h),
 +            lgtd_jsonrpc_type_float_between_0_and_360,
 +            false
 +        ),
 +        LGTD_JSONRPC_NODE(
-+            "s",
++            "saturation",
 +            offsetof(struct lgtd_jsonrpc_set_brightness_args, s),
 +            lgtd_jsonrpc_type_float_between_0_and_1,
 +            false
 +        ),
 +        LGTD_JSONRPC_NODE(
-+            "b",
++            "brightness",
 +            offsetof(struct lgtd_jsonrpc_set_brightness_args, b),
 +            lgtd_jsonrpc_type_float_between_0_and_1,
 +            false
 +        ),
 +        LGTD_JSONRPC_NODE(
-+            "k",
-+            offsetof(struct lgtd_jsonrpc_set_brightness_args, b),
++            "kelvin",
++            offsetof(struct lgtd_jsonrpc_set_brightness_args, k),
 +            lgtd_jsonrpc_type_integer,
 +            false
 +        ),
@@ -1207,63 +1231,112 @@ new file mode 100644
 +        json
 +    );
 +    if (!ok) {
++        goto error_invalid_params;
++    }
++
++    int h = lgtd_jsonrpc_float_range_to_uint16(
++        &json[params.h->start], LGTD_JSONRPC_TOKEN_LEN(params.h), 0, 360
++    );
++    int s = lgtd_jsonrpc_float_range_to_uint16(
++        &json[params.s->start], LGTD_JSONRPC_TOKEN_LEN(params.s), 0, 1
++    );
++    int b = lgtd_jsonrpc_float_range_to_uint16(
++        &json[params.b->start], LGTD_JSONRPC_TOKEN_LEN(params.b), 0, 1
++    );
++    errno = 0;
++    int k = strtol(&json[params.k->start], NULL, 10);
++    if (k < 2500 || k > 9000 || errno == ERANGE) {
++        goto error_invalid_params;
++    }
++
++    char *t = lgtd_jsonrpc_dup_target(client, request, json, params.target);
++    if (!t) {
++        return;
++    }
++
++    ok = lgtd_proto_set_light_from_hsbk(t, h, s, b, k, 0);
++    free(t);
++    if (ok) {
++        lgtd_jsonrpc_send_response(client, request, json, "true");
++        return;
++    }
++
++error_invalid_params:
++    lgtd_jsonrpc_send_error(
++        client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
++        "Invalid parameters"
++    );
++}
++
++static char *
++lgtd_jsonrpc_extract_target_only(struct lgtd_client *client,
++                                 const struct lgtd_jsonrpc_request *request,
++                                 const char *json)
++{
++    const jsmntok_t *target;
++    static const struct lgtd_jsonrpc_node schema[] = {
++        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string, false)
++    };
++
++    bool ok = lgtd_jsonrpc_extract_values_from_schema_and_dict(
++        &target, schema, 1, request->params, request->params_ntokens, json
++    );
++    if (!ok) {
 +        lgtd_jsonrpc_send_error(
 +            client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
 +            "Invalid parameters"
 +        );
-+        return;
++        return NULL;
 +    }
 +
-+    if (LGTD_JSONRPC_TOKEN_LEN(params.value) > 6) { // 6 with the quotes
-+        goto error_invalid_value;
-+    }
++    return lgtd_jsonrpc_dup_target(client, request, json, target);
++}
 +
-+    int value = 0;
-+    int multiplier = 1;
-+    for (int i = params.value->end - 1; i != params.value->start + 1; i--) {
-+        if (json[i] == '.') {
-+            continue;
-+        }
-+        if (!isdigit(json[i])) {
-+            goto error_invalid_value;
-+        }
-+        value += (json[i] - '0') * multiplier;
-+        multiplier *= 10;
-+    }
++static void
++lgtd_jsonrpc_check_and_call_power_on(struct lgtd_client *client,
++                                     const struct lgtd_jsonrpc_request *request,
++                                     const char *json)
++{
 +
-+    if (value > 1000) {
-+        goto error_invalid_value;
-+    }
-+
-+    char *target = strndup(
-+        &json[params.target->start], LGTD_JSONRPC_TOKEN_LEN(params.target)
-+    );
++    char *target = lgtd_jsonrpc_extract_target_only(client, request, json);
 +    if (!target) {
-+        lgtd_jsonrpc_send_error(
-+            client, request, json, LGTD_JSONRPC_INTERNAL_ERROR,
-+            "Shit's on fire, yo"
-+        );
 +        return;
 +    }
 +
-+    ok = lgtd_proto_set_light_from_hsbk(target, h, s, b, k);
++    bool ok = lgtd_proto_power_on(target);
 +    free(target);
-+    if (!ok) {
-+        lgtd_jsonrpc_send_error(
-+            client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
-+            "Invalid or unsupported target"
-+        );
++    if (ok) {
++        lgtd_jsonrpc_send_response(client, request, json, "true");
 +        return;
 +    }
 +
-+    lgtd_jsonrpc_send_response(client, request, json, "true");
-+
-+    return;
-+
-+error_invalid_value:
 +    lgtd_jsonrpc_send_error(
 +        client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
-+        "The brightness value must be between 0.000 and 1.000"
++        "Invalid parameters"
++    );
++}
++
++static void
++lgtd_jsonrpc_check_and_call_power_off(struct lgtd_client *client,
++                                      const struct lgtd_jsonrpc_request *request,
++                                      const char *json)
++{
++
++    char *target = lgtd_jsonrpc_extract_target_only(client, request, json);
++    if (!target) {
++        return;
++    }
++
++    bool ok = lgtd_proto_power_off(target);
++    free(target);
++    if (ok) {
++        lgtd_jsonrpc_send_response(client, request, json, "true");
++        return;
++    }
++
++    lgtd_jsonrpc_send_error(
++        client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
++        "Invalid parameters"
 +    );
 +}
 +
@@ -1273,6 +1346,14 @@ new file mode 100644
 +                              int parsed)
 +{
 +    static const struct lgtd_jsonrpc_method methods[] = {
++        LGTD_JSONRPC_METHOD(
++            "power_on", 1, // t
++            lgtd_jsonrpc_check_and_call_power_on
++        ),
++        LGTD_JSONRPC_METHOD(
++            "power_off", 1, // t
++            lgtd_jsonrpc_check_and_call_power_off
++        ),
 +        LGTD_JSONRPC_METHOD(
 +            "set_light_from_hsbk", 5, // t, h, s, b, k
 +            lgtd_jsonrpc_check_and_call_set_light_from_hsbk
@@ -1765,7 +1846,7 @@ diff --git a/core/proto.c b/core/proto.c
 new file mode 100644
 --- /dev/null
 +++ b/core/proto.c
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,88 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1810,35 +1891,55 @@ new file mode 100644
 +#include "router.h"
 +#include "lightsd.h"
 +
-+static bool
++bool
 +lgtd_proto_power_on(const char *target)
 +{
++    assert(target);
++
 +    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
 +    return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
 +}
 +
-+static bool
++bool
 +lgtd_proto_power_off(const char *target)
 +{
++    assert(target);
++
 +    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
 +    return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
 +}
 +
 +bool
-+lgtd_proto_set_light_from_hsbk(const char *target, int h, int s, int b, int k)
++lgtd_proto_set_light_from_hsbk(const char *target,
++                               int hue,
++                               int saturation,
++                               int brightness,
++                               int kelvin,
++                               int transition_msecs)
 +{
 +    assert(target);
++    assert(hue >= 0 && hue <= UINT16_MAX);
++    assert(saturation >= 0 && saturation <= UINT16_MAX);
++    assert(brightness >= 0 && brightness <= UINT16_MAX);
++    assert(kelvin >= 2500 && kelvin <= 9000);
++    assert(transition_msecs >= 0);
 +
-+    if (b == 0) {
-+        return lgtd_proto_power_off(target);
-+    }
-+    return lgtd_proto_power_on(target);
++    struct lgtd_lifx_packet_light_color pkt = {
++        .stream = 0,
++        .hue = hue,
++        .saturation = saturation,
++        .brightness = brightness,
++        .kelvin = kelvin,
++        .transition = transition_msecs
++    };
++    lgtd_lifx_wire_encode_light_color(&pkt);
++    return lgtd_router_send(target, LGTD_LIFX_SET_LIGHT_COLOR, &pkt);
 +}
 diff --git a/core/proto.h b/core/proto.h
 new file mode 100644
 --- /dev/null
 +++ b/core/proto.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,34 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1870,7 +1971,9 @@ new file mode 100644
 +
 +#pragma once
 +
-+bool lgtd_proto_set_light_from_hsbk(const char *, int, int, int, int);
++bool lgtd_proto_set_light_from_hsbk(const char *, int, int, int, int, int);
++bool lgtd_proto_power_on(const char *);
++bool lgtd_proto_power_off(const char *);
 diff --git a/core/router.c b/core/router.c
 new file mode 100644
 --- /dev/null
@@ -2305,7 +2408,7 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 new file mode 100644
 --- /dev/null
 +++ b/docs/protocol.rst
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,55 @@
 +The lights daemon protocol
 +==========================
 +
@@ -2333,6 +2436,14 @@ new file mode 100644
 +.. function:: get_light(target)
 +
 +   Foo.
++
++.. function:: power_off(target)
++
++   Power off the given bulb(s).
++
++.. function:: power_on(target)
++
++   Power on the given bulb(s).
 +
 +.. function:: set_light_from_hsbk(target, h, s, b, k)
 +
@@ -2372,12 +2483,14 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
 +++ b/lifx/wire_proto.c
-@@ -84,14 +84,16 @@
+@@ -84,14 +84,18 @@
      ((void (*)(struct lgtd_lifx_gateway *,              \
                 const struct lgtd_lifx_packet_header *,  \
                 const void *))(x))
 -#define REQUEST_ONLY                                    \
 +#define NO_PAYLOAD                                          \
++    .encode = lgtd_lifx_wire_null_packet_encoder_decoder
++#define RESPONSE_ONLY                                       \
 +    .encode = lgtd_lifx_wire_null_packet_encoder_decoder
 +#define REQUEST_ONLY                                        \
      .decode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
@@ -2391,7 +2504,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
              .name = "GET_PAN_GATEWAY",
              .type = LGTD_LIFX_GET_PAN_GATEWAY
          },
-@@ -105,6 +107,7 @@
+@@ -105,23 +109,38 @@
          },
          {
              REQUEST_ONLY,
@@ -2399,7 +2512,13 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
              .name = "GET_LIGHT_STATUS",
              .type = LGTD_LIFX_GET_LIGHT_STATE
          },
-@@ -117,6 +120,13 @@
+         {
++            RESPONSE_ONLY,
+             .name = "LIGHT_STATUS",
+             .type = LGTD_LIFX_LIGHT_STATUS,
+             .size = sizeof(struct lgtd_lifx_packet_light_status),
+             .decode = DECODER(lgtd_lifx_wire_decode_light_status),
+-            .encode = ENCODER(lgtd_lifx_wire_encode_light_status),
              .handle = HANDLER(lgtd_lifx_gateway_handle_light_status)
          },
          {
@@ -2413,10 +2532,77 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
              .name = "POWER_STATE",
              .type = LGTD_LIFX_POWER_STATE,
              .size = sizeof(struct lgtd_lifx_packet_power_state),
+             .decode = DECODER(lgtd_lifx_wire_decode_power_state),
+             .handle = HANDLER(lgtd_lifx_gateway_handle_power_state)
++        },
++        {
++            REQUEST_ONLY,
++            .name = "SET_LIGHT_COLOR",
++            .type = LGTD_LIFX_SET_LIGHT_COLOR,
++            .size = sizeof(struct lgtd_lifx_packet_light_color),
++            .encode = ENCODER(lgtd_lifx_wire_encode_light_color)
+         }
+     };
+ 
+@@ -247,7 +266,13 @@
+ }
+ 
+ void
+-lgtd_lifx_wire_encode_light_status(struct lgtd_lifx_packet_light_status *pkt)
++lgtd_lifx_wire_decode_power_state(struct lgtd_lifx_packet_power_state *pkt)
++{
++    assert(pkt);
++}
++
++void
++lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *pkt)
+ {
+     assert(pkt);
+ 
+@@ -255,13 +280,5 @@
+     pkt->saturation = htole16(pkt->saturation);
+     pkt->brightness = htole16(pkt->brightness);
+     pkt->kelvin = htole16(pkt->kelvin);
+-    pkt->dim = htole16(pkt->dim);
+-    pkt->power = htole16(pkt->power);
+-    pkt->tags = htole64(pkt->tags);
++    pkt->transition = htole32(pkt->transition);
+ }
+-
+-void
+-lgtd_lifx_wire_decode_power_state(struct lgtd_lifx_packet_power_state *pkt)
+-{
+-    assert(pkt);
+-}
 diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 --- a/lifx/wire_proto.h
 +++ b/lifx/wire_proto.h
-@@ -195,7 +195,7 @@
+@@ -124,7 +124,7 @@
+     LGTD_LIFX_SET_FACTORY_TEST_MODE = 0x27,
+     LGTD_LIFX_DISABLE_FACTORY_TEST_MODE = 0x28,
+     LGTD_LIFX_GET_LIGHT_STATE = 0x65,
+-    LGTD_LIFX_SET_LIGHT_COLOUR = 0x66,
++    LGTD_LIFX_SET_LIGHT_COLOR = 0x66,
+     LGTD_LIFX_SET_WAVEFORM = 0x67,
+     LGTD_LIFX_SET_DIM_ABSOLUTE = 0x68,
+     LGTD_LIFX_SET_DIM_RELATIVE = 0x69,
+@@ -176,6 +176,15 @@
+     LGTD_LIFX_TARGET_ALL_DEVICES
+ };
+ 
++struct lgtd_lifx_packet_light_color {
++    uint8_t     stream; // should be 0
++    uint16le_t  hue;
++    uint16le_t  saturation;
++    uint16le_t  brightness;
++    uint16le_t  kelvin;
++    uint32le_t  transition; // transition time to the color in msecs
++};
++
+ #pragma pack(pop)
+ 
+ struct lgtd_lifx_gateway;
+@@ -195,7 +204,7 @@
  
  static inline int
  lgtd_lifx_packet_infos_cmp(struct lgtd_lifx_packet_infos *a,
@@ -2425,6 +2611,12 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  {
      return a->type - b->type;
  }
+@@ -223,3 +232,5 @@
+ void lgtd_lifx_wire_decode_light_status(struct lgtd_lifx_packet_light_status *);
+ void lgtd_lifx_wire_encode_light_status(struct lgtd_lifx_packet_light_status *);
+ void lgtd_lifx_wire_decode_power_state(struct lgtd_lifx_packet_power_state *);
++
++void lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *);
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 new file mode 100644
 --- /dev/null
@@ -2462,252 +2654,6 @@ new file mode 100644
 +FOREACH(TEST ${TESTS})
 +    ADD_JSONRPC_TEST(${TEST})
 +ENDFOREACH()
-diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_greater_than_one.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_greater_than_one.c
-new file mode 100644
---- /dev/null
-+++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_greater_than_one.c
-@@ -0,0 +1,43 @@
-+#include "jsonrpc.c"
-+
-+#define LGTD_TESTING_SET_BRIGHTNESS
-+#include "test_jsonrpc_utils.h"
-+
-+bool
-+lgtd_proto_set_brightness(const char *target, int value)
-+{
-+    (void)target;
-+    (void)value;
-+    errx(1, "lgtd_proto_set_brightness shouldn't have been called");
-+}
-+
-+int
-+main(void)
-+{
-+    jsmntok_t tokens[32];
-+    const char json[] = ("{"
-+        "\"jsonrpc\": \"2.0\","
-+        "\"method\": \"set_brightness\","
-+        "\"params\": {\"target\": \"*\", \"value\": \"1.123\"},"
-+        "\"id\": \"42\""
-+    "}");
-+    int parsed = parse_json(
-+        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
-+    );
-+
-+    bool ok;
-+    struct lgtd_client client = { .io = NULL };
-+    struct lgtd_jsonrpc_request req;
-+    ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
-+    if (!ok) {
-+        errx(1, "Can't parse request");
-+    }
-+
-+    lgtd_jsonrpc_check_and_call_set_brigthness(&client, &req, json);
-+
-+    if (!strstr(client_write_buf, "value must be between 0.000 and 1.000")) {
-+        errx(1, "An error should have been returned");
-+    }
-+
-+    return 0;
-+}
-diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value.c
-new file mode 100644
---- /dev/null
-+++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value.c
-@@ -0,0 +1,43 @@
-+#include "jsonrpc.c"
-+
-+#define LGTD_TESTING_SET_BRIGHTNESS
-+#include "test_jsonrpc_utils.h"
-+
-+bool
-+lgtd_proto_set_brightness(const char *target, int value)
-+{
-+    (void)target;
-+    (void)value;
-+    errx(1, "lgtd_proto_set_brightness shouldn't have been called");
-+}
-+
-+int
-+main(void)
-+{
-+    jsmntok_t tokens[32];
-+    const char json[] = ("{"
-+        "\"jsonrpc\": \"2.0\","
-+        "\"method\": \"set_brightness\","
-+        "\"params\": {\"target\": \"*\", \"value\": \"0.1a3\"},"
-+        "\"id\": \"42\""
-+    "}");
-+    int parsed = parse_json(
-+        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
-+    );
-+
-+    bool ok;
-+    struct lgtd_client client = { .io = NULL };
-+    struct lgtd_jsonrpc_request req;
-+    ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
-+    if (!ok) {
-+        errx(1, "Can't parse request");
-+    }
-+
-+    lgtd_jsonrpc_check_and_call_set_brigthness(&client, &req, json);
-+
-+    if (!strstr(client_write_buf, "value must be between 0.000 and 1.000")) {
-+        errx(1, "An error should have been returned");
-+    }
-+
-+    return 0;
-+}
-diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value_empty.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value_empty.c
-new file mode 100644
---- /dev/null
-+++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value_empty.c
-@@ -0,0 +1,47 @@
-+#include "jsonrpc.c"
-+
-+#define LGTD_TESTING_SET_BRIGHTNESS
-+#include "test_jsonrpc_utils.h"
-+
-+bool
-+lgtd_proto_set_brightness(const char *target, int value)
-+{
-+    if (strcmp(target, "*")) {
-+        errx(1, "Invalid target [%s] (expected=[*])", target);
-+    }
-+
-+    if (value != 0) {
-+        errx(1, "Invalid value %d (expected=0)", value);
-+    }
-+
-+    return true;
-+}
-+
-+int
-+main(void)
-+{
-+    jsmntok_t tokens[32];
-+    const char json[] = ("{"
-+        "\"jsonrpc\": \"2.0\","
-+        "\"method\": \"set_brightness\","
-+        "\"params\": {\"target\": \"*\", \"value\": \"\"},"
-+        "\"id\": \"42\""
-+    "}");
-+    int parsed = parse_json(
-+        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
-+    );
-+
-+    bool ok;
-+    struct lgtd_client client = { .io = NULL };
-+    struct lgtd_jsonrpc_request req;
-+    ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
-+    if (!ok) {
-+        errx(1, "Can't parse request");
-+    }
-+
-+    lgtd_jsonrpc_check_and_call_set_brigthness(&client, &req, json);
-+
-+    // We just consider it has zero.
-+
-+    return 0;
-+}
-diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value_too_long.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value_too_long.c
-new file mode 100644
---- /dev/null
-+++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_invalid_value_too_long.c
-@@ -0,0 +1,43 @@
-+#include "jsonrpc.c"
-+
-+#define LGTD_TESTING_SET_BRIGHTNESS
-+#include "test_jsonrpc_utils.h"
-+
-+bool
-+lgtd_proto_set_brightness(const char *target, int value)
-+{
-+    (void)target;
-+    (void)value;
-+    errx(1, "lgtd_proto_set_brightness shouldn't have been called");
-+}
-+
-+int
-+main(void)
-+{
-+    jsmntok_t tokens[32];
-+    const char json[] = ("{"
-+        "\"jsonrpc\": \"2.0\","
-+        "\"method\": \"set_brightness\","
-+        "\"params\": {\"target\": \"*\", \"value\": \"   0.123\"},"
-+        "\"id\": \"42\""
-+    "}");
-+    int parsed = parse_json(
-+        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
-+    );
-+
-+    bool ok;
-+    struct lgtd_client client = { .io = NULL };
-+    struct lgtd_jsonrpc_request req;
-+    ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
-+    if (!ok) {
-+        errx(1, "Can't parse request");
-+    }
-+
-+    lgtd_jsonrpc_check_and_call_set_brigthness(&client, &req, json);
-+
-+    if (!strstr(client_write_buf, "value must be between 0.000 and 1.000")) {
-+        errx(1, "An error should have been returned");
-+    }
-+
-+    return 0;
-+}
-diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_valid_value.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_valid_value.c
-new file mode 100644
---- /dev/null
-+++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_brightness_valid_value.c
-@@ -0,0 +1,45 @@
-+#include "jsonrpc.c"
-+
-+#define LGTD_TESTING_SET_BRIGHTNESS
-+#include "test_jsonrpc_utils.h"
-+
-+bool
-+lgtd_proto_set_brightness(const char *target, int value)
-+{
-+    if (strcmp(target, "*")) {
-+        errx(1, "Invalid target [%s] (expected=[*])", target);
-+    }
-+
-+    if (value != 123) {
-+        errx(1, "Invalid value %d (expected=123)", value);
-+    }
-+
-+    return true;
-+}
-+
-+int
-+main(void)
-+{
-+    jsmntok_t tokens[32];
-+    const char json[] = ("{"
-+        "\"jsonrpc\": \"2.0\","
-+        "\"method\": \"set_brightness\","
-+        "\"params\": {\"target\": \"*\", \"value\": \"0.123\"},"
-+        "\"id\": \"42\""
-+    "}");
-+    int parsed = parse_json(
-+        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
-+    );
-+
-+    bool ok;
-+    struct lgtd_client client = { .io = NULL };
-+    struct lgtd_jsonrpc_request req;
-+    ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
-+    if (!ok) {
-+        errx(1, "Can't parse request");
-+    }
-+
-+    lgtd_jsonrpc_check_and_call_set_brigthness(&client, &req, json);
-+
-+    return 0;
-+}
 diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c
 new file mode 100644
 --- /dev/null
@@ -3083,7 +3029,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invali
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,26 @@
 +#include "jsonrpc.c"
 +
 +#include "test_jsonrpc_utils.h"
@@ -3107,7 +3053,6 @@ new file mode 100644
 +    test_float("0.1a234");
 +    test_float("360a");
 +    test_float("360.1");
-+    test_float(" 213");
 +
 +    return 0;
 +}
@@ -3249,7 +3194,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_j
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,73 @@
 +#pragma once
 +
 +#define TEST_REQUEST_INITIALIZER { NULL, NULL, 0, NULL }
@@ -3275,16 +3220,54 @@ new file mode 100644
 +    return 0;
 +}
 +
-+#ifndef LGTD_TESTING_SET_BRIGHTNESS
++#ifndef LGTD_TESTING_SET_LIGHT_FROM_HSBK
 +bool
-+lgtd_proto_set_brightness(const char *target, int value)
++lgtd_proto_set_light_from_hsbk(const char *target,
++                               int hue,
++                               int saturation,
++                               int brightness,
++                               int kelvin,
++                               int transition_msecs)
 +{
-+    if (value < 0 || value > 1000) {
-+        errx(1, "Set brightness received an invalid value");
++    if (!target) {
++        errx(1, "target is missing");
++    }
++    if (hue < 0 || hue > UINT16_MAX) {
++        errx(1, "Invalid hue: %d", hue);
++    }
++    if (saturation < 0 || saturation > UINT16_MAX) {
++        errx(1, "Invalid saturation: %d", saturation);
++    }
++    if (brightness < 0 || brightness > UINT16_MAX) {
++        errx(1, "Invalid brightness: %d", brightness);
++    }
++    if (kelvin < 2500 || kelvin > 9000) {
++        errx(1, "Invalid temperature: %d", kelvin);
++    }
++    if (transition_msecs < 0) {
++        errx(1, "Invalid transition duration: %d", transition_msecs);
 +    }
 +    return true;
 +}
 +#endif
++
++bool
++lgtd_proto_power_on(const char *target)
++{
++    if (!target) {
++        errx(1, "target is missing");
++    }
++    return true;
++}
++
++bool
++lgtd_proto_power_off(const char *target)
++{
++    if (!target) {
++        errx(1, "target is missing");
++    }
++    return true;
++}
 diff --git a/tests/core/utils.c b/tests/core/utils.c
 new file mode 100644
 --- /dev/null
@@ -3312,27 +3295,40 @@ diff --git a/tests/lightsc b/tests/lightsc
 new file mode 100755
 --- /dev/null
 +++ b/tests/lightsc
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,36 @@
 +#!/usr/bin/env python
 +
 +import json
 +import socket
++import time
 +
 +
-+def main():
++def set_light_from_hsbk(socket, h, s, b, k):
 +    # Example echo method
 +    payload = {
-+        "method": "set_brightness",
-+        "params": {"target": "*", "value": "0.000"},
++        "method": "set_light_from_hsbk",
++        "params": {
++            "target": "*",
++            "hue": h,
++            "saturation": s,
++            "brightness": b,
++            "kelvin": k
++        },
 +        "jsonrpc": "2.0",
 +        "id": 0,
 +    }
-+    s = socket.create_connection(("localhost", 1234))
-+    s.send(json.dumps(payload).encode("utf-8"))
-+    response = s.recv(2048)
-+    s.close()
++    socket.send(json.dumps(payload).encode("utf-8"))
++    response = socket.recv(2048)
 +    response = json.loads(response)
 +    print(response)
 +
 +if __name__ == "__main__":
-+    main()
++    s = socket.create_connection(("localhost", 1234))
++    h = 0
++    try:
++        while True:
++            h = (h + 5) % 360
++            set_light_from_hsbk(s, h, 0.7, 0.1, 6000)
++            time.sleep(0.05)
++    finally:
++        s.close()
