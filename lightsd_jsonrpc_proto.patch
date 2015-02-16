@@ -1,6 +1,6 @@
 # HG changeset patch
 # Parent eb2dfc5ee328e8281947b90bfae036ce69cbbb4a
-# Parent  4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
+# Parent  a2373f725f2fdbfc6c7664b9609249dc3ba843b6
 Add a TCP/JSON-RPC API
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -762,7 +762,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,669 @@
+@@ -0,0 +1,664 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1158,12 +1158,7 @@ new file mode 100644
 +        json
 +    );
 +    if (ok) {
-+        if (request->params) {
-+            while (request->params[request->params_ntokens++].start
-+                   < request->params->end);
-+        }
-+        // XXX We already do that from
-+        // extract_values_from_schema_and_dict:
++        // XXX We already do that from extract_values_from_schema_and_dict:
 +        if (request->params) {
 +            const jsmntok_t *params = request->params;
 +            int params_ti = params - tokens;
@@ -3763,9 +3758,9 @@ new file mode 100755
 +        "jsonrpc": "2.0",
 +        "id": id,
 +    }
-+    socket.send(json.dumps(payload).encode("utf-8"))
++    socket.send(json.dumps(payload).encode("ascii"))
 +    response = socket.recv(2048)
-+    response = json.loads(response)
++    response = json.loads(response.decode("ascii"))
 +    print(response)
 +
 +
