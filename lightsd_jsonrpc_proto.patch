@@ -2397,12 +2397,20 @@ diff --git a/docs/internal-apis.rst b/docs/internal-apis.rst
 new file mode 100644
 --- /dev/null
 +++ b/docs/internal-apis.rst
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,23 @@
 +lightds internal APIs
 +=====================
 +
 +lgtd_proto_*
 +------------
++
++.. function:: lgtd_proto_power_off(target)
++
++   Turns off the targeted bulbs.
++
++.. function:: lgtd_proto_power_on(target)
++
++   Turns on the targeted bulbs.
 +
 +.. function:: lgtd_proto_set_light_from_hsbk(target, h, s, b, k)
 +
@@ -2417,11 +2425,13 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 new file mode 100644
 --- /dev/null
 +++ b/docs/protocol.rst
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,41 @@
 +The lights daemon protocol
 +==========================
 +
 +The lightsd protocol is implemented on top of `JSON-RPC 2.0`_.
++
++.. _JSON-RPC 2.0: http://www.jsonrpc.org/specification
 +
 +Targeting bulbs
 +---------------
@@ -2442,10 +2452,6 @@ new file mode 100644
 +Available methods
 +-----------------
 +
-+.. function:: get_light(target)
-+
-+   Foo.
-+
 +.. function:: power_off(target)
 +
 +   Power off the given bulb(s).
@@ -2459,36 +2465,8 @@ new file mode 100644
 +   :param float h: Hue from 0 to 360.
 +   :param float s: Saturation from 0 to 1.
 +   :param float b: Brightness from 0 to 1.
-+   :param int k: Temperature (in Kelvin) from 2500 to 9000.
-+
-+.. function:: idle()
-+
-+   Bar.
-+
-+Notifications
-+-------------
-+
-+lightsd will push a notification whenever the status of a bulb changes.
-+
-+.. _JSON-RPC 2.0: http://www.jsonrpc.org/specification
 +
 +.. vim: set tw=80 spelllang=en spell:
-diff --git a/lifx/broadcast.c b/lifx/broadcast.c
---- a/lifx/broadcast.c
-+++ b/lifx/broadcast.c
-@@ -286,6 +286,12 @@
-     if (err) {
-         goto error;
-     }
-+    err = evutil_make_listen_socket_reuseable(
-+        lgtd_lifx_broadcast_endpoint.socket
-+    );
-+    if (err) {
-+        goto error;
-+    }
- 
-     err = evutil_make_socket_nonblocking(lgtd_lifx_broadcast_endpoint.socket);
-     if (err == -1) {
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
 +++ b/lifx/wire_proto.c
@@ -3793,9 +3771,9 @@ new file mode 100755
 +    id = 0
 +    try:
 +        while True:
-+            h = (h + 5) % 360
++            h = (h + 1) % 360
 +            id += 1
-+            set_light_from_hsbk(s, id, h, 0.7, 0.1, 6000)
-+            time.sleep(0.05)
++            set_light_from_hsbk(s, id, h, 0.7, 0.02, 2500)
++            time.sleep(0.1)
 +    finally:
 +        s.close()
