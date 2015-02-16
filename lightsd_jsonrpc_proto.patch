@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 5b69d974f37e9f83440e2e49606f37612921e2e0
+# Parent eb2dfc5ee328e8281947b90bfae036ce69cbbb4a
 # Parent  4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
 Add a TCP/JSON-RPC API
 
@@ -762,7 +762,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,659 @@
+@@ -0,0 +1,669 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1161,6 +1161,16 @@ new file mode 100644
 +        if (request->params) {
 +            while (request->params[request->params_ntokens++].start
 +                   < request->params->end);
++        }
++        // XXX We already do that from
++        // extract_values_from_schema_and_dict:
++        if (request->params) {
++            const jsmntok_t *params = request->params;
++            int params_ti = params - tokens;
++            while (params[request->params_ntokens].start < params->end
++                   && params_ti + request->params_ntokens < ntokens) {
++                request->params_ntokens++;
++            }
 +        }
 +        return true;
 +    }
@@ -3738,7 +3748,7 @@ diff --git a/tests/lightsc b/tests/lightsc
 new file mode 100755
 --- /dev/null
 +++ b/tests/lightsc
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,51 @@
 +#!/usr/bin/env python
 +
 +import json
@@ -3746,17 +3756,10 @@ new file mode 100755
 +import time
 +
 +
-+def set_light_from_hsbk(socket, id, h, s, b, k):
-+    # Example echo method
++def jsonrpc_call(socket, id, method, params):
 +    payload = {
-+        "method": "set_light_from_hsbk",
-+        "params": {
-+            "target": "*",
-+            "hue": h,
-+            "saturation": s,
-+            "brightness": b,
-+            "kelvin": k
-+        },
++        "method": method,
++        "params": params,
 +        "jsonrpc": "2.0",
 +        "id": id,
 +    }
@@ -3765,15 +3768,35 @@ new file mode 100755
 +    response = json.loads(response)
 +    print(response)
 +
++
++def set_light_from_hsbk(socket, id, h, s, b, k):
++    jsonrpc_call(socket, id, "set_light_from_hsbk", {
++        "target": "*",
++        "hue": h,
++        "saturation": s,
++        "brightness": b,
++        "kelvin": k
++    })
++
++
++def power_on(socket, id):
++    jsonrpc_call(socket, id, "power_on", {"target": "*"})
++
++
++def power_off(socket, id):
++    jsonrpc_call(socket, id, "power_off", {"target": "*"})
++
 +if __name__ == "__main__":
 +    s = socket.create_connection(("localhost", 1234))
 +    h = 0
 +    id = 0
 +    try:
++        power_on(s, id)
 +        while True:
 +            h = (h + 1) % 360
 +            id += 1
 +            set_light_from_hsbk(s, id, h, 0.7, 0.02, 2500)
 +            time.sleep(0.1)
 +    finally:
++        power_off(s, id)
 +        s.close()
