@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
+# Parent 5b69d974f37e9f83440e2e49606f37612921e2e0
 # Parent  4bcb4a2cbc3080bcba1c70a5a431ed72be7140ed
 Add a TCP/JSON-RPC API
 
@@ -47,13 +47,16 @@ diff --git a/CMakeScripts/AddTestFromSources.cmake b/CMakeScripts/AddTestFromSou
 new file mode 100644
 --- /dev/null
 +++ b/CMakeScripts/AddTestFromSources.cmake
-@@ -0,0 +1,8 @@
-+FUNCTION(ADD_TEST_FROM_C_SOURCES)
-+    STRING(LENGTH ${ARGV0} TEST_NAME_LEN)
+@@ -0,0 +1,11 @@
++FUNCTION(ADD_TEST_FROM_C_SOURCES TEST_SOURCE TEST_LIB)
++    STRING(LENGTH ${TEST_SOURCE} TEST_NAME_LEN)
 +    STRING(LENGTH "test_" PREFIX_LEN)
 +    MATH(EXPR TEST_NAME_LEN "${TEST_NAME_LEN} - 2 - ${PREFIX_LEN}")
 +    STRING(SUBSTRING ${ARGV0} ${PREFIX_LEN} ${TEST_NAME_LEN} TEST_NAME)
-+    ADD_EXECUTABLE(${TEST_NAME} ${ARGV})
++    ADD_EXECUTABLE(${TEST_NAME} ${TEST_SOURCE} ${ARGN})
++    IF (TEST_LIB)
++        TARGET_LINK_LIBRARIES(${TEST_NAME} ${TEST_LIB})
++    ENDIF ()
 +    ADD_TEST(test_${TEST_NAME} ${TEST_NAME})
 +ENDFUNCTION()
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
@@ -759,7 +762,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 new file mode 100644
 --- /dev/null
 +++ b/core/jsonrpc.c
-@@ -0,0 +1,653 @@
+@@ -0,0 +1,659 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +// All rights reserved.
 +//
@@ -1001,7 +1004,12 @@ new file mode 100644
 +            return false;
 +        }
 +
-+        for (int si = 0; si != schema_size; si++) {
++        for (int si = 0;; si++) {
++            if (si == schema_size) {
++                ti++; // nothing matched, skip the key
++                break;
++            }
++
 +            int tokenlen = LGTD_JSONRPC_TOKEN_LEN(&tokens[ti]);
 +            if (schema[si].keylen != tokenlen) {
 +                continue;
@@ -1037,8 +1045,9 @@ new file mode 100644
 +            }
 +        }
 +
++        // skip the value, if it's an object or an array we need to
++        // skip everything in it:
 +        if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
-+            // if it's an object or an array we need to skip everything in it:
 +            ti = lgtd_jsonrpc_consume_object_or_array(
 +                tokens, ti, ntokens, json
 +            );
@@ -1047,7 +1056,7 @@ new file mode 100644
 +        }
 +    }
 +
-+    for (int si = 0; si != LGTD_ARRAY_SIZE(schema); si++) {
++    for (int si = 0; si != schema_size; si++) {
 +        if (!schema[si].optional) {
 +            const jsmntok_t *seen = LGTD_JSONRPC_GET_JSMNTOK(
 +                output, schema[si].value_offset
@@ -1105,9 +1114,9 @@ new file mode 100644
 +{
 +    LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
 +    lgtd_jsonrpc_write_id(client, request, json);
-+    LGTD_CLIENT_WRITE_STRING(client, ", \"result\": \"");
++    LGTD_CLIENT_WRITE_STRING(client, ", \"result\": ");
 +    LGTD_CLIENT_WRITE_STRING(client, result);
-+    LGTD_CLIENT_WRITE_STRING(client, "\"}");
++    LGTD_CLIENT_WRITE_STRING(client, "}");
 +}
 +
 +static bool
@@ -1273,7 +1282,7 @@ new file mode 100644
 +                                 const struct lgtd_jsonrpc_request *request,
 +                                 const char *json)
 +{
-+    const jsmntok_t *target;
++    const jsmntok_t *target = NULL;
 +    static const struct lgtd_jsonrpc_node schema[] = {
 +        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string, false)
 +    };
@@ -2633,7 +2642,7 @@ diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.t
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/CMakeLists.txt
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,22 @@
 +INCLUDE_DIRECTORIES(
 +    ${LIGHTSD_SOURCE_DIR}
 +    ${LIGHTSD_SOURCE_DIR}/core/
@@ -2641,13 +2650,15 @@ new file mode 100644
 +    ${LIGHTSD_BINARY_DIR}/core/
 +)
 +
++ADD_LIBRARY(
++    test_core_jsonrpc STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
++    ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../utils.c
++)
++
 +FUNCTION(ADD_JSONRPC_TEST TEST_SOURCE)
-+    ADD_TEST_FROM_C_SOURCES(
-+        ${TEST_SOURCE}
-+        ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
-+        ${LIGHTSD_SOURCE_DIR}/core/log.c
-+        ${CMAKE_CURRENT_SOURCE_DIR}/../utils.c
-+    )
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_jsonrpc)
 +ENDFUNCTION()
 +
 +FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
@@ -3194,7 +3205,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_j
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,61 @@
 +#pragma once
 +
 +#define TEST_REQUEST_INITIALIZER { NULL, NULL, 0, NULL }
@@ -3229,45 +3240,33 @@ new file mode 100644
 +                               int kelvin,
 +                               int transition_msecs)
 +{
-+    if (!target) {
-+        errx(1, "target is missing");
-+    }
-+    if (hue < 0 || hue > UINT16_MAX) {
-+        errx(1, "Invalid hue: %d", hue);
-+    }
-+    if (saturation < 0 || saturation > UINT16_MAX) {
-+        errx(1, "Invalid saturation: %d", saturation);
-+    }
-+    if (brightness < 0 || brightness > UINT16_MAX) {
-+        errx(1, "Invalid brightness: %d", brightness);
-+    }
-+    if (kelvin < 2500 || kelvin > 9000) {
-+        errx(1, "Invalid temperature: %d", kelvin);
-+    }
-+    if (transition_msecs < 0) {
-+        errx(1, "Invalid transition duration: %d", transition_msecs);
-+    }
++    (void)target;
++    (void)hue;
++    (void)saturation;
++    (void)brightness;
++    (void)kelvin;
++    (void)transition_msecs;
 +    return true;
 +}
 +#endif
 +
++#ifndef LGTD_TESTING_POWER_ON
 +bool
 +lgtd_proto_power_on(const char *target)
 +{
-+    if (!target) {
-+        errx(1, "target is missing");
-+    }
++    (void)target;
 +    return true;
 +}
++#endif
 +
++#ifndef LGTD_TESTING_POWER_OFF
 +bool
 +lgtd_proto_power_off(const char *target)
 +{
-+    if (!target) {
-+        errx(1, "target is missing");
-+    }
++    (void)target;
 +    return true;
 +}
++#endif
 diff --git a/tests/core/utils.c b/tests/core/utils.c
 new file mode 100644
 --- /dev/null
@@ -3295,7 +3294,7 @@ diff --git a/tests/lightsc b/tests/lightsc
 new file mode 100755
 --- /dev/null
 +++ b/tests/lightsc
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,38 @@
 +#!/usr/bin/env python
 +
 +import json
@@ -3303,7 +3302,7 @@ new file mode 100755
 +import time
 +
 +
-+def set_light_from_hsbk(socket, h, s, b, k):
++def set_light_from_hsbk(socket, id, h, s, b, k):
 +    # Example echo method
 +    payload = {
 +        "method": "set_light_from_hsbk",
@@ -3315,7 +3314,7 @@ new file mode 100755
 +            "kelvin": k
 +        },
 +        "jsonrpc": "2.0",
-+        "id": 0,
++        "id": id,
 +    }
 +    socket.send(json.dumps(payload).encode("utf-8"))
 +    response = socket.recv(2048)
@@ -3325,10 +3324,12 @@ new file mode 100755
 +if __name__ == "__main__":
 +    s = socket.create_connection(("localhost", 1234))
 +    h = 0
++    id = 0
 +    try:
 +        while True:
 +            h = (h + 5) % 360
-+            set_light_from_hsbk(s, h, 0.7, 0.1, 6000)
++            id += 1
++            set_light_from_hsbk(s, id, h, 0.7, 0.1, 6000)
 +            time.sleep(0.05)
 +    finally:
 +        s.close()

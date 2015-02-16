@@ -1,1 +1,2 @@
+lightsd_retransmit_get_light_status.patch
 lightsd_jsonrpc_proto.patch
