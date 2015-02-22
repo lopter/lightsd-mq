@@ -1,0 +1,19 @@
+# HG changeset patch
+# Parent 826e7b449681ca18d5dece32e4aa2daae42545d9
+Don't segfault when sending back a JSONRPC error without an id
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -370,6 +370,11 @@
+                       const struct lgtd_jsonrpc_request *request,
+                       const char *json)
+ {
++    if (!request->id) {
++        LGTD_CLIENT_WRITE_STRING(client, "null");
++        return;
++    }
++
+     int start, stop;
+     if (request->id->type == JSMN_STRING) { // get the quotes
+         start = request->id->start - 1;
