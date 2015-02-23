@@ -1,0 +1,71 @@
+# HG changeset patch
+# Parent e690c67438e0f175a82b31dd60270cd695b02ab3
+Do not enqueue multiple GET_LIGHT_STATE for all bulbs on a single gateway
+
+lgtd_gateway_handle_light_status is called per bulb and not per gateway
+and we trigger the refresh of all the bulbs on the gateway from this
+function.
+
+This means that we could potentially enqueue multiple GET_LIGHT_STATE
+packets for all bulbs on the same gateway within a single libevent
+iteration.
+
+With this changeset each gateway now keep track of when the last
+GET_LIGHT_STATE for all bulbs was sent. If it's more recent than when
+the last packet was sent then we know that one has already been
+enqueued.
+
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -50,6 +50,7 @@
+ #include "gateway.h"
+ #include "broadcast.h"
+ #include "timer.h"
++#include "core/proto.h"
+ #include "core/lightsd.h"
+ 
+ struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
+@@ -133,6 +134,7 @@
+     );
+     lgtd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
+     lgtd_lifx_gateway_send_packet(gw, &hdr, NULL, 0);
++    gw->last_get_all_light_state_at = lgtd_time_monotonic_msecs();
+ }
+ 
+ static void
+@@ -371,11 +373,18 @@
+         return;
+     }
+ 
+-    lgtd_debug(
+-        "[%s]:%hu latency is %dms, sending GET_LIGHT_STATE now",
+-        gw->ip_addr, gw->port, latency
+-    );
+-    lgtd_lifx_gateway_send_get_all_light_state(gw);
++    if (gw->last_get_all_light_state_at < gw->last_req_at) {
++        lgtd_debug(
++            "[%s]:%hu latency is %dms, sending GET_LIGHT_STATE now",
++            gw->ip_addr, gw->port, latency
++        );
++        lgtd_lifx_gateway_send_get_all_light_state(gw);
++    } else {
++        lgtd_debug(
++            "[%s]:%hu GET_LIGHT_STATE for all bulbs on this gw has already "
++            "been enqueued", gw->ip_addr, gw->port
++        );
++    }
+ }
+ 
+ void
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -55,6 +55,7 @@
+     lgtd_time_mono_t                last_req_at;
+     lgtd_time_mono_t                next_req_at;
+     lgtd_time_mono_t                last_pkt_at;
++    lgtd_time_mono_t                last_get_all_light_state_at;
+     struct event                    *write_ev;
+     struct evbuffer                 *write_buf;
+     struct event                    *refresh_ev;

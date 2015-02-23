@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 826e7b449681ca18d5dece32e4aa2daae42545d9
+# Parent f9fe283ceb7e7f1291b81239d5d14ddc26e86d78
 Don't segfault when sending back a JSONRPC error without an id
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
@@ -17,3 +17,84 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      int start, stop;
      if (request->id->type == JSMN_STRING) { // get the quotes
          start = request->id->start - 1;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+@@ -49,8 +49,7 @@
+         errx(1, "lgtd_proto_power_off was called");
+     }
+ 
+-    memset(client_write_buf, 0, sizeof(client_write_buf));
+-    client_write_buf_idx = 0;
++    reset_client_write_buf();
+ }
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_send_error.c b/tests/core/jsonrpc/test_jsonrpc_send_error.c
+--- a/tests/core/jsonrpc/test_jsonrpc_send_error.c
++++ b/tests/core/jsonrpc/test_jsonrpc_send_error.c
+@@ -6,13 +6,10 @@
+ main(void)
+ {
+     struct lgtd_client client = { .io = NULL };
++
++    const char *json = "\"42\"";
+     jsmntok_t token = { .start = 1, .end = 3, .type = JSMN_STRING };
+     struct lgtd_jsonrpc_request req = { .id = &token };
+-
+-    lgtd_jsonrpc_send_error(
+-        &client, &req, "\"42\"",LGTD_JSONRPC_INVALID_REQUEST, "Invalid Request"
+-    );
+-
+     const char *expected = (
+         "{"
+         "\"jsonrpc\": \"2.0\", "
+@@ -20,8 +17,30 @@
+         "\"error\": {\"code\": -32600, \"message\": \"Invalid Request\"}"
+         "}"
+     );
++    lgtd_jsonrpc_send_error(
++        &client, &req, json, LGTD_JSONRPC_INVALID_REQUEST, "Invalid Request"
++    );
++    int diff = memcmp(client_write_buf, expected, strlen(expected));
++    if (diff) {
++        printf("expected: %s\n", expected);
++        printf("received: %s\n", client_write_buf);
++        return 1;
++    }
+ 
+-    int diff = memcmp(client_write_buf, expected, strlen(expected));
++    reset_client_write_buf();
++
++    req.id = NULL;
++    expected = (
++        "{"
++        "\"jsonrpc\": \"2.0\", "
++        "\"id\": null, "
++        "\"error\": {\"code\": -32600, \"message\": \"Invalid Request\"}"
++        "}"
++    );
++    lgtd_jsonrpc_send_error(
++        &client, &req, NULL, LGTD_JSONRPC_INVALID_REQUEST, "Invalid Request"
++    );
++    diff = memcmp(client_write_buf, expected, strlen(expected));
+     if (diff) {
+         printf("expected: %s\n", expected);
+         printf("received: %s\n", client_write_buf);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
+--- a/tests/core/jsonrpc/test_jsonrpc_utils.h
++++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
+@@ -13,6 +13,13 @@
+ static char client_write_buf[4096] = { 0 };
+ static int client_write_buf_idx = 0;
+ 
++static inline void
++reset_client_write_buf(void)
++{
++    memset(client_write_buf, 0, sizeof(client_write_buf));
++    client_write_buf_idx = 0;
++}
++
+ int
+ bufferevent_write(struct bufferevent *bev, const void *data, size_t nbytes)
+ {
