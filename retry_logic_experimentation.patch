@@ -1,5 +1,6 @@
 # HG changeset patch
 # Parent 405ca3973da0c043c9f303944419a712eb326f84
+# Parent  772eb953c9a1f382eca8723d7eff3b85dc220bf0
 Experiment some retry logic on power_on/power_off
 
 diff --git a/core/router.c b/core/router.c
@@ -42,7 +43,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
 +    if (b->dirty_at
 +        && b->last_light_state_at > b->dirty_at
-+        && b->gw->last_pkt_at - b->dirty_at > 600) {
++        && b->gw->last_pkt_at - b->dirty_at > 400) {
 +        if (b->expected_power_on == b->state.power) {
 +            lgtd_warnx("clearing dirty_at on %s", b->state.label);
 +            b->dirty_at = 0;
