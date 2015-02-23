@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  2f9b09a3af203116dc85c297b0a6fa3440eb78b9
+# Parent 405ca3973da0c043c9f303944419a712eb326f84
 Experiment some retry logic on power_on/power_off
 
 diff --git a/core/router.c b/core/router.c
@@ -33,36 +33,39 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
  };
  RB_HEAD(lgtd_lifx_bulb_map, lgtd_lifx_bulb);
  SLIST_HEAD(lgtd_lifx_bulb_list, lgtd_lifx_bulb);
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -344,6 +344,21 @@
+         b, (const struct lgtd_lifx_light_state *)pkt, gw->last_pkt_at
+     );
+ 
++    if (b->dirty_at
++        && b->last_light_state_at > b->dirty_at
++        && b->gw->last_pkt_at - b->dirty_at > 600) {
++        if (b->expected_power_on == b->state.power) {
++            lgtd_warnx("clearing dirty_at on %s", b->state.label);
++            b->dirty_at = 0;
++        } else if (b->expected_power_on) {
++            lgtd_warnx("retransmiting power on %s", b->state.label);
++            lgtd_proto_power_on("*");
++        } else {
++            lgtd_warnx("retransmiting power off on %s", b->state.label);
++            lgtd_proto_power_off("*");
++        }
++    }
++
+     int latency = gw->last_pkt_at - gw->last_req_at;
+     if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
+         int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
 diff --git a/lifx/timer.c b/lifx/timer.c
 --- a/lifx/timer.c
 +++ b/lifx/timer.c
-@@ -44,6 +44,7 @@
- #include "bulb.h"
- #include "gateway.h"
- #include "timer.h"
-+#include "core/proto.h"
- #include "core/lightsd.h"
- 
- static struct {
-@@ -108,6 +109,21 @@
+@@ -108,6 +108,7 @@
              );
              lgtd_lifx_bulb_close(bulb);
              start_discovery = true;
 +            continue;
-+        }
-+        if (bulb->dirty_at
-+            && bulb->last_light_state_at > bulb->dirty_at
-+            && bulb->gw->last_pkt_at - bulb->dirty_at > 600) {
-+            if (bulb->expected_power_on == bulb->state.power) {
-+                lgtd_warnx("clearing dirty_at on %s", bulb->state.label);
-+                bulb->dirty_at = 0;
-+            } else if (bulb->expected_power_on) {
-+                lgtd_warnx("retransmiting power on %s", bulb->state.label);
-+                lgtd_proto_power_on("*");
-+            } else {
-+                lgtd_warnx("retransmiting power off on %s", bulb->state.label);
-+                lgtd_proto_power_off("*");
-+            }
          }
      }
  
