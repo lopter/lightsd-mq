@@ -1,5 +1,7 @@
 # HG changeset patch
 # Parent 5f1832bfc695985a7b611a6672866afc45de06e3
+# Parent  82b720d17ae33bbb854a65bdb51c382a082acb8c
+
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
@@ -51,7 +53,7 @@ diff --git a/core/router.c b/core/router.c
          return true;
      }
  
-+    if (ishexnumber(target[0])) {
++    if (isxdigit(target[0])) {
 +        const char *endptr = NULL;
 +        errno = 0;
 +        long long device = strtoll(target, (char **)&endptr, 16);
