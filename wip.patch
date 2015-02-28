@@ -1,0 +1,198 @@
+# HG changeset patch
+# Parent 5f1832bfc695985a7b611a6672866afc45de06e3
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -31,7 +31,9 @@
+ #include <sys/tree.h>
+ #include <arpa/inet.h>
+ #include <assert.h>
++#include <ctype.h>
+ #include <err.h>
++#include <errno.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -76,6 +78,33 @@
+     }
+ }
+ 
++static void
++lgtd_router_device(struct lgtd_lifx_bulb *bulb,
++                   enum lgtd_lifx_packet_type pkt_type,
++                   void *pkt)
++{
++    assert(bulb);
++
++    struct lgtd_lifx_packet_header hdr;
++    union lgtd_lifx_target target = { .addr = bulb->addr };
++
++    const struct lgtd_lifx_packet_infos *pkt_infos;
++    pkt_infos = lgtd_lifx_wire_setup_header(
++        &hdr, LGTD_LIFX_TARGET_DEVICE, target, bulb->gw->site, pkt_type
++    );
++    assert(pkt_infos);
++
++    lgtd_lifx_gateway_send_packet(bulb->gw, &hdr, pkt, pkt_infos->size);
++
++    if (pkt_type == LGTD_LIFX_SET_POWER_STATE) {
++        bulb->dirty_at = lgtd_time_monotonic_msecs();
++        struct lgtd_lifx_packet_power_state *payload = pkt;
++        bulb->expected_power_on = payload->power;
++    }
++
++    lgtd_debug("sending %s to %s", pkt_infos->name, lgtd_addrtoa(bulb->addr));
++}
++
+ bool
+ lgtd_router_send(const char *target,
+                  enum lgtd_lifx_packet_type pkt_type,
+@@ -88,5 +117,24 @@
+         return true;
+     }
+ 
++    if (ishexnumber(target[0])) {
++        const char *endptr = NULL;
++        errno = 0;
++        long long device = strtoll(target, (char **)&endptr, 16);
++        if (*endptr || errno == ERANGE) {
++            lgtd_debug("invalid target device %s", target);
++            return false;
++        }
++        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(
++            (uint8_t *)&device + sizeof(device) - LGTD_LIFX_ADDR_LENGTH
++        );
++        if (!bulb) {
++            lgtd_debug("target device %#llx not found", device);
++            return false;
++        }
++        lgtd_router_device(bulb, pkt_type, pkt);
++        return true;
++    }
++
+     return false;
+ }
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -49,9 +49,8 @@
+     RB_INITIALIZER(&lgtd_lifx_bulbs_table);
+ 
+ struct lgtd_lifx_bulb *
+-lgtd_lifx_bulb_get(struct lgtd_lifx_gateway *gw, const uint8_t *addr)
++lgtd_lifx_bulb_get(const uint8_t *addr)
+ {
+-    assert(gw);
+     assert(addr);
+ 
+     struct lgtd_lifx_bulb bulb;
+diff --git a/lifx/bulb.h b/lifx/bulb.h
+--- a/lifx/bulb.h
++++ b/lifx/bulb.h
+@@ -72,7 +72,7 @@
+     lgtd_lifx_bulb_cmp
+ );
+ 
+-struct lgtd_lifx_bulb *lgtd_lifx_bulb_get(struct lgtd_lifx_gateway *, const uint8_t *);
++struct lgtd_lifx_bulb *lgtd_lifx_bulb_get(const uint8_t *);
+ struct lgtd_lifx_bulb *lgtd_lifx_bulb_open(struct lgtd_lifx_gateway *, const uint8_t *);
+ void lgtd_lifx_bulb_close(struct lgtd_lifx_bulb *);
+ 
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -113,9 +113,10 @@
+         // Callbacks are called in any order, so we keep two timers to make
+         // sure we can get the latency right, otherwise we could be compute the
+         // latency with last_pkt_at < last_req_at, which isn't true since the
+-        // pkt will be for an answer the previous write:
++        // pkt will be for an answer to the previous write:
+         gw->last_req_at = gw->next_req_at;
+         gw->next_req_at = lgtd_time_monotonic_msecs();
++        lgtd_info("%d bytes sent to [%s]:%hu", nbytes, gw->ip_addr, gw->port);
+         if (!evbuffer_get_length(gw->write_buf)) {
+             event_del(gw->write_ev);
+         }
+@@ -132,7 +133,7 @@
+     lgtd_lifx_wire_setup_header(
+         &hdr, LGTD_LIFX_TARGET_SITE, target, gw->site, LGTD_LIFX_GET_LIGHT_STATE
+     );
+-    lgtd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
++    lgtd_info("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
+     lgtd_lifx_gateway_send_packet(gw, &hdr, NULL, 0);
+     gw->last_get_all_light_state_at = lgtd_time_monotonic_msecs();
+ }
+@@ -162,7 +163,7 @@
+     assert(gw);
+     assert(bulb_addr);
+ 
+-    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(gw, bulb_addr);
++    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(bulb_addr);
+     if (!bulb) {
+         bulb = lgtd_lifx_bulb_open(gw, bulb_addr);
+         if (bulb) {
+@@ -352,12 +353,24 @@
+         if (b->expected_power_on == b->state.power) {
+             lgtd_warnx("clearing dirty_at on %s", b->state.label);
+             b->dirty_at = 0;
+-        } else if (b->expected_power_on) {
+-            lgtd_warnx("retransmiting power on %s", b->state.label);
+-            lgtd_proto_power_on("*");
+         } else {
+-            lgtd_warnx("retransmiting power off on %s", b->state.label);
+-            lgtd_proto_power_off("*");
++            char target[LGTD_LIFX_ADDR_LENGTH * 2 + 1];
++            snprintf(
++                target, sizeof(target), "%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx",
++                b->addr[0], b->addr[1], b->addr[2],
++                b->addr[3], b->addr[4], b->addr[5]
++            );
++            if (b->expected_power_on) {
++                lgtd_warnx(
++                    "retransmiting power on %s (0x%s)", b->state.label, target
++                );
++                lgtd_proto_power_on(target);
++            } else {
++                lgtd_warnx(
++                    "retransmiting power off %s (0x%s)", b->state.label, target
++                );
++                lgtd_proto_power_off(target);
++            }
+         }
+     }
+ 
+@@ -366,21 +379,30 @@
+         int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
+         struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
+         evtimer_add(gw->refresh_ev, &tv);
+-        lgtd_debug(
++        lgtd_info(
+             "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
+             gw->ip_addr, gw->port, latency, timeout
+         );
+         return;
+     }
+ 
+-    if (gw->last_get_all_light_state_at < gw->last_req_at) {
+-        lgtd_debug(
++    lgtd_info(
++        "[%s]:%hu latency is %dms, "
++        "last_get_all_light_state_at - last_req_at = %ld "
++        "last_get_all_light_state_at - next_req_at = %ld",
++        gw->ip_addr, gw->port, latency,
++        gw->last_get_all_light_state_at - gw->last_req_at,
++        gw->last_get_all_light_state_at - gw->next_req_at
++    );
++
++    if (gw->last_get_all_light_state_at < gw->next_req_at) {
++        lgtd_info(
+             "[%s]:%hu latency is %dms, sending GET_LIGHT_STATE now",
+             gw->ip_addr, gw->port, latency
+         );
+         lgtd_lifx_gateway_send_get_all_light_state(gw);
+     } else {
+-        lgtd_debug(
++        lgtd_info(
+             "[%s]:%hu GET_LIGHT_STATE for all bulbs on this gw has already "
+             "been enqueued", gw->ip_addr, gw->port
+         );
