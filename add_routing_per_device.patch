@@ -1,0 +1,163 @@
+# HG changeset patch
+# Parent eb6c1042c2566e7e2166cd3deaa02e47c5e12b22
+Add the ability to target a specific device via its address
+
+
+
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -79,6 +79,33 @@
+     }
+ }
+ 
++static void
++lgtd_router_device(struct lgtd_lifx_bulb *bulb,
++                   enum lgtd_lifx_packet_type pkt_type,
++                   void *pkt)
++{
++    assert(bulb);
++
++    struct lgtd_lifx_packet_header hdr;
++    union lgtd_lifx_target target = { .addr = bulb->addr };
++
++    const struct lgtd_lifx_packet_infos *pkt_infos;
++    pkt_infos = lgtd_lifx_wire_setup_header(
++        &hdr, LGTD_LIFX_TARGET_DEVICE, target, bulb->gw->site, pkt_type
++    );
++    assert(pkt_infos);
++
++    lgtd_lifx_gateway_send_packet(bulb->gw, &hdr, pkt, pkt_infos->size);
++
++    if (pkt_type == LGTD_LIFX_SET_POWER_STATE) {
++        bulb->dirty_at = lgtd_time_monotonic_msecs();
++        struct lgtd_lifx_packet_power_state *payload = pkt;
++        bulb->expected_power_on = payload->power;
++    }
++
++    lgtd_debug("sending %s to %s", pkt_infos->name, lgtd_addrtoa(bulb->addr));
++}
++
+ bool
+ lgtd_router_send(const char *target,
+                  enum lgtd_lifx_packet_type pkt_type,
+@@ -91,5 +118,25 @@
+         return true;
+     }
+ 
++    if (isxdigit(target[0])) {
++        const char *endptr = NULL;
++        errno = 0;
++        long long device = strtoll(target, (char **)&endptr, 16);
++        if (*endptr || errno == ERANGE) {
++            lgtd_debug("invalid target device %s", target);
++            return false;
++        }
++        device = htobe64(device);
++        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(
++            (uint8_t *)&device + sizeof(device) - LGTD_LIFX_ADDR_LENGTH
++        );
++        if (!bulb) {
++            lgtd_debug("target device %#llx not found", device);
++            return false;
++        }
++        lgtd_router_device(bulb, pkt_type, pkt);
++        return true;
++    }
++
+     return false;
+ }
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -49,9 +49,8 @@
+     RB_INITIALIZER(&lgtd_lifx_bulbs_table);
+ 
+ struct lgtd_lifx_bulb *
+-lgtd_lifx_bulb_get(struct lgtd_lifx_gateway *gw, const uint8_t *addr)
++lgtd_lifx_bulb_get(const uint8_t *addr)
+ {
+-    assert(gw);
+     assert(addr);
+ 
+     struct lgtd_lifx_bulb bulb;
+@@ -89,9 +88,10 @@
+     RB_REMOVE(lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table, bulb);
+     SLIST_REMOVE(&bulb->gw->bulbs, bulb, lgtd_lifx_bulb, link_by_gw);
+     lgtd_info(
+-        "closed bulb \"%.*s\" on [%s]:%hu",
++        "closed bulb \"%.*s\" (%s) on [%s]:%hu",
+         LGTD_LIFX_LABEL_SIZE,
+         bulb->state.label,
++        lgtd_addrtoa(bulb->addr),
+         bulb->gw->ip_addr,
+         bulb->gw->port
+     );
+diff --git a/lifx/bulb.h b/lifx/bulb.h
+--- a/lifx/bulb.h
++++ b/lifx/bulb.h
+@@ -72,7 +72,7 @@
+     lgtd_lifx_bulb_cmp
+ );
+ 
+-struct lgtd_lifx_bulb *lgtd_lifx_bulb_get(struct lgtd_lifx_gateway *, const uint8_t *);
++struct lgtd_lifx_bulb *lgtd_lifx_bulb_get(const uint8_t *);
+ struct lgtd_lifx_bulb *lgtd_lifx_bulb_open(struct lgtd_lifx_gateway *, const uint8_t *);
+ void lgtd_lifx_bulb_close(struct lgtd_lifx_bulb *);
+ 
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -166,7 +166,7 @@
+     assert(gw);
+     assert(bulb_addr);
+ 
+-    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(gw, bulb_addr);
++    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(bulb_addr);
+     if (!bulb) {
+         bulb = lgtd_lifx_bulb_open(gw, bulb_addr);
+         if (bulb) {
+diff --git a/tests/lightsc b/tests/lightsc
+--- a/tests/lightsc
++++ b/tests/lightsc
+@@ -18,30 +18,31 @@
+     print(response)
+ 
+ 
+-def set_light_from_hsbk(socket, id, h, s, b, k):
++def set_light_from_hsbk(socket, id, target, h, s, b, k):
+     jsonrpc_call(socket, id, "set_light_from_hsbk", [
+-        "*", h, s, b, k
++        target, h, s, b, k
+     ])
+ 
+ 
+-def power_on(socket, id):
+-    jsonrpc_call(socket, id, "power_on", {"target": "*"})
++def power_on(socket, id, target):
++    jsonrpc_call(socket, id, "power_on", {"target": target})
+ 
+ 
+-def power_off(socket, id):
+-    jsonrpc_call(socket, id, "power_off", {"target": "*"})
++def power_off(socket, id, target):
++    jsonrpc_call(socket, id, "power_off", {"target": target})
+ 
+ if __name__ == "__main__":
+     s = socket.create_connection(("localhost", 1234))
+     h = 0
+     id = 0
++    target = "*"  # "d073d500603b"
+     try:
+-        power_on(s, id)
++        power_on(s, id, target)
+         while True:
+             h = (h + 1) % 360
+             id += 1
+-            set_light_from_hsbk(s, id, h, 0.7, 0.02, 2500)
++            set_light_from_hsbk(s, id, target, h, 0.7, 0.02, 2500)
+             time.sleep(0.1)
+     finally:
+-        power_off(s, id)
++        power_off(s, id, target)
+         s.close()
