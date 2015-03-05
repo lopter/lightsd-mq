@@ -1,8 +1,7 @@
 # HG changeset patch
 # Parent eb6c1042c2566e7e2166cd3deaa02e47c5e12b22
+# Parent  f9aa8a3fd77288a69e0be23f0623ce31868bab19
 Add the ability to target a specific device via its address
-
-
 
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
@@ -117,6 +116,166 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (!bulb) {
          bulb = lgtd_lifx_bulb_open(gw, bulb_addr);
          if (bulb) {
+diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
+--- a/tests/core/jsonrpc/CMakeLists.txt
++++ b/tests/core/jsonrpc/CMakeLists.txt
+@@ -1,7 +1,9 @@
+ INCLUDE_DIRECTORIES(
+     ${LIGHTSD_SOURCE_DIR}
++    ${LIGHTSD_SOURCE_DIR}/../
+     ${LIGHTSD_SOURCE_DIR}/core/
+     ${LIGHTSD_BINARY_DIR}
++    ${LIGHTSD_BINARY_DIR}/../
+     ${LIGHTSD_BINARY_DIR}/core/
+ )
+ 
+@@ -9,7 +11,8 @@
+     test_core_jsonrpc STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+-    ${CMAKE_CURRENT_SOURCE_DIR}/../utils.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+ 
+ FUNCTION(ADD_JSONRPC_TEST TEST_SOURCE)
+diff --git a/tests/core/router/CMakeLists.txt b/tests/core/router/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/router/CMakeLists.txt
+@@ -0,0 +1,30 @@
++INCLUDE_DIRECTORIES(
++    ${LIGHTSD_SOURCE_DIR}
++    ${LIGHTSD_SOURCE_DIR}/../
++    ${LIGHTSD_SOURCE_DIR}/core/
++    ${LIGHTSD_BINARY_DIR}
++    ${LIGHTSD_BINARY_DIR}/../
++    ${LIGHTSD_BINARY_DIR}/core/
++)
++
++ADD_LIBRARY(
++    test_core_router STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/core/proto.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
++    ${TIME_MONOTONIC_IMPL}
++)
++
++TARGET_LINK_LIBRARIES(test_core_router ${EVENT2_CORE_LIBRARY})
++
++FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_router)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_ROUTER_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/core/router/test_router_broadcast.c b/tests/core/router/test_router_broadcast.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/router/test_router_broadcast.c
+@@ -0,0 +1,7 @@
++#include "router.c"
++
++int
++main(void)
++{
++
++}
+diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/tests_shims.c
+@@ -0,0 +1,33 @@
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <string.h>
++
++#include <event2/event.h>
++#include <event2/util.h>
++
++#include "lifx/wire_proto.h"
++#include "core/time_monotonic.h"
++#include "lifx/bulb.h"
++#include "lifx/gateway.h"
++#include "lightsd.h"
++
++struct lgtd_opts lgtd_opts = {
++    .foreground = false,
++    .log_timestamps = false,
++    .verbosity = LGTD_DEBUG
++};
++
++struct event_base *lgtd_ev_base = NULL;
++
++struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
++
++void
++lgtd_cleanup(void)
++{
++}
+diff --git a/tests/core/utils.c b/tests/core/tests_utils.c
+rename from tests/core/utils.c
+rename to tests/core/tests_utils.c
+--- a/tests/core/utils.c
++++ b/tests/core/tests_utils.c
+@@ -1,18 +1,29 @@
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
+ #include <stdbool.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <string.h>
+ 
+-#include <event2/event.h>
++#include <event2/util.h>
+ 
+-#include "lightsd.h"
++#include "lifx/wire_proto.h"
++#include "core/time_monotonic.h"
++#include "lifx/bulb.h"
++#include "lifx/gateway.h"
++#include "tests_utils.h"
+ 
+-struct lgtd_opts lgtd_opts = {
+-    .foreground = false,
+-    .log_timestamps = false,
+-    .verbosity = LGTD_DEBUG
+-}; 
++struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
+ 
+-struct event_base *lgtd_ev_base = NULL;
++static struct lgtd_lifx_gateway *
++lgtd_tests_insert_mock_gateway(uint64_t site)
++{
++    struct lgtd_lifx_gateway *gw = calloc(1, sizeof(*gw));
+ 
+-void
+-lgtd_cleanup(void)
+-{
++    LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
++
++    return gw;
+ }
+diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/tests_utils.h
+@@ -0,0 +1,1 @@
++static struct lgtd_lifx_gateway *lgtd_tests_insert_mock_gateway(uint64_t);
 diff --git a/tests/lightsc b/tests/lightsc
 --- a/tests/lightsc
 +++ b/tests/lightsc
