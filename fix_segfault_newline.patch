@@ -1,0 +1,37 @@
+# HG changeset patch
+# Parent  9e9176b1117782adc623b53450ac0d781221864a
+Fix crash on newline in the jsonrpc code
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -229,7 +229,9 @@
+                                                  int ntokens,
+                                                  const char *json)
+ {
+-    assert(tokens[0].type == JSMN_OBJECT);
++    if (tokens[0].type != JSMN_OBJECT) {
++        return false;
++    }
+ 
+     for (int ti = 1; ti < ntokens;) {
+         // make sure it's a key:
+@@ -313,7 +315,9 @@
+                                                   int ntokens,
+                                                   const char *json)
+ {
+-    assert(tokens[0].type == JSMN_ARRAY);
++    if (tokens[0].type != JSMN_ARRAY) {
++        return false;
++    }
+ 
+     int si, ti;
+     for (si = 0, ti = 1; si < schema_size && ti < ntokens; si++) {
+@@ -673,7 +677,6 @@
+     };
+ 
+     assert(client);
+-    assert(parsed > 0);
+ 
+     const jsmntok_t *tokens = client->jsmn_tokens;
+ 
