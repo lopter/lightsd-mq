@@ -220,7 +220,7 @@ diff --git a/tests/core/router/test_router_broadcast.c b/tests/core/router/test_
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/router/test_router_broadcast.c
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,54 @@
 +#include "router.c"
 +
 +#include "tests_utils.h"
@@ -239,12 +239,12 @@ new file mode 100644
 +    };
 +    lgtd_router_send("*", LGTD_LIFX_SET_POWER_STATE, &payload);
 +
-+    if (lgtd_gw_pkt_queue_size != 2) {
++    if (lgtd_tests_gw_pkt_queue_size != 2) {
 +        lgtd_errx(1, "2 packets should have been sent");
 +    }
 +
-+    for (int i = lgtd_gw_pkt_queue_size; i--;) {
-+        struct lgtd_lifx_gateway *gw = lgtd_gw_pkt_queue[i].gw;
++    for (int i = lgtd_tests_gw_pkt_queue_size; i--;) {
++        struct lgtd_lifx_gateway *gw = lgtd_tests_gw_pkt_queue[i].gw;
 +        if (gw->socket != i + 1) {
 +            lgtd_errx(
 +                1, "packet was sent to wrong gateway (expected %d, got %d)",
@@ -252,7 +252,7 @@ new file mode 100644
 +            );
 +        }
 +        const struct lgtd_lifx_packet_header *hdr;
-+        hdr = lgtd_gw_pkt_queue[i].hdr;
++        hdr = lgtd_tests_gw_pkt_queue[i].hdr;
 +        if (!hdr->protocol.tagged || hdr->protocol.addressable) {
 +            lgtd_errx(1, "packet header doesn't have the right bits set");
 +        }
@@ -262,8 +262,14 @@ new file mode 100644
 +        if (memcmp(gw->site, hdr->site, sizeof(hdr->site))) {
 +            lgtd_errx(1, "sites don't match");
 +        }
-+        if (lgtd_gw_pkt_queue[i].pkt != &payload) {
++        if (lgtd_tests_gw_pkt_queue[i].pkt != &payload) {
 +            lgtd_errx(1, "the payload has been improperly set");
++        }
++        if (lgtd_tests_gw_pkt_queue[i].pkt_size != sizeof(payload)) {
++            lgtd_errx(
++                1, "unexpected pkt size %d (expected %ld)",
++                lgtd_tests_gw_pkt_queue[i].pkt_size, sizeof(payload)
++            );
 +        }
 +    }
 +
@@ -273,7 +279,7 @@ diff --git a/tests/core/router/tests_router_utils.h b/tests/core/router/tests_ro
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/router/tests_router_utils.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,45 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <sys/socket.h>
@@ -291,13 +297,13 @@ new file mode 100644
 +#include "lifx/gateway.h"
 +#include "tests_utils.h"
 +
-+int lgtd_gw_pkt_queue_size = 0;
++int lgtd_tests_gw_pkt_queue_size = 0;
 +struct {
 +    struct lgtd_lifx_gateway        *gw;
 +    struct lgtd_lifx_packet_header  *hdr;
 +    const void                      *pkt;
 +    int                             pkt_size;
-+} lgtd_gw_pkt_queue[16] = { { NULL, NULL, NULL, 0}, };
++} lgtd_tests_gw_pkt_queue[16] = { { NULL, NULL, NULL, 0}, };
 +
 +void
 +lgtd_lifx_gateway_send_packet(struct lgtd_lifx_gateway *gw,
@@ -305,13 +311,19 @@ new file mode 100644
 +                              const void *pkt,
 +                              int pkt_size)
 +{
-+    lgtd_gw_pkt_queue[lgtd_gw_pkt_queue_size].gw = gw;
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].gw = gw;
 +    // headers are created on the stack so we need to dup them:
-+    lgtd_gw_pkt_queue[lgtd_gw_pkt_queue_size].hdr = malloc(sizeof(*hdr));
-+    memcpy(lgtd_gw_pkt_queue[lgtd_gw_pkt_queue_size].hdr, hdr, sizeof(*hdr));
-+    lgtd_gw_pkt_queue[lgtd_gw_pkt_queue_size].pkt = pkt;
-+    lgtd_gw_pkt_queue[lgtd_gw_pkt_queue_size].pkt_size = pkt_size;
-+    lgtd_gw_pkt_queue_size++;
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].hdr = malloc(
++        sizeof(*hdr)
++    );
++    memcpy(
++        lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].hdr,
++        hdr,
++        sizeof(*hdr)
++    );
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].pkt = pkt;
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].pkt_size = pkt_size;
++    lgtd_tests_gw_pkt_queue_size++;
 +}
 diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 new file mode 100644
@@ -381,10 +393,12 @@ rename from tests/core/utils.c
 rename to tests/core/tests_utils.c
 --- a/tests/core/utils.c
 +++ b/tests/core/tests_utils.c
-@@ -1,18 +1,32 @@
+@@ -1,18 +1,47 @@
 +#include <sys/queue.h>
 +#include <sys/tree.h>
 +#include <sys/socket.h>
++#include <assert.h>
++#include <endian.h>
 +#include <netinet/in.h>
  #include <stdbool.h>
 +#include <stdlib.h>
@@ -417,20 +431,33 @@ rename to tests/core/tests_utils.c
  
 -void
 -lgtd_cleanup(void)
--{
 +    gw->socket = id;
 +    gw->site[0] = id;
 +
 +    LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
 +
 +    return gw;
++}
++
++struct lgtd_lifx_bulb *
++lgtd_tests_insert_mock_bulb(struct lgtd_lifx_gateway *gw, uint64_t addr)
+ {
++    assert(gw);
++
++    union {
++        uint8_t     as_array[LGTD_LIFX_ADDR_LENGTH];
++        uint64_t    as_scalar;
++    } bulb_addr = { .as_scalar = htobe64(addr) };
++
++    return lgtd_lifx_bulb_open(gw, bulb_addr.as_array);
  }
 diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/tests_utils.h
-@@ -0,0 +1,1 @@
+@@ -0,0 +1,2 @@
 +struct lgtd_lifx_gateway *lgtd_tests_insert_mock_gateway(int);
++struct lgtd_lifx_bulb *lgtd_tests_insert_mock_bulb(struct lgtd_lifx_gateway *, uint64_t);
 diff --git a/tests/lightsc b/tests/lightsc
 --- a/tests/lightsc
 +++ b/tests/lightsc
