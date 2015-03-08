@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  9e9176b1117782adc623b53450ac0d781221864a
+# Parent dddc04fa22a3b54d5e78859a7dcc03281369966e
 Fix crash on newline in the jsonrpc code
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
@@ -10,7 +10,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
                                                   const char *json)
  {
 -    assert(tokens[0].type == JSMN_OBJECT);
-+    if (tokens[0].type != JSMN_OBJECT) {
++    if (!ntokens || tokens[0].type != JSMN_OBJECT) {
 +        return false;
 +    }
  
@@ -21,17 +21,50 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
                                                    const char *json)
  {
 -    assert(tokens[0].type == JSMN_ARRAY);
-+    if (tokens[0].type != JSMN_ARRAY) {
++    if (!ntokens || tokens[0].type != JSMN_ARRAY) {
 +        return false;
 +    }
  
      int si, ti;
      for (si = 0, ti = 1; si < schema_size && ti < ntokens; si++) {
-@@ -673,7 +677,6 @@
+@@ -673,7 +677,7 @@
      };
  
      assert(client);
 -    assert(parsed > 0);
++    assert(parsed >= 0);
  
      const jsmntok_t *tokens = client->jsmn_tokens;
  
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
+@@ -50,5 +50,12 @@
+         errx(1, "wrong id");
+     }
+ 
++    ok = lgtd_jsonrpc_check_and_extract_request(
++        &req, tokens, 0, json
++    );
++    if (ok) {
++        errx(1, "empty request should return false");
++    }
++
+     return 0;
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
+@@ -50,5 +50,12 @@
+         errx(1, "wrong id");
+     }
+ 
++    ok = lgtd_jsonrpc_check_and_extract_request(
++        &req, tokens, 0, json
++    );
++    if (ok) {
++        errx(1, "empty request should return false");
++    }
++
+     return 0;
+ }
