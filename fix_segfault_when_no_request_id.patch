@@ -1,11 +1,11 @@
 # HG changeset patch
-# Parent f9fe283ceb7e7f1291b81239d5d14ddc26e86d78
+# Parent 712ac3c7d9464be0549d6021ec9f33ad38f65faa
 Don't segfault when sending back a JSONRPC error without an id
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
-@@ -370,6 +370,11 @@
+@@ -358,6 +358,11 @@
                        const struct lgtd_jsonrpc_request *request,
                        const char *json)
  {

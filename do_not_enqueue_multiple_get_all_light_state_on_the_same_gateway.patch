@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent b6f631af35060af8e6e85b0e8295cc7032345920
+# Parent ea9b0386cc593f7afd79a736e038b7da4c8bbbfc
 Do not enqueue multiple GET_LIGHT_STATE for all bulbs on a single gateway
 
 lgtd_gateway_handle_light_status is called per bulb and not per gateway
@@ -15,13 +15,10 @@ GET_LIGHT_STATE for all bulbs was sent. If it's more recent than when
 the last packet was sent then we know that one has already been
 enqueued.
 
-
-
-
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
-@@ -31,7 +31,10 @@
+@@ -19,7 +19,10 @@
  #include <sys/tree.h>
  #include <arpa/inet.h>
  #include <assert.h>
@@ -35,7 +32,7 @@ diff --git a/core/router.c b/core/router.c
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -50,6 +50,7 @@
+@@ -38,6 +38,7 @@
  #include "gateway.h"
  #include "broadcast.h"
  #include "timer.h"
@@ -43,7 +40,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  #include "core/lightsd.h"
  
  struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
-@@ -112,9 +113,13 @@
+@@ -100,9 +101,13 @@
          // Callbacks are called in any order, so we keep two timers to make
          // sure we can get the latency right, otherwise we could be compute the
          // latency with last_pkt_at < last_req_at, which isn't true since the
@@ -58,7 +55,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
          if (!evbuffer_get_length(gw->write_buf)) {
              event_del(gw->write_ev);
          }
-@@ -133,6 +138,7 @@
+@@ -121,6 +126,7 @@
      );
      lgtd_debug("GET_LIGHT_STATE --> [%s]:%hu", gw->ip_addr, gw->port);
      lgtd_lifx_gateway_send_packet(gw, &hdr, NULL, 0);
@@ -66,7 +63,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  }
  
  static void
-@@ -361,21 +367,30 @@
+@@ -349,21 +355,30 @@
  
      int latency = gw->last_pkt_at - gw->last_req_at;
      if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
@@ -112,7 +109,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 diff --git a/lifx/gateway.h b/lifx/gateway.h
 --- a/lifx/gateway.h
 +++ b/lifx/gateway.h
-@@ -57,6 +57,7 @@
+@@ -45,6 +45,7 @@
      lgtd_time_mono_t                last_pkt_at;
      struct event                    *write_ev;
      struct evbuffer                 *write_buf;

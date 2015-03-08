@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  826e7b449681ca18d5dece32e4aa2daae42545d9
+# Parent 89d365304ace0dc97cae4a24802e4a2aa1ce4372
 Forgot to add this unit test earlier
 
 diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c

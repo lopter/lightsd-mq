@@ -1,11 +1,11 @@
 # HG changeset patch
-# Parent dddc04fa22a3b54d5e78859a7dcc03281369966e
+# Parent 65193deb9c4ec4ec4cab9f9e60f0bd66886b19f2
 Fix crash on newline in the jsonrpc code
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
-@@ -229,7 +229,9 @@
+@@ -217,7 +217,9 @@
                                                   int ntokens,
                                                   const char *json)
  {
@@ -16,7 +16,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  
      for (int ti = 1; ti < ntokens;) {
          // make sure it's a key:
-@@ -313,7 +315,9 @@
+@@ -301,7 +303,9 @@
                                                    int ntokens,
                                                    const char *json)
  {
@@ -27,7 +27,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  
      int si, ti;
      for (si = 0, ti = 1; si < schema_size && ti < ntokens; si++) {
-@@ -673,7 +677,7 @@
+@@ -661,7 +665,7 @@
      };
  
      assert(client);

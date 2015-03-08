@@ -1,3 +1,5 @@
+switch_license_to_gpl3.patch
+remove_useless_file.patch
 add_missing_unit_tests.patch
 fix_segfault_when_no_request_id.patch
 retry_logic_experimentation.patch

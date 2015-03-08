@@ -1,12 +1,12 @@
 # HG changeset patch
-# Parent 405ca3973da0c043c9f303944419a712eb326f84
+# Parent d99da428a95a1bdff96b2851735d9c10655a5f60
 # Parent  772eb953c9a1f382eca8723d7eff3b85dc220bf0
 Experiment some retry logic on power_on/power_off
 
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
-@@ -60,6 +60,15 @@
+@@ -48,6 +48,15 @@
          );
          assert(pkt_infos);
          lgtd_lifx_gateway_send_packet(gw, &hdr, pkt, pkt_infos->size);
@@ -25,7 +25,7 @@ diff --git a/core/router.c b/core/router.c
 diff --git a/lifx/bulb.h b/lifx/bulb.h
 --- a/lifx/bulb.h
 +++ b/lifx/bulb.h
-@@ -51,6 +51,8 @@
+@@ -39,6 +39,8 @@
      uint8_t                         addr[LGTD_LIFX_ADDR_LENGTH];
      struct lgtd_lifx_light_state    state;
      lgtd_time_mono_t                last_light_state_at;
@@ -37,7 +37,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -344,6 +344,21 @@
+@@ -332,6 +332,21 @@
          b, (const struct lgtd_lifx_light_state *)pkt, gw->last_pkt_at
      );
  
@@ -62,7 +62,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 diff --git a/lifx/timer.c b/lifx/timer.c
 --- a/lifx/timer.c
 +++ b/lifx/timer.c
-@@ -108,6 +108,7 @@
+@@ -96,6 +96,7 @@
              );
              lgtd_lifx_bulb_close(bulb);
              start_discovery = true;

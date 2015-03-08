@@ -1,11 +1,11 @@
 # HG changeset patch
-# Parent 1eb4be87019155d10d749d15e4df369aeffce5cc
+# Parent 9a7aa276a781cc6301ac732c37720d8ad8e5eebd
 Re-transmit power_on & power_off via device address
 
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -356,12 +356,24 @@
+@@ -344,12 +344,24 @@
          if (b->expected_power_on == b->state.power) {
              lgtd_warnx("clearing dirty_at on %s", b->state.label);
              b->dirty_at = 0;
