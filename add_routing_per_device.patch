@@ -155,6 +155,18 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (!bulb) {
          bulb = lgtd_lifx_bulb_open(gw, bulb_addr);
          if (bulb) {
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -208,7 +208,7 @@
+         hdr->target.tags = target.tags;
+         break;
+     case LGTD_LIFX_TARGET_DEVICE:
+-        hdr->protocol.addressable = false;
++        hdr->protocol.addressable = true;
+         memcpy(hdr->target.device_addr, target.addr, LGTD_LIFX_ADDR_LENGTH);
+         break;
+     case LGTD_LIFX_TARGET_ALL_DEVICES:
 diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
 --- a/tests/core/jsonrpc/CMakeLists.txt
 +++ b/tests/core/jsonrpc/CMakeLists.txt
@@ -272,6 +284,113 @@ new file mode 100644
 +            );
 +        }
 +    }
++
++    return 0;
++}
+diff --git a/tests/core/router/test_router_device.c b/tests/core/router/test_router_device.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/router/test_router_device.c
+@@ -0,0 +1,58 @@
++#include "router.c"
++
++#include "tests_utils.h"
++#include "tests_router_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
++    struct lgtd_lifx_bulb *bulb_1 = lgtd_tests_insert_mock_bulb(gw_1, 1);
++    struct lgtd_lifx_gateway *gw_2 = lgtd_tests_insert_mock_gateway(2);
++    lgtd_tests_insert_mock_bulb(gw_2, 2);
++
++    struct lgtd_lifx_packet_power_state payload = {
++        .power = LGTD_LIFX_POWER_ON
++    };
++    lgtd_router_send("1", LGTD_LIFX_SET_POWER_STATE, &payload);
++
++    if (lgtd_tests_gw_pkt_queue_size != 1) {
++        lgtd_errx(1, "1 packet should have been sent");
++    }
++
++    struct lgtd_lifx_gateway *recpt_gw = lgtd_tests_gw_pkt_queue[0].gw;
++    struct lgtd_lifx_packet_header *hdr_queued = lgtd_tests_gw_pkt_queue[0].hdr;
++    const void *pkt_queued = lgtd_tests_gw_pkt_queue[0].pkt;
++    int pkt_size = lgtd_tests_gw_pkt_queue[0].pkt_size;
++
++    if (recpt_gw != gw_1) {
++        lgtd_errx(1, "the packet has been sent to the wrong gateway");
++    }
++
++    if (!hdr_queued->protocol.addressable || hdr_queued->protocol.tagged) {
++        lgtd_errx(1, "the packet header doesn't have the right protocol flags");
++    }
++
++    if (memcmp(hdr_queued->target.device_addr, bulb_1->addr, sizeof(bulb_1->addr))) {
++        lgtd_errx(1, "the packet header doesn't have the right target address");
++    }
++
++    if (memcmp(gw_1->site, hdr_queued->site, sizeof(hdr_queued->site))) {
++        lgtd_errx(1, "incorrect site in the headers");
++    }
++
++    if (pkt_queued != &payload) {
++        lgtd_errx(1, "invalid payload");
++    }
++
++    if (pkt_size != sizeof(payload)) {
++        lgtd_errx(
++            1, "unexpected pkt size %d (expected %ld)",
++            pkt_size, sizeof(payload)
++        );
++    }
++
++    return 0;
++}
+diff --git a/tests/core/router/test_router_invalid_targets.c b/tests/core/router/test_router_invalid_targets.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/router/test_router_invalid_targets.c
+@@ -0,0 +1,39 @@
++#include "router.c"
++
++#include "tests_utils.h"
++#include "tests_router_utils.h"
++
++void
++test_target(const char *target)
++{
++    struct lgtd_lifx_packet_power_state payload = {
++        .power = LGTD_LIFX_POWER_ON
++    };
++    bool ok = lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &payload);
++    if (ok) {
++        lgtd_errx(1, "router_send didn't return false for an unknown device");
++    }
++    if (lgtd_tests_gw_pkt_queue_size) {
++        lgtd_errx(1, "no packets should have been sent");
++    }
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
++    lgtd_tests_insert_mock_bulb(gw_1, 1);
++    struct lgtd_lifx_gateway *gw_2 = lgtd_tests_insert_mock_gateway(2);
++    lgtd_tests_insert_mock_bulb(gw_2, 2);
++
++    test_target("4");
++    test_target("-1");
++    test_target("blabla");
++    test_target("**");
++    test_target("ffffffffffffffffffffffffff");
++    test_target("");
 +
 +    return 0;
 +}
@@ -447,7 +566,7 @@ rename to tests/core/tests_utils.c
 +    union {
 +        uint8_t     as_array[LGTD_LIFX_ADDR_LENGTH];
 +        uint64_t    as_scalar;
-+    } bulb_addr = { .as_scalar = htobe64(addr) };
++    } bulb_addr = { .as_scalar = htobe64(addr) >> 16 };
 +
 +    return lgtd_lifx_bulb_open(gw, bulb_addr.as_array);
  }
@@ -461,7 +580,7 @@ new file mode 100644
 diff --git a/tests/lightsc b/tests/lightsc
 --- a/tests/lightsc
 +++ b/tests/lightsc
-@@ -18,30 +18,31 @@
+@@ -18,30 +18,34 @@
      print(response)
  
  
@@ -488,7 +607,10 @@ diff --git a/tests/lightsc b/tests/lightsc
      s = socket.create_connection(("localhost", 1234))
      h = 0
      id = 0
-+    target = "*"  # "d073d500603b"
++    nb = "d073d501a0d5"
++    fugu = "d073d500603b"
++    neko = "d073d5018fb6"
++    target = "*"
      try:
 -        power_on(s, id)
 +        power_on(s, id, target)
