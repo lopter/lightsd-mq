@@ -1,9 +1,7 @@
 # HG changeset patch
 # Parent f3d6e5762be9d62df241359e696d816c76842f69
+# Parent  f3d6e5762be9d62df241359e696d816c76842f69
 Add the set_waveform command
-
-
-
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
@@ -69,7 +67,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              lgtd_jsonrpc_type_integer,
              false
          ),
-@@ -633,6 +634,173 @@
+@@ -633,6 +634,172 @@
  }
  
  static void
@@ -211,8 +209,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +    int skew_ratio = lgtd_jsonrpc_float_range_to_uint16(
 +        &json[params.skew_ratio->start],
 +        LGTD_JSONRPC_TOKEN_LEN(params.skew_ratio),
-+        0,
-+        1
++        0, 1
 +    );
 +    skew_ratio -= UINT16_MAX / 2;
 +    bool transient = json[params.transient->start] == 't';
@@ -243,7 +240,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  lgtd_jsonrpc_check_and_call_power_off(struct lgtd_client *client,
                                        const struct lgtd_jsonrpc_request *request,
                                        const char *json)
-@@ -674,6 +842,11 @@
+@@ -674,6 +841,11 @@
              "set_light_from_hsbk", 6, // t, h, s, b, k, t
              lgtd_jsonrpc_check_and_call_set_light_from_hsbk
          ),
@@ -255,6 +252,60 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      };
  
      assert(client);
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -74,3 +74,37 @@
+     lgtd_lifx_wire_encode_light_color(&pkt);
+     return lgtd_router_send(target, LGTD_LIFX_SET_LIGHT_COLOR, &pkt);
+ }
++
++bool lgtd_proto_set_waveform(const char *target,
++                             enum lgtd_lifx_waveform_type waveform,
++                             int hue, int saturation,
++                             int brightness, int kelvin,
++                             int period, float cycles,
++                             int skew_ratio, bool transient)
++{
++    assert(target);
++    assert(hue >= 0 && hue <= UINT16_MAX);
++    assert(saturation >= 0 && saturation <= UINT16_MAX);
++    assert(brightness >= 0 && brightness <= UINT16_MAX);
++    assert(kelvin >= 2500 && kelvin <= 9000);
++    assert(waveform <= LGTD_LIFX_WAVEFORM_PULSE);
++    assert(skew_ratio >= -32767 && skew_ratio <= 32768);
++    assert(period >= 0);
++    assert(cycles >= 0);
++
++    struct lgtd_lifx_packet_waveform pkt = {
++        .stream = 0,
++        .transient = transient,
++        .hue = hue,
++        .saturation = saturation,
++        .brightness = brightness,
++        .kelvin = kelvin,
++        .period = period,
++        .cycles = cycles,
++        .skew_ratio = skew_ratio,
++        .waveform = waveform
++    };
++
++    lgtd_lifx_wire_encode_waveform(&pkt);
++    return lgtd_router_send(target, LGTD_LIFX_SET_WAVEFORM, &pkt);
++}
+diff --git a/core/proto.h b/core/proto.h
+--- a/core/proto.h
++++ b/core/proto.h
+@@ -18,5 +18,9 @@
+ #pragma once
+ 
+ bool lgtd_proto_set_light_from_hsbk(const char *, int, int, int, int, int);
++bool lgtd_proto_set_waveform(const char *,
++                             enum lgtd_lifx_waveform_type,
++                             int, int, int, int,
++                             int, float, int, bool);
+ bool lgtd_proto_power_on(const char *);
+ bool lgtd_proto_power_off(const char *);
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 --- a/docs/protocol.rst
 +++ b/docs/protocol.rst
@@ -306,6 +357,26 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 +                          its original state.
  
  .. vim: set tw=80 spelllang=en spell:
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -270,3 +270,16 @@
+     pkt->kelvin = htole16(pkt->kelvin);
+     pkt->transition = htole32(pkt->transition);
+ }
++
++void
++lgtd_lifx_wire_encode_waveform(struct lgtd_lifx_packet_waveform *pkt)
++{
++    assert(pkt);
++
++    pkt->hue = htole16(pkt->hue);
++    pkt->saturation = htole16(pkt->saturation);
++    pkt->brightness = htole16(pkt->brightness);
++    pkt->kelvin = htole16(pkt->kelvin);
++    pkt->period = htole16(pkt->period);
++    pkt->skew_ratio = htole16(pkt->skew_ratio);
++}
 diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 --- a/lifx/wire_proto.h
 +++ b/lifx/wire_proto.h
@@ -337,3 +408,8 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  #pragma pack(pop)
  
  struct lgtd_lifx_gateway;
+@@ -222,3 +243,4 @@
+ void lgtd_lifx_wire_decode_power_state(struct lgtd_lifx_packet_power_state *);
+ 
+ void lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *);
++void lgtd_lifx_wire_encode_waveform(struct lgtd_lifx_packet_waveform *pkt);
