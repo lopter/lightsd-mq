@@ -4,10 +4,231 @@ Allow the target argument to be a list
 
 We actually need that to support tagging.
 
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -1,4 +1,3 @@
+-// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
+ //
+ // This file is part of lighstd.
+ //
+@@ -155,6 +154,13 @@
+ }
+ 
+ static bool
++lgtd_jsonrpc_type_array(const jsmntok_t *t, const char *json)
++{
++    (void)json;
++    return t->type == JSMN_ARRAY;
++}
++
++static bool
+ lgtd_jsonrpc_type_object_or_array(const jsmntok_t *t, const char *json)
+ {
+     (void)json;
+@@ -167,7 +173,14 @@
+ {
+     return lgtd_jsonrpc_type_number(t, json)
+         || lgtd_jsonrpc_type_null(t, json)
+-        || t->type == JSMN_STRING;
++        || lgtd_jsonrpc_type_string(t, json);
++}
++
++static bool
++lgtd_jsonrpc_type_string_or_array(const jsmntok_t *t, const char *json)
++{
++    return lgtd_jsonrpc_type_string(t, json)
++        || lgtd_jsonrpc_type_array(t, json);
+ }
+ 
+ static int
+@@ -465,24 +478,6 @@
+     return false;
+ }
+ 
+-static char *
+-lgtd_jsonrpc_dup_target(struct lgtd_client *client,
+-                        const struct lgtd_jsonrpc_request *request,
+-                        const char *json,
+-                        const jsmntok_t *t)
+-{
+-    char *target = strndup(
+-        &json[t->start], LGTD_JSONRPC_TOKEN_LEN(t)
+-    );
+-    if (!target) {
+-        lgtd_jsonrpc_send_error(
+-            client, request, json, LGTD_JSONRPC_INTERNAL_ERROR,
+-            "Shit's on fire, yo"
+-        );
+-    }
+-    return target;
+-}
+-
+ static void
+ lgtd_jsonrpc_check_and_call_set_light_from_hsbk(struct lgtd_client *client,
+                                                 const struct lgtd_jsonrpc_request *request,
+@@ -500,7 +495,7 @@
+         LGTD_JSONRPC_NODE(
+             "target",
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target),
+-            lgtd_jsonrpc_type_string,
++            lgtd_jsonrpc_type_string_or_array,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+@@ -566,14 +561,16 @@
+         goto error_invalid_params;
+     }
+ 
+-    char *target;
+-    target = lgtd_jsonrpc_dup_target(client, request, json, params.target);
+-    if (!target) {
+-        return;
++    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
++    ok = lgtd_jsonrpc_build_target_list(
++        &targets, client, request, json, params.target
++    );
++    if (!ok) {
++        goto error_invalid_params;
+     }
+ 
+-    ok = lgtd_proto_set_light_from_hsbk(target, h, s, b, k, t);
+-    free(target);
++    ok = lgtd_proto_set_light_from_hsbk(&targets, h, s, b, k, t);
++    lgtd_proto_target_list_clear(&targets);
+     if (ok) {
+         lgtd_jsonrpc_send_response(client, request, json, "true");
+         return;
+@@ -586,28 +583,27 @@
+     );
+ }
+ 
+-static char *
+-lgtd_jsonrpc_extract_target_only(struct lgtd_client *client,
++static bool
++lgtd_jsonrpc_extract_target_list(struct lgtd_proto_target_list *targets,
++                                 struct lgtd_client *client,
+                                  const struct lgtd_jsonrpc_request *request,
+                                  const char *json)
+ {
+     const jsmntok_t *target = NULL;
+     static const struct lgtd_jsonrpc_node schema[] = {
+-        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string, false)
++        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string_or_array, false)
+     };
+ 
+     bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
+         &target, schema, 1, request->params, request->params_ntokens, json
+     );
+     if (!ok) {
+-        lgtd_jsonrpc_send_error(
+-            client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
+-            "Invalid parameters"
+-        );
+-        return NULL;
++        return false;
+     }
+ 
+-    return lgtd_jsonrpc_dup_target(client, request, json, target);
++    return lgtd_jsonrpc_build_target_list(
++        &targets, client, request, json, target
++    );
+ }
+ 
+ static void
+@@ -616,18 +612,20 @@
+                                      const char *json)
+ {
+ 
+-    char *target = lgtd_jsonrpc_extract_target_only(client, request, json);
+-    if (!target) {
+-        return;
++    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
++    bool ok = lgtd_jsonrpc_extract_target_list(&targets, client, request, json);
++    if (!ok) {
++        goto error;
+     }
+ 
+-    bool ok = lgtd_proto_power_on(target);
+-    free(target);
++    ok = lgtd_proto_power_on(&targets);
++    lgtd_proto_target_list_clear(&targets);
+     if (ok) {
+         lgtd_jsonrpc_send_response(client, request, json, "true");
+         return;
+     }
+ 
++error:
+     lgtd_jsonrpc_send_error(
+         client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
+         "Invalid parameters"
+@@ -655,7 +653,7 @@
+         LGTD_JSONRPC_NODE(
+             "target",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, target),
+-            lgtd_jsonrpc_type_string,
++            lgtd_jsonrpc_type_string_or_array,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+@@ -764,18 +762,18 @@
+     skew_ratio -= UINT16_MAX / 2;
+     bool transient = json[params.transient->start] == 't';
+ 
+-
+-    char *target;
+-    target = lgtd_jsonrpc_dup_target(client, request, json, params.target);
+-    if (!target) {
+-        return;
++    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
++    ok = lgtd_jsonrpc_build_target_list(
++        &targets, client, request, json, params.target
++    );
++    if (!ok) {
++        goto error_invalid_params;
+     }
+ 
+-    lgtd_proto_set_waveform(
+-        target, waveform, h, s, b, k, period, cycles, skew_ratio, transient
++    ok = lgtd_proto_set_waveform(
++        &targets, waveform, h, s, b, k, period, cycles, skew_ratio, transient
+     );
+-
+-    free(target);
++    lgtd_proto_target_list_clear(&targets);
+     if (ok) {
+         lgtd_jsonrpc_send_response(client, request, json, "true");
+         return;
+@@ -794,18 +792,20 @@
+                                       const char *json)
+ {
+ 
+-    char *target = lgtd_jsonrpc_extract_target_only(client, request, json);
+-    if (!target) {
+-        return;
++    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
++    bool ok = lgtd_jsonrpc_extract_target_list(&targets, client, request, json);
++    if (!ok) {
++        goto error;
+     }
+ 
+-    bool ok = lgtd_proto_power_off(target);
+-    free(target);
++    ok = lgtd_proto_power_off(&targets);
++    lgtd_proto_target_list_clear(&targets);
+     if (ok) {
+         lgtd_jsonrpc_send_response(client, request, json, "true");
+         return;
+     }
+ 
++error:
+     lgtd_jsonrpc_send_error(
+         client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
+         "Invalid parameters"
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
 +++ b/core/proto.h
-@@ -17,10 +17,16 @@
+@@ -17,10 +17,20 @@
  
  #pragma once
  
@@ -18,6 +239,10 @@ diff --git a/core/proto.h b/core/proto.h
 +    const char                      target[];
 +};
 +SLIST_HEAD(lgtd_proto_target_list, lgtd_proto_target);
++
++void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *);
++const struct lgtd_proto_target *lgtd_proto_target_list_add(struct lgtd_proto_target_list *,
++                                                           const char *, int);
 +
 +bool lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *, int, int, int, int, int);
 +bool lgtd_proto_set_waveform(const struct lgtd_proto_target_list *,
