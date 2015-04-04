@@ -42,7 +42,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  }
  
  static int
-@@ -465,24 +478,6 @@
+@@ -465,22 +478,14 @@
      return false;
  }
  
@@ -51,7 +51,13 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -                        const struct lgtd_jsonrpc_request *request,
 -                        const char *json,
 -                        const jsmntok_t *t)
--{
++static bool
++lgtd_jsonrpc_build_target_list(struct lgtd_proto_target_list *targets,
++                               struct lgtd_client *client,
++                               const struct lgtd_jsonrpc_request *request,
++                               const char *json,
++                               jsmntok_t *target)
+ {
 -    char *target = strndup(
 -        &json[t->start], LGTD_JSONRPC_TOKEN_LEN(t)
 -    );
@@ -62,12 +68,11 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -        );
 -    }
 -    return target;
--}
--
++
+ }
+ 
  static void
- lgtd_jsonrpc_check_and_call_set_light_from_hsbk(struct lgtd_client *client,
-                                                 const struct lgtd_jsonrpc_request *request,
-@@ -500,7 +495,7 @@
+@@ -500,7 +505,7 @@
          LGTD_JSONRPC_NODE(
              "target",
              offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target),
@@ -76,7 +81,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -566,14 +561,16 @@
+@@ -566,14 +571,16 @@
          goto error_invalid_params;
      }
  
@@ -99,7 +104,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -586,28 +583,27 @@
+@@ -586,28 +593,27 @@
      );
  }
  
@@ -136,7 +141,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  }
  
  static void
-@@ -616,18 +612,20 @@
+@@ -616,18 +622,20 @@
                                       const char *json)
  {
  
@@ -162,7 +167,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      lgtd_jsonrpc_send_error(
          client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
          "Invalid parameters"
-@@ -655,7 +653,7 @@
+@@ -655,7 +663,7 @@
          LGTD_JSONRPC_NODE(
              "target",
              offsetof(struct lgtd_jsonrpc_set_waveform_args, target),
@@ -171,7 +176,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -764,18 +762,18 @@
+@@ -764,18 +772,18 @@
      skew_ratio -= UINT16_MAX / 2;
      bool transient = json[params.transient->start] == 't';
  
@@ -199,7 +204,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -794,18 +792,20 @@
+@@ -794,18 +802,20 @@
                                        const char *json)
  {
  
@@ -225,6 +230,70 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      lgtd_jsonrpc_send_error(
          client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
          "Invalid parameters"
+diff --git a/core/jsonrpc.h b/core/jsonrpc.h
+--- a/core/jsonrpc.h
++++ b/core/jsonrpc.h
+@@ -39,7 +39,7 @@
+ #define LGTD_JSONRPC_GET_JSMNTOK(object, value_offset)          \
+     *(const jsmntok_t **)(&((char *)(object))[value_offset]);   \
+ 
+-#define LGTD_JSONRPC_NODE(key_, value_offset_, fn_type_cmp, optional_)   { \
++#define LGTD_JSONRPC_NODE(key_, value_offset_, fn_type_cmp, optional_)   {  \
+     .key = (key_),                                                          \
+     .keylen = sizeof((key_)) - 1,                                           \
+     .value_offset = (value_offset_),                                        \
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -31,7 +31,7 @@
+ #include "lightsd.h"
+ 
+ bool
+-lgtd_proto_power_on(const char *target)
++lgtd_proto_power_on(const struct lgtd_proto_target_list *targets)
+ {
+     assert(target);
+ 
+@@ -40,16 +40,16 @@
+ }
+ 
+ bool
+-lgtd_proto_power_off(const char *target)
++lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
+ {
+     assert(target);
+ 
+     struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
+-    return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
++    return lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
+ }
+ 
+ bool
+-lgtd_proto_set_light_from_hsbk(const char *target,
++lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *targets,
+                                int hue,
+                                int saturation,
+                                int brightness,
+@@ -72,10 +72,10 @@
+         .transition = transition_msecs
+     };
+     lgtd_lifx_wire_encode_light_color(&pkt);
+-    return lgtd_router_send(target, LGTD_LIFX_SET_LIGHT_COLOR, &pkt);
++    return lgtd_router_send(targets, LGTD_LIFX_SET_LIGHT_COLOR, &pkt);
+ }
+ 
+-bool lgtd_proto_set_waveform(const char *target,
++bool lgtd_proto_set_waveform(const struct lgtd_proto_target_list *targets,
+                              enum lgtd_lifx_waveform_type waveform,
+                              int hue, int saturation,
+                              int brightness, int kelvin,
+@@ -106,5 +106,5 @@
+     };
+ 
+     lgtd_lifx_wire_encode_waveform(&pkt);
+-    return lgtd_router_send(target, LGTD_LIFX_SET_WAVEFORM, &pkt);
++    return lgtd_router_send(targets, LGTD_LIFX_SET_WAVEFORM, &pkt);
+ }
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
 +++ b/core/proto.h
@@ -236,7 +305,7 @@ diff --git a/core/proto.h b/core/proto.h
 -bool lgtd_proto_set_waveform(const char *,
 +struct lgtd_proto_target {
 +    SLIST_ENTRY(lgtd_proto_target)  link;
-+    const char                      target[];
++    char                            target[];
 +};
 +SLIST_HEAD(lgtd_proto_target_list, lgtd_proto_target);
 +
@@ -253,3 +322,78 @@ diff --git a/core/proto.h b/core/proto.h
 -bool lgtd_proto_power_off(const char *);
 +bool lgtd_proto_power_on(const struct lgtd_proto_target_list *);
 +bool lgtd_proto_power_off(const struct lgtd_proto_target_list *);
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -95,36 +95,37 @@
+ }
+ 
+ bool
+-lgtd_router_send(const char *target,
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
+                  enum lgtd_lifx_packet_type pkt_type,
+                  void *pkt)
+ {
+     assert(target);
+ 
+-    if (!strcmp(target, "*")) {
+-        lgtd_router_broadcast(pkt_type, pkt);
+-        return true;
++    bool rv = true;
++
++    const struct lgtd_proto_target *target;
++    SLIST_FOREACH(target, targets, link) {
++        if (!strcmp(target->target, "*")) {
++            lgtd_router_broadcast(pkt_type, pkt);
++        } else if (isxdigit(target->target[0])) {
++            const char *endptr = NULL;
++            errno = 0;
++            long long device = strtoll(target->target, (char **)&endptr, 16);
++            if (*endptr || errno == ERANGE) {
++                lgtd_debug("invalid target device %s", target->target);
++                rv = false;
++            }
++            device = htobe64(device);
++            struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(
++                (uint8_t *)&device + sizeof(device) - LGTD_LIFX_ADDR_LENGTH
++            );
++            if (!bulb) {
++                lgtd_debug("target device %#llx not found", device);
++                rv = false;
++            }
++            lgtd_router_device(bulb, pkt_type, pkt);
++        }
+     }
+ 
+-    if (isxdigit(target[0])) {
+-        const char *endptr = NULL;
+-        errno = 0;
+-        long long device = strtoll(target, (char **)&endptr, 16);
+-        if (*endptr || errno == ERANGE) {
+-            lgtd_debug("invalid target device %s", target);
+-            return false;
+-        }
+-        device = htobe64(device);
+-        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(
+-            (uint8_t *)&device + sizeof(device) - LGTD_LIFX_ADDR_LENGTH
+-        );
+-        if (!bulb) {
+-            lgtd_debug("target device %#llx not found", device);
+-            return false;
+-        }
+-        lgtd_router_device(bulb, pkt_type, pkt);
+-        return true;
+-    }
+-
+-    return false;
++    return rv;
+ }
+diff --git a/core/router.h b/core/router.h
+--- a/core/router.h
++++ b/core/router.h
+@@ -17,4 +17,4 @@
+ 
+ #pragma once
+ 
+-bool lgtd_router_send(const char *, enum lgtd_lifx_packet_type, void *);
++bool lgtd_router_send(const struct lgtd_proto_target_list *, enum lgtd_lifx_packet_type, void *);
