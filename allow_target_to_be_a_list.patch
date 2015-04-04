@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  6f2644d079c169a459e3f5d23129abbf9c56fc12
+# Parent 6f2644d079c169a459e3f5d23129abbf9c56fc12
 Allow the target argument to be a list
 
 We actually need that to support tagging.
@@ -42,8 +42,111 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  }
  
  static int
-@@ -465,22 +478,14 @@
-     return false;
+@@ -229,7 +242,8 @@
+             return false;
+         }
+ 
+-        for (int si = 0;; si++) {
++        int si = 0;
++        for (;; si++) {
+             if (si == schema_size) {
+                 ti++; // nothing matched, skip the key
+                 break;
+@@ -272,6 +286,7 @@
+ 
+         // skip the value, if it's an object or an array we need to
+         // skip everything in it:
++        int value_ntokens = ti;
+         if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
+             ti = lgtd_jsonrpc_consume_object_or_array(
+                 tokens, ti, ntokens, json
+@@ -279,6 +294,12 @@
+         } else {
+             ti++;
+         }
++        value_ntokens = ti - value_ntokens;
++        if (si < schema_size && schema[si].ntokens_offset != -1) {
++            LGTD_JSONRPC_SET_NTOKENS(
++                output, schema[si].ntokens_offset, value_ntokens
++            );
++        }
+     }
+ 
+     for (int si = 0; si != schema_size; si++) {
+@@ -325,6 +346,7 @@
+         }
+         // skip the value, if it's an object or an array we need to
+         // skip everything in it:
++        int value_ntokens = ti;
+         if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
+             ti = lgtd_jsonrpc_consume_object_or_array(
+                 tokens, ti, ntokens, json
+@@ -332,6 +354,12 @@
+         } else {
+             ti++;
+         }
++        value_ntokens = ti - value_ntokens;
++        if (schema[si].ntokens_offset != -1) {
++            LGTD_JSONRPC_SET_NTOKENS(
++                output, schema[si].ntokens_offset, value_ntokens
++            );
++        }
+     }
+ 
+     return si == schema_size;
+@@ -419,29 +447,32 @@
+ {
+     static const struct lgtd_jsonrpc_node request_schema[] = {
+         LGTD_JSONRPC_NODE(
+-            "jsonrpc", -1, lgtd_jsonrpc_type_string, false
++            "jsonrpc", -1, -1, lgtd_jsonrpc_type_string, false
+         ),
+         LGTD_JSONRPC_NODE(
+             "method",
+             offsetof(struct lgtd_jsonrpc_request, method),
++            -1,
+             lgtd_jsonrpc_type_string,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "params",
+             offsetof(struct lgtd_jsonrpc_request, params),
++            offsetof(struct lgtd_jsonrpc_request, params_ntokens),
+             lgtd_jsonrpc_type_object_or_array,
+             true
+         ),
+         LGTD_JSONRPC_NODE(
+             "id",
+             offsetof(struct lgtd_jsonrpc_request, id),
++            -1,
+             lgtd_jsonrpc_type_string_number_or_null,
+             true
+         )
+     };
+ 
+-    bool ok = lgtd_jsonrpc_extract_values_from_schema_and_dict(
++    return lgtd_jsonrpc_extract_values_from_schema_and_dict(
+         request,
+         request_schema,
+         LGTD_ARRAY_SIZE(request_schema),
+@@ -449,38 +480,20 @@
+         ntokens,
+         json
+     );
+-    if (ok) {
+-        // XXX We already do that from extract_values_from_schema_and_dict:
+-        if (request->params) {
+-            const jsmntok_t *params = request->params;
+-            int params_ti = params - tokens;
+-            while (params[request->params_ntokens].start < params->end
+-                   && params_ti + request->params_ntokens < ntokens) {
+-                request->params_ntokens++;
+-            }
+-        }
+-        return true;
+-    }
+-
+-    return false;
  }
  
 -static char *
@@ -54,9 +157,9 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +static bool
 +lgtd_jsonrpc_build_target_list(struct lgtd_proto_target_list *targets,
 +                               struct lgtd_client *client,
-+                               const struct lgtd_jsonrpc_request *request,
-+                               const char *json,
-+                               jsmntok_t *target)
++                               jsmntok_t *target,
++                               int target_ntokens,
++                               const char *json)
  {
 -    char *target = strndup(
 -        &json[t->start], LGTD_JSONRPC_TOKEN_LEN(t)
@@ -68,20 +171,71 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -        );
 -    }
 -    return target;
-+
++    assert(targets);
++    assert(client);
++    assert(target);
++    assert(target_ntokens >= 1);
++    assert(json);
  }
  
  static void
-@@ -500,7 +505,7 @@
+@@ -490,46 +503,53 @@
+ {
+     struct lgtd_jsonrpc_set_light_from_hsbk_args {
+         const jsmntok_t *target;
++        int             target_ntokens;
+         const jsmntok_t *h;
+         const jsmntok_t *s;
+         const jsmntok_t *b;
+         const jsmntok_t *k;
+         const jsmntok_t *t;
+-    } params = { NULL, NULL, NULL, NULL, NULL, NULL };
++    } params = { NULL, 0, NULL, NULL, NULL, NULL, NULL };
+     static const struct lgtd_jsonrpc_node schema[] = {
          LGTD_JSONRPC_NODE(
              "target",
              offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target),
 -            lgtd_jsonrpc_type_string,
++            offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target_ntokens),
 +            lgtd_jsonrpc_type_string_or_array,
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -566,14 +571,16 @@
+             "hue",
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, h),
++            -1,
+             lgtd_jsonrpc_type_float_between_0_and_360,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "saturation",
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, s),
++            -1,
+             lgtd_jsonrpc_type_float_between_0_and_1,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "brightness",
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, b),
++            -1,
+             lgtd_jsonrpc_type_float_between_0_and_1,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "kelvin",
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, k),
++            -1,
+             lgtd_jsonrpc_type_integer,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "transition",
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, t),
++            -1,
+             lgtd_jsonrpc_type_integer,
+             false
+         ),
+@@ -566,14 +586,16 @@
          goto error_invalid_params;
      }
  
@@ -91,7 +245,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -        return;
 +    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
 +    ok = lgtd_jsonrpc_build_target_list(
-+        &targets, client, request, json, params.target
++        &targets, client, params.target, params.target_ntokens, json
 +    );
 +    if (!ok) {
 +        goto error_invalid_params;
@@ -104,7 +258,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -586,28 +593,27 @@
+@@ -586,28 +608,28 @@
      );
  }
  
@@ -117,9 +271,10 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
                                   const char *json)
  {
      const jsmntok_t *target = NULL;
++    int target_ntokens = 0;
      static const struct lgtd_jsonrpc_node schema[] = {
 -        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string, false)
-+        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string_or_array, false)
++        LGTD_JSONRPC_NODE("target", 0, sizeof(*target), lgtd_jsonrpc_type_string_or_array, false)
      };
  
      bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
@@ -135,13 +290,13 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      }
  
 -    return lgtd_jsonrpc_dup_target(client, request, json, target);
-+    return lgtd_jsonrpc_build_target_list(
-+        &targets, client, request, json, target
++    ok = lgtd_jsonrpc_build_target_list(
++        &targets, client, target, target_ntokens, json
 +    );
  }
  
  static void
-@@ -616,18 +622,20 @@
+@@ -616,18 +638,20 @@
                                       const char *json)
  {
  
@@ -167,16 +322,93 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      lgtd_jsonrpc_send_error(
          client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
          "Invalid parameters"
-@@ -655,7 +663,7 @@
+@@ -641,6 +665,7 @@
+ {
+     struct lgtd_jsonrpc_set_waveform_args {
+         const jsmntok_t *target;
++        int             target_ntokens;
+         const jsmntok_t *waveform;
+         const jsmntok_t *h;
+         const jsmntok_t *s;
+@@ -650,65 +675,75 @@
+         const jsmntok_t *cycles;
+         const jsmntok_t *skew_ratio;
+         const jsmntok_t *transient;
+-    } params = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
++    } params = { NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+     static const struct lgtd_jsonrpc_node schema[] = {
          LGTD_JSONRPC_NODE(
              "target",
              offsetof(struct lgtd_jsonrpc_set_waveform_args, target),
 -            lgtd_jsonrpc_type_string,
++            offsetof(struct lgtd_jsonrpc_set_waveform_args, target_ntokens),
 +            lgtd_jsonrpc_type_string_or_array,
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -764,18 +772,18 @@
+             "waveform",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, waveform),
++            -1,
+             lgtd_jsonrpc_type_string,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "hue",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, h),
++            -1,
+             lgtd_jsonrpc_type_float_between_0_and_360,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "saturation",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, s),
++            -1,
+             lgtd_jsonrpc_type_float_between_0_and_1,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "brightness",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, b),
++            -1,
+             lgtd_jsonrpc_type_float_between_0_and_1,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "kelvin",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, k),
++            -1,
+             lgtd_jsonrpc_type_integer,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "period",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, period),
++            -1,
+             lgtd_jsonrpc_type_integer,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "cycles",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, cycles),
++            -1,
+             lgtd_jsonrpc_type_integer,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "skew_ratio",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, skew_ratio),
++            -1,
+             lgtd_jsonrpc_type_float_between_0_and_1,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+             "transient",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, transient),
++            -1,
+             lgtd_jsonrpc_type_bool,
+             false
+         ),
+@@ -764,18 +799,18 @@
      skew_ratio -= UINT16_MAX / 2;
      bool transient = json[params.transient->start] == 't';
  
@@ -187,7 +419,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -        return;
 +    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
 +    ok = lgtd_jsonrpc_build_target_list(
-+        &targets, client, request, json, params.target
++        &targets, client, params.target, params.target_ntokens, json
 +    );
 +    if (!ok) {
 +        goto error_invalid_params;
@@ -204,7 +436,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -794,18 +802,20 @@
+@@ -794,18 +829,20 @@
                                        const char *json)
  {
  
@@ -233,15 +465,41 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 --- a/core/jsonrpc.h
 +++ b/core/jsonrpc.h
-@@ -39,7 +39,7 @@
+@@ -28,6 +28,7 @@
+     const char      *key;
+     int             keylen;
+     int             value_offset;
++    int             ntokens_offset;
+     bool            (*type_cmp)(const jsmntok_t *, const char *);
+     bool            optional;
+ };
+@@ -37,14 +38,19 @@
+ } while (0)
+ 
  #define LGTD_JSONRPC_GET_JSMNTOK(object, value_offset)          \
-     *(const jsmntok_t **)(&((char *)(object))[value_offset]);   \
+-    *(const jsmntok_t **)(&((char *)(object))[value_offset]);   \
++    *(const jsmntok_t **)(&((char *)(object))[value_offset]);
  
 -#define LGTD_JSONRPC_NODE(key_, value_offset_, fn_type_cmp, optional_)   { \
-+#define LGTD_JSONRPC_NODE(key_, value_offset_, fn_type_cmp, optional_)   {  \
-     .key = (key_),                                                          \
-     .keylen = sizeof((key_)) - 1,                                           \
-     .value_offset = (value_offset_),                                        \
+-    .key = (key_),                                                          \
+-    .keylen = sizeof((key_)) - 1,                                           \
+-    .value_offset = (value_offset_),                                        \
+-    .type_cmp = (fn_type_cmp),                                              \
+-    .optional = (optional_)                                                 \
++#define LGTD_JSONRPC_SET_NTOKENS(object, ntokens_offset, ntokens) do {  \
++    *(int *)(&(((char *)(object))[ntokens_offset])) = (ntokens);          \
++} while (0)
++
++#define LGTD_JSONRPC_NODE(key_, value_offset_, ntokens_offset_, fn_type_cmp, optional_)   { \
++    .key = (key_),                                                                          \
++    .keylen = sizeof((key_)) - 1,                                                           \
++    .value_offset = (value_offset_),                                                        \
++    .ntokens_offset = (ntokens_offset_),                                                    \
++    .type_cmp = (fn_type_cmp),                                                              \
++    .optional = (optional_)                                                                 \
+ }
+ 
+ #define LGTD_JSONRPC_TOKEN_LEN(t) ((t)->end - (t)->start)
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
