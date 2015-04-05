@@ -556,46 +556,56 @@ diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -30,33 +30,44 @@
+@@ -27,36 +27,50 @@
+ #include <string.h>
+ 
+ #include "lifx/wire_proto.h"
++#include "time_monotonic.h"
++#include "lifx/bulb.h"
++#include "proto.h"
  #include "router.h"
  #include "lightsd.h"
  
+-bool
+-lgtd_proto_power_on(const char *target)
 +void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *targets)
-+{
+ {
+-    assert(target);
 +    assert(targets);
-+
+ 
+-    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
+-    return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
 +    while (!SLIST_EMPTY(targets)) {
 +        struct lgtd_proto_target *target = SLIST_FIRST(targets);
 +        SLIST_REMOVE_HEAD(targets, link);
 +        free(target);
 +    }
-+}
-+
+ }
+ 
  bool
--lgtd_proto_power_on(const char *target)
+-lgtd_proto_power_off(const char *target)
 +lgtd_proto_power_on(const struct lgtd_proto_target_list *targets)
  {
 -    assert(target);
 +    assert(targets);
  
-     struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
-     return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
- }
- 
- bool
--lgtd_proto_power_off(const char *target)
-+lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
- {
--    assert(target);
-+    assert(targets);
- 
-     struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
+-    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
 -    return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
++    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
 +    return lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
  }
  
  bool
 -lgtd_proto_set_light_from_hsbk(const char *target,
++lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
++{
++    assert(targets);
++
++    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
++    return lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
++}
++
++bool
 +lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *targets,
                                 int hue,
                                 int saturation,
@@ -608,7 +618,7 @@ diff --git a/core/proto.c b/core/proto.c
      assert(hue >= 0 && hue <= UINT16_MAX);
      assert(saturation >= 0 && saturation <= UINT16_MAX);
      assert(brightness >= 0 && brightness <= UINT16_MAX);
-@@ -72,17 +83,17 @@
+@@ -72,17 +86,17 @@
          .transition = transition_msecs
      };
      lgtd_lifx_wire_encode_light_color(&pkt);
@@ -629,7 +639,7 @@ diff --git a/core/proto.c b/core/proto.c
      assert(hue >= 0 && hue <= UINT16_MAX);
      assert(saturation >= 0 && saturation <= UINT16_MAX);
      assert(brightness >= 0 && brightness <= UINT16_MAX);
-@@ -106,5 +117,5 @@
+@@ -106,5 +120,5 @@
      };
  
      lgtd_lifx_wire_encode_waveform(&pkt);
@@ -667,7 +677,36 @@ diff --git a/core/proto.h b/core/proto.h
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
-@@ -95,36 +95,37 @@
+@@ -34,10 +34,12 @@
+ #include "lifx/wire_proto.h"
+ #include "time_monotonic.h"
+ #include "lifx/bulb.h"
++#include "proto.h"
++#include "router.h"
+ #include "lifx/gateway.h"
+ #include "lightsd.h"
+ 
+-static void
++void
+ lgtd_router_broadcast(enum lgtd_lifx_packet_type pkt_type, void *pkt)
+ {
+     struct lgtd_lifx_packet_header hdr;
+@@ -67,10 +69,10 @@
+     }
+ }
+ 
+-static void
+-lgtd_router_device(struct lgtd_lifx_bulb *bulb,
+-                   enum lgtd_lifx_packet_type pkt_type,
+-                   void *pkt)
++void
++lgtd_router_send_to_device(struct lgtd_lifx_bulb *bulb,
++                           enum lgtd_lifx_packet_type pkt_type,
++                           void *pkt)
+ {
+     assert(bulb);
+ 
+@@ -95,36 +97,39 @@
  }
  
  bool
@@ -676,7 +715,8 @@ diff --git a/core/router.c b/core/router.c
                   enum lgtd_lifx_packet_type pkt_type,
                   void *pkt)
  {
-     assert(target);
+-    assert(target);
++    assert(targets);
  
 -    if (!strcmp(target, "*")) {
 -        lgtd_router_broadcast(pkt_type, pkt);
@@ -687,6 +727,7 @@ diff --git a/core/router.c b/core/router.c
 +    SLIST_FOREACH(target, targets, link) {
 +        if (!strcmp(target->target, "*")) {
 +            lgtd_router_broadcast(pkt_type, pkt);
++            continue;
 +        } else if (isxdigit(target->target[0])) {
 +            const char *endptr = NULL;
 +            errno = 0;
@@ -699,12 +740,13 @@ diff --git a/core/router.c b/core/router.c
 +            struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(
 +                (uint8_t *)&device + sizeof(device) - LGTD_LIFX_ADDR_LENGTH
 +            );
-+            if (!bulb) {
-+                lgtd_debug("target device %#llx not found", device);
-+                rv = false;
++            if (bulb) {
++                lgtd_router_send_to_device(bulb, pkt_type, pkt);
++                continue;
 +            }
-+            lgtd_router_device(bulb, pkt_type, pkt);
++            lgtd_debug("target device %#llx not found", device);
 +        }
++        rv = false;
      }
  
 -    if (isxdigit(target[0])) {
@@ -733,12 +775,56 @@ diff --git a/core/router.c b/core/router.c
 diff --git a/core/router.h b/core/router.h
 --- a/core/router.h
 +++ b/core/router.h
-@@ -17,4 +17,4 @@
+@@ -17,4 +17,6 @@
  
  #pragma once
  
 -bool lgtd_router_send(const char *, enum lgtd_lifx_packet_type, void *);
 +bool lgtd_router_send(const struct lgtd_proto_target_list *, enum lgtd_lifx_packet_type, void *);
++void lgtd_router_send_to_device(struct lgtd_lifx_bulb *, enum lgtd_lifx_packet_type, void *);
++void lgtd_router_broadcast(enum lgtd_lifx_packet_type, void *);
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -39,6 +39,7 @@
+ #include "broadcast.h"
+ #include "timer.h"
+ #include "core/proto.h"
++#include "core/router.h"
+ #include "core/lightsd.h"
+ 
+ struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
+@@ -345,23 +346,14 @@
+             lgtd_warnx("clearing dirty_at on %s", b->state.label);
+             b->dirty_at = 0;
+         } else {
+-            char target[LGTD_LIFX_ADDR_LENGTH * 2 + 1];
+-            snprintf(
+-                target, sizeof(target), "%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx",
+-                b->addr[0], b->addr[1], b->addr[2],
+-                b->addr[3], b->addr[4], b->addr[5]
++            lgtd_warnx(
++                "retransmiting power %s to %s",
++                b->expected_power_on ? "on" : "off", b->state.label
+             );
+-            if (b->expected_power_on) {
+-                lgtd_warnx(
+-                    "retransmiting power on %s (0x%s)", b->state.label, target
+-                );
+-                lgtd_proto_power_on(target);
+-            } else {
+-                lgtd_warnx(
+-                    "retransmiting power off %s (0x%s)", b->state.label, target
+-                );
+-                lgtd_proto_power_off(target);
+-            }
++            struct lgtd_lifx_packet_power_state pkt;
++            pkt.power = b->expected_power_on ?
++                    LGTD_LIFX_POWER_ON : LGTD_LIFX_POWER_OFF;
++            lgtd_router_send_to_device(b, LGTD_LIFX_SET_POWER_STATE, &pkt);
+         }
+     }
+ 
 diff --git a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
 new file mode 100644
 --- /dev/null
@@ -1058,3 +1144,101 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_j
      (void)waveform;
      (void)hue;
      (void)saturation;
+diff --git a/tests/core/router/test_router_broadcast.c b/tests/core/router/test_router_broadcast.c
+--- a/tests/core/router/test_router_broadcast.c
++++ b/tests/core/router/test_router_broadcast.c
+@@ -14,7 +14,9 @@
+     struct lgtd_lifx_packet_power_state payload = {
+         .power = LGTD_LIFX_POWER_ON
+     };
+-    lgtd_router_send("*", LGTD_LIFX_SET_POWER_STATE, &payload);
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++    lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &payload);
+ 
+     if (lgtd_tests_gw_pkt_queue_size != 2) {
+         lgtd_errx(1, "2 packets should have been sent");
+diff --git a/tests/core/router/test_router_device.c b/tests/core/router/test_router_device.c
+--- a/tests/core/router/test_router_device.c
++++ b/tests/core/router/test_router_device.c
+@@ -16,7 +16,9 @@
+     struct lgtd_lifx_packet_power_state payload = {
+         .power = LGTD_LIFX_POWER_ON
+     };
+-    lgtd_router_send("1", LGTD_LIFX_SET_POWER_STATE, &payload);
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("1", NULL);
++    lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &payload);
+ 
+     if (lgtd_tests_gw_pkt_queue_size != 1) {
+         lgtd_errx(1, "1 packet should have been sent");
+diff --git a/tests/core/router/test_router_invalid_targets.c b/tests/core/router/test_router_invalid_targets.c
+--- a/tests/core/router/test_router_invalid_targets.c
++++ b/tests/core/router/test_router_invalid_targets.c
+@@ -9,7 +9,9 @@
+     struct lgtd_lifx_packet_power_state payload = {
+         .power = LGTD_LIFX_POWER_ON
+     };
+-    bool ok = lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &payload);
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list(target, NULL);
++    bool ok = lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &payload);
+     if (ok) {
+         lgtd_errx(1, "router_send didn't return false for an unknown device");
+     }
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -4,6 +4,7 @@
+ #include <assert.h>
+ #include <endian.h>
+ #include <netinet/in.h>
++#include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <stdint.h>
+@@ -13,6 +14,7 @@
+ 
+ #include "lifx/wire_proto.h"
+ #include "core/time_monotonic.h"
++#include "core/proto.h"
+ #include "lifx/bulb.h"
+ #include "lifx/gateway.h"
+ #include "tests_utils.h"
+@@ -45,3 +47,28 @@
+ 
+     return lgtd_lifx_bulb_open(gw, bulb_addr.as_array);
+ }
++
++struct lgtd_proto_target_list *
++lgtd_tests_build_target_list(const char *target, ...)
++{
++    struct lgtd_proto_target_list *targets = malloc(sizeof(*targets));
++    SLIST_INIT(targets);
++
++    struct lgtd_proto_target *tail = malloc(
++        sizeof(*tail) + strlen(target) + 1
++    );
++    strcpy(tail->target, target);
++    SLIST_INSERT_HEAD(targets, tail, link);
++
++    va_list ap;
++    va_start(ap, target);
++    while ((target = va_arg(ap, const char *))) {
++        struct lgtd_proto_target *t = malloc(sizeof(*t) + strlen(target) + 1);
++        strcpy(t->target, target);
++        SLIST_INSERT_AFTER(tail, t, link);
++        tail = t;
++    }
++    va_end(ap);
++
++    return targets;
++}
+diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
+--- a/tests/core/tests_utils.h
++++ b/tests/core/tests_utils.h
+@@ -2,3 +2,4 @@
+ 
+ struct lgtd_lifx_gateway *lgtd_tests_insert_mock_gateway(int);
+ struct lgtd_lifx_bulb *lgtd_tests_insert_mock_bulb(struct lgtd_lifx_gateway *, uint64_t);
++struct lgtd_proto_target_list *lgtd_tests_build_target_list(const char *, ...);
