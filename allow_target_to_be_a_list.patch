@@ -26,7 +26,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  lgtd_jsonrpc_type_object_or_array(const jsmntok_t *t, const char *json)
  {
      (void)json;
-@@ -167,7 +173,14 @@
+@@ -167,7 +173,30 @@
  {
      return lgtd_jsonrpc_type_number(t, json)
          || lgtd_jsonrpc_type_null(t, json)
@@ -35,14 +35,30 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +}
 +
 +static bool
++lgtd_jsonrpc_type_string_or_number(const jsmntok_t *t,
++                                   const char *json)
++{
++    return lgtd_jsonrpc_type_string(t, json)
++        || lgtd_jsonrpc_type_number(t, json);
++}
++
++static bool __attribute__((unused))
 +lgtd_jsonrpc_type_string_or_array(const jsmntok_t *t, const char *json)
 +{
 +    return lgtd_jsonrpc_type_string(t, json)
 +        || lgtd_jsonrpc_type_array(t, json);
++}
++
++static bool
++lgtd_jsonrpc_type_string_number_or_array(const jsmntok_t *t, const char *json)
++{
++    return lgtd_jsonrpc_type_string(t, json)
++        || lgtd_jsonrpc_type_number(t, json)
++        || lgtd_jsonrpc_type_array(t, json);
  }
  
  static int
-@@ -229,7 +242,8 @@
+@@ -229,7 +258,8 @@
              return false;
          }
  
@@ -52,7 +68,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              if (si == schema_size) {
                  ti++; // nothing matched, skip the key
                  break;
-@@ -272,6 +286,7 @@
+@@ -272,6 +302,7 @@
  
          // skip the value, if it's an object or an array we need to
          // skip everything in it:
@@ -60,7 +76,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
              ti = lgtd_jsonrpc_consume_object_or_array(
                  tokens, ti, ntokens, json
-@@ -279,6 +294,12 @@
+@@ -279,6 +310,12 @@
          } else {
              ti++;
          }
@@ -73,7 +89,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      }
  
      for (int si = 0; si != schema_size; si++) {
-@@ -325,6 +346,7 @@
+@@ -325,6 +362,7 @@
          }
          // skip the value, if it's an object or an array we need to
          // skip everything in it:
@@ -81,7 +97,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
              ti = lgtd_jsonrpc_consume_object_or_array(
                  tokens, ti, ntokens, json
-@@ -332,6 +354,12 @@
+@@ -332,6 +370,12 @@
          } else {
              ti++;
          }
@@ -94,7 +110,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      }
  
      return si == schema_size;
-@@ -419,29 +447,32 @@
+@@ -419,29 +463,32 @@
  {
      static const struct lgtd_jsonrpc_node request_schema[] = {
          LGTD_JSONRPC_NODE(
@@ -129,7 +145,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          request,
          request_schema,
          LGTD_ARRAY_SIZE(request_schema),
-@@ -449,38 +480,20 @@
+@@ -449,40 +496,62 @@
          ntokens,
          json
      );
@@ -144,9 +160,60 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -            }
 -        }
 -        return true;
--    }
--
--    return false;
++}
++
++static bool
++lgtd_jsonrpc_build_target_list(struct lgtd_proto_target_list *targets,
++                               struct lgtd_client *client,
++                               const struct lgtd_jsonrpc_request *request,
++                               const jsmntok_t *target,
++                               int target_ntokens,
++                               const char *json)
++{
++    assert(targets);
++    assert(client);
++    assert(request);
++    assert(target);
++    assert(target_ntokens >= 1);
++    assert(json);
++
++    if (lgtd_jsonrpc_type_array(target, json)) {
++        target_ntokens -= 1;
++        target++;
+     }
+ 
++    for (int ti = target_ntokens; ti--;) {
++        int token_len = LGTD_JSONRPC_TOKEN_LEN(&target[ti]);
++        if (lgtd_jsonrpc_type_string_or_number(&target[ti], json)) {
++            struct lgtd_proto_target *t = malloc(sizeof(*t) + token_len);
++            if (!t) {
++                lgtd_warn("can't allocate a new target");
++                lgtd_jsonrpc_send_error(
++                    client, request, json, LGTD_JSONRPC_INTERNAL_ERROR,
++                    "Can't allocate memory"
++                );
++                goto error;
++            }
++            memcpy(t->target, json + target[ti].start, token_len);
++            t->target[token_len] = '\0';
++            SLIST_INSERT_HEAD(targets, t, link);
++        } else {
++            lgtd_info(
++                "invalid target value %.*s", token_len, json + target[ti].start
++            );
++            lgtd_jsonrpc_send_error(
++                client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
++                "Invalid parameters"
++            );
++            goto error;
++        }
++    }
++
++    return true;
++
++error:
++    lgtd_proto_target_list_clear(targets);
+     return false;
  }
  
 -static char *
@@ -154,13 +221,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -                        const struct lgtd_jsonrpc_request *request,
 -                        const char *json,
 -                        const jsmntok_t *t)
-+static bool
-+lgtd_jsonrpc_build_target_list(struct lgtd_proto_target_list *targets,
-+                               struct lgtd_client *client,
-+                               jsmntok_t *target,
-+                               int target_ntokens,
-+                               const char *json)
- {
+-{
 -    char *target = strndup(
 -        &json[t->start], LGTD_JSONRPC_TOKEN_LEN(t)
 -    );
@@ -171,15 +232,12 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -        );
 -    }
 -    return target;
-+    assert(targets);
-+    assert(client);
-+    assert(target);
-+    assert(target_ntokens >= 1);
-+    assert(json);
- }
- 
+-}
+-
  static void
-@@ -490,46 +503,53 @@
+ lgtd_jsonrpc_check_and_call_set_light_from_hsbk(struct lgtd_client *client,
+                                                 const struct lgtd_jsonrpc_request *request,
+@@ -490,46 +559,53 @@
  {
      struct lgtd_jsonrpc_set_light_from_hsbk_args {
          const jsmntok_t *target;
@@ -197,7 +255,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target),
 -            lgtd_jsonrpc_type_string,
 +            offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target_ntokens),
-+            lgtd_jsonrpc_type_string_or_array,
++            lgtd_jsonrpc_type_string_number_or_array,
              false
          ),
          LGTD_JSONRPC_NODE(
@@ -235,20 +293,19 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              lgtd_jsonrpc_type_integer,
              false
          ),
-@@ -566,14 +586,16 @@
+@@ -566,14 +642,16 @@
          goto error_invalid_params;
      }
  
 -    char *target;
 -    target = lgtd_jsonrpc_dup_target(client, request, json, params.target);
 -    if (!target) {
--        return;
 +    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
 +    ok = lgtd_jsonrpc_build_target_list(
-+        &targets, client, params.target, params.target_ntokens, json
++        &targets, client, request, params.target, params.target_ntokens, json
 +    );
 +    if (!ok) {
-+        goto error_invalid_params;
+         return;
      }
  
 -    ok = lgtd_proto_set_light_from_hsbk(target, h, s, b, k, t);
@@ -258,7 +315,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -586,28 +608,28 @@
+@@ -586,28 +664,34 @@
      );
  }
  
@@ -274,7 +331,13 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +    int target_ntokens = 0;
      static const struct lgtd_jsonrpc_node schema[] = {
 -        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string, false)
-+        LGTD_JSONRPC_NODE("target", 0, sizeof(*target), lgtd_jsonrpc_type_string_or_array, false)
++        LGTD_JSONRPC_NODE(
++            "target",
++            0,
++            sizeof(*target),
++            lgtd_jsonrpc_type_string_number_or_array,
++            false
++        )
      };
  
      bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
@@ -290,23 +353,22 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      }
  
 -    return lgtd_jsonrpc_dup_target(client, request, json, target);
-+    ok = lgtd_jsonrpc_build_target_list(
-+        &targets, client, target, target_ntokens, json
++    return lgtd_jsonrpc_build_target_list(
++        targets, client, request, target, target_ntokens, json
 +    );
  }
  
  static void
-@@ -616,18 +638,20 @@
+@@ -616,13 +700,14 @@
                                       const char *json)
  {
  
 -    char *target = lgtd_jsonrpc_extract_target_only(client, request, json);
 -    if (!target) {
--        return;
 +    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
 +    bool ok = lgtd_jsonrpc_extract_target_list(&targets, client, request, json);
 +    if (!ok) {
-+        goto error;
+         return;
      }
  
 -    bool ok = lgtd_proto_power_on(target);
@@ -316,13 +378,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-     }
- 
-+error:
-     lgtd_jsonrpc_send_error(
-         client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
-         "Invalid parameters"
-@@ -641,6 +665,7 @@
+@@ -641,6 +726,7 @@
  {
      struct lgtd_jsonrpc_set_waveform_args {
          const jsmntok_t *target;
@@ -330,7 +386,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          const jsmntok_t *waveform;
          const jsmntok_t *h;
          const jsmntok_t *s;
-@@ -650,65 +675,75 @@
+@@ -650,65 +736,75 @@
          const jsmntok_t *cycles;
          const jsmntok_t *skew_ratio;
          const jsmntok_t *transient;
@@ -342,7 +398,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              offsetof(struct lgtd_jsonrpc_set_waveform_args, target),
 -            lgtd_jsonrpc_type_string,
 +            offsetof(struct lgtd_jsonrpc_set_waveform_args, target_ntokens),
-+            lgtd_jsonrpc_type_string_or_array,
++            lgtd_jsonrpc_type_string_number_or_array,
              false
          ),
          LGTD_JSONRPC_NODE(
@@ -408,7 +464,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              lgtd_jsonrpc_type_bool,
              false
          ),
-@@ -764,18 +799,18 @@
+@@ -764,18 +860,18 @@
      skew_ratio -= UINT16_MAX / 2;
      bool transient = json[params.transient->start] == 't';
  
@@ -416,13 +472,12 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -    char *target;
 -    target = lgtd_jsonrpc_dup_target(client, request, json, params.target);
 -    if (!target) {
--        return;
 +    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
 +    ok = lgtd_jsonrpc_build_target_list(
-+        &targets, client, params.target, params.target_ntokens, json
++        &targets, client, request, params.target, params.target_ntokens, json
 +    );
 +    if (!ok) {
-+        goto error_invalid_params;
+         return;
      }
  
 -    lgtd_proto_set_waveform(
@@ -436,17 +491,16 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -794,18 +829,20 @@
+@@ -794,13 +890,14 @@
                                        const char *json)
  {
  
 -    char *target = lgtd_jsonrpc_extract_target_only(client, request, json);
 -    if (!target) {
--        return;
 +    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
 +    bool ok = lgtd_jsonrpc_extract_target_list(&targets, client, request, json);
 +    if (!ok) {
-+        goto error;
+         return;
      }
  
 -    bool ok = lgtd_proto_power_off(target);
@@ -456,12 +510,6 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-     }
- 
-+error:
-     lgtd_jsonrpc_send_error(
-         client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
-         "Invalid parameters"
 diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 --- a/core/jsonrpc.h
 +++ b/core/jsonrpc.h
@@ -503,23 +551,38 @@ diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -31,7 +31,7 @@
+@@ -30,33 +30,44 @@
+ #include "router.h"
  #include "lightsd.h"
  
++void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *targets)
++{
++    assert(targets);
++
++    while (!SLIST_EMPTY(targets)) {
++        struct lgtd_proto_target *target = SLIST_FIRST(targets);
++        SLIST_REMOVE_HEAD(targets, link);
++        free(target);
++    }
++}
++
  bool
 -lgtd_proto_power_on(const char *target)
 +lgtd_proto_power_on(const struct lgtd_proto_target_list *targets)
  {
-     assert(target);
+-    assert(target);
++    assert(targets);
  
-@@ -40,16 +40,16 @@
+     struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
+     return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
  }
  
  bool
 -lgtd_proto_power_off(const char *target)
 +lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
  {
-     assert(target);
+-    assert(target);
++    assert(targets);
  
      struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
 -    return lgtd_router_send(target, LGTD_LIFX_SET_POWER_STATE, &pkt);
@@ -532,7 +595,15 @@ diff --git a/core/proto.c b/core/proto.c
                                 int hue,
                                 int saturation,
                                 int brightness,
-@@ -72,10 +72,10 @@
+                                int kelvin,
+                                int transition_msecs)
+ {
+-    assert(target);
++    assert(targets);
+     assert(hue >= 0 && hue <= UINT16_MAX);
+     assert(saturation >= 0 && saturation <= UINT16_MAX);
+     assert(brightness >= 0 && brightness <= UINT16_MAX);
+@@ -72,17 +83,17 @@
          .transition = transition_msecs
      };
      lgtd_lifx_wire_encode_light_color(&pkt);
@@ -545,7 +616,15 @@ diff --git a/core/proto.c b/core/proto.c
                               enum lgtd_lifx_waveform_type waveform,
                               int hue, int saturation,
                               int brightness, int kelvin,
-@@ -106,5 +106,5 @@
+                              int period, float cycles,
+                              int skew_ratio, bool transient)
+ {
+-    assert(target);
++    assert(targets);
+     assert(hue >= 0 && hue <= UINT16_MAX);
+     assert(saturation >= 0 && saturation <= UINT16_MAX);
+     assert(brightness >= 0 && brightness <= UINT16_MAX);
+@@ -106,5 +117,5 @@
      };
  
      lgtd_lifx_wire_encode_waveform(&pkt);
@@ -655,3 +734,253 @@ diff --git a/core/router.h b/core/router.h
  
 -bool lgtd_router_send(const char *, enum lgtd_lifx_packet_type, void *);
 +bool lgtd_router_send(const struct lgtd_proto_target_list *, enum lgtd_lifx_packet_type, void *);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
+@@ -6,10 +6,13 @@
+ static bool power_off_called = false;
+ 
+ bool
+-lgtd_proto_power_off(const char *target)
++lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
+ {
+-    if (strcmp(target, "*")) {
+-        errx(1, "Invalid target [%s] (expected=[*])", target);
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
+     }
+     power_off_called = true;
+     return true;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
+@@ -6,9 +6,9 @@
+ static bool power_off_called = false;
+ 
+ bool
+-lgtd_proto_power_off(const char *target)
++lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
+ {
+-    (void)target;
++    (void)targets;
+     power_off_called = true;
+     return true;
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
+@@ -6,10 +6,13 @@
+ static bool power_on_called = false;
+ 
+ bool
+-lgtd_proto_power_on(const char *target)
++lgtd_proto_power_on(const struct lgtd_proto_target_list *targets)
+ {
+-    if (strcmp(target, "*")) {
+-        errx(1, "Invalid target [%s] (expected=[*])", target);
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
+     }
+     power_on_called = true;
+     return true;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
+@@ -6,9 +6,9 @@
+ static bool power_on_called = false;
+ 
+ bool
+-lgtd_proto_power_on(const char *target)
++lgtd_proto_power_on(const struct lgtd_proto_target_list *targets)
+ {
+-    (void)target;
++    (void)targets;
+     power_on_called = true;
+     return true;
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
+@@ -6,15 +6,18 @@
+ static bool set_light_called = false;
+ 
+ bool
+-lgtd_proto_set_light_from_hsbk(const char *target,
++lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *targets,
+                                int hue,
+                                int saturation,
+                                int brightness,
+                                int kelvin,
+                                int transition_msecs)
+ {
+-    if (strcmp(target, "*")) {
+-        errx(1, "Invalid target [%s] (expected=[*])", target);
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
+     }
+     int expected_hue = lgtd_jsonrpc_float_range_to_uint16(
+         "324.2341", strlen("324.2341"), 0, 360
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+@@ -6,15 +6,18 @@
+ static bool set_light_called = false;
+ 
+ bool
+-lgtd_proto_set_light_from_hsbk(const char *target,
++lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *targets,
+                                int hue,
+                                int saturation,
+                                int brightness,
+                                int kelvin,
+                                int transition_msecs)
+ {
+-    if (strcmp(target, "*")) {
+-        errx(1, "Invalid target [%s] (expected=[*])", target);
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
+     }
+     int expected_hue = lgtd_jsonrpc_float_range_to_uint16(
+         "324.2341", strlen("324.2341"), 0, 360
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+@@ -6,14 +6,14 @@
+ static bool set_light_called = false;
+ 
+ bool
+-lgtd_proto_set_light_from_hsbk(const char *target,
++lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *targets,
+                                int hue,
+                                int saturation,
+                                int brightness,
+                                int kelvin,
+                                int transition_msecs)
+ {
+-    (void)target;
++    (void)targets;
+     (void)hue;
+     (void)saturation;
+     (void)brightness;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c
+@@ -6,15 +6,18 @@
+ static bool set_waveform_called = false;
+ 
+ bool
+-lgtd_proto_set_waveform(const char *target,
++lgtd_proto_set_waveform(const struct lgtd_proto_target_list *targets,
+                         enum lgtd_lifx_waveform_type waveform,
+                         int hue, int saturation,
+                         int brightness, int kelvin,
+                         int period, float cycles,
+                         int skew_ratio, bool transient)
+ {
+-    if (strcmp(target, "*")) {
+-        errx(1, "Invalid target [%s] (expected=[*])", target);
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
+     }
+     int expected_hue = lgtd_jsonrpc_float_range_to_uint16(
+         "324.2341", strlen("324.2341"), 0, 360
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c
+@@ -6,14 +6,14 @@
+ static bool set_waveform_called = false;
+ 
+ bool
+-lgtd_proto_set_waveform(const char *target,
++lgtd_proto_set_waveform(const struct lgtd_proto_target_list *targets,
+                         enum lgtd_lifx_waveform_type waveform,
+                         int hue, int saturation,
+                         int brightness, int kelvin,
+                         int period, float cycles,
+                         int skew_ratio, bool transient)
+ {
+-    (void)target;
++    (void)targets;
+     (void)waveform;
+     (void)hue;
+     (void)saturation;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
+--- a/tests/core/jsonrpc/test_jsonrpc_utils.h
++++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
+@@ -30,16 +30,21 @@
+     return 0;
+ }
+ 
++void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *targets)
++{
++    assert(targets);
++}
++
+ #ifndef LGTD_TESTING_SET_LIGHT_FROM_HSBK
+ bool
+-lgtd_proto_set_light_from_hsbk(const char *target,
++lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *targets,
+                                int hue,
+                                int saturation,
+                                int brightness,
+                                int kelvin,
+                                int transition_msecs)
+ {
+-    (void)target;
++    (void)targets;
+     (void)hue;
+     (void)saturation;
+     (void)brightness;
+@@ -51,31 +56,31 @@
+ 
+ #ifndef LGTD_TESTING_POWER_ON
+ bool
+-lgtd_proto_power_on(const char *target)
++lgtd_proto_power_on(const struct lgtd_proto_target_list *targets)
+ {
+-    (void)target;
++    (void)targets;
+     return true;
+ }
+ #endif
+ 
+ #ifndef LGTD_TESTING_POWER_OFF
+ bool
+-lgtd_proto_power_off(const char *target)
++lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
+ {
+-    (void)target;
++    (void)targets;
+     return true;
+ }
+ #endif
+ 
+ #ifndef LGTD_TESTING_SET_WAVEFORM
+-bool lgtd_proto_set_waveform(const char *target,
++bool lgtd_proto_set_waveform(const struct lgtd_proto_target_list *targets,
+                              enum lgtd_lifx_waveform_type waveform,
+                              int hue, int saturation,
+                              int brightness, int kelvin,
+                              int period, float cycles,
+                              int skew_ratio, bool transient)
+ {
+-    (void)target;
++    (void)targets;
+     (void)waveform;
+     (void)hue;
+     (void)saturation;
