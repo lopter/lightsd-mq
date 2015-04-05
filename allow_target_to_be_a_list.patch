@@ -1,5 +1,6 @@
 # HG changeset patch
 # Parent 6f2644d079c169a459e3f5d23129abbf9c56fc12
+# Parent  6f2644d079c169a459e3f5d23129abbf9c56fc12
 Allow the target argument to be a list
 
 We actually need that to support tagging.
@@ -315,7 +316,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -586,28 +664,34 @@
+@@ -586,28 +664,40 @@
      );
  }
  
@@ -327,39 +328,43 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
                                   const struct lgtd_jsonrpc_request *request,
                                   const char *json)
  {
-     const jsmntok_t *target = NULL;
-+    int target_ntokens = 0;
+-    const jsmntok_t *target = NULL;
++    struct lgtd_jsonrpc_target_args {
++        const jsmntok_t *target;
++        int             target_ntokens;
++    } params = { NULL, 0 };
      static const struct lgtd_jsonrpc_node schema[] = {
 -        LGTD_JSONRPC_NODE("target", 0, lgtd_jsonrpc_type_string, false)
 +        LGTD_JSONRPC_NODE(
 +            "target",
-+            0,
-+            sizeof(*target),
++            offsetof(struct lgtd_jsonrpc_target_args, target),
++            offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
 +            lgtd_jsonrpc_type_string_number_or_array,
 +            false
 +        )
      };
  
      bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
-         &target, schema, 1, request->params, request->params_ntokens, json
+-        &target, schema, 1, request->params, request->params_ntokens, json
++        &params, schema, 1, request->params, request->params_ntokens, json
      );
      if (!ok) {
--        lgtd_jsonrpc_send_error(
--            client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
--            "Invalid parameters"
--        );
+         lgtd_jsonrpc_send_error(
+             client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
+             "Invalid parameters"
+         );
 -        return NULL;
 +        return false;
      }
  
 -    return lgtd_jsonrpc_dup_target(client, request, json, target);
 +    return lgtd_jsonrpc_build_target_list(
-+        targets, client, request, target, target_ntokens, json
++        targets, client, request, params.target, params.target_ntokens, json
 +    );
  }
  
  static void
-@@ -616,13 +700,14 @@
+@@ -616,13 +706,14 @@
                                       const char *json)
  {
  
@@ -378,7 +383,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -641,6 +726,7 @@
+@@ -641,6 +732,7 @@
  {
      struct lgtd_jsonrpc_set_waveform_args {
          const jsmntok_t *target;
@@ -386,7 +391,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          const jsmntok_t *waveform;
          const jsmntok_t *h;
          const jsmntok_t *s;
-@@ -650,65 +736,75 @@
+@@ -650,65 +742,75 @@
          const jsmntok_t *cycles;
          const jsmntok_t *skew_ratio;
          const jsmntok_t *transient;
@@ -464,7 +469,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              lgtd_jsonrpc_type_bool,
              false
          ),
-@@ -764,18 +860,18 @@
+@@ -764,18 +866,18 @@
      skew_ratio -= UINT16_MAX / 2;
      bool transient = json[params.transient->start] == 't';
  
@@ -491,7 +496,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      if (ok) {
          lgtd_jsonrpc_send_response(client, request, json, "true");
          return;
-@@ -794,13 +890,14 @@
+@@ -794,13 +896,14 @@
                                        const char *json)
  {
  
