@@ -233,7 +233,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +    for (int ti = target_ntokens; ti--;) {
 +        int token_len = LGTD_JSONRPC_TOKEN_LEN(&target[ti]);
 +        if (lgtd_jsonrpc_type_string_or_number(&target[ti], json)) {
-+            struct lgtd_proto_target *t = malloc(sizeof(*t) + token_len);
++            struct lgtd_proto_target *t = malloc(sizeof(*t) + token_len + 1);
 +            if (!t) {
 +                lgtd_warn("can't allocate a new target");
 +                lgtd_jsonrpc_send_error(
@@ -738,7 +738,12 @@ diff --git a/core/router.c b/core/router.c
  lgtd_router_broadcast(enum lgtd_lifx_packet_type pkt_type, void *pkt)
  {
      struct lgtd_lifx_packet_header hdr;
-@@ -67,10 +69,10 @@
+@@ -63,14 +65,14 @@
+     }
+ 
+     if (pkt_infos) {
+-        lgtd_debug("broadcasting %s", pkt_infos->name);
++        lgtd_info("broadcasting %s", pkt_infos->name);
      }
  }
  
@@ -753,7 +758,12 @@ diff --git a/core/router.c b/core/router.c
  {
      assert(bulb);
  
-@@ -95,36 +97,39 @@
+@@ -91,40 +93,43 @@
+         bulb->expected_power_on = payload->power;
+     }
+ 
+-    lgtd_debug("sending %s to %s", pkt_infos->name, lgtd_addrtoa(bulb->addr));
++    lgtd_info("sending %s to %s", pkt_infos->name, lgtd_addrtoa(bulb->addr));
  }
  
  bool
@@ -830,6 +840,23 @@ diff --git a/core/router.h b/core/router.h
 +bool lgtd_router_send(const struct lgtd_proto_target_list *, enum lgtd_lifx_packet_type, void *);
 +void lgtd_router_send_to_device(struct lgtd_lifx_bulb *, enum lgtd_lifx_packet_type, void *);
 +void lgtd_router_broadcast(enum lgtd_lifx_packet_type, void *);
+diff --git a/docs/protocol.rst b/docs/protocol.rst
+--- a/docs/protocol.rst
++++ b/docs/protocol.rst
+@@ -20,9 +20,11 @@
+ +-----------------------------+-----------------------------------------------+
+ | ``label``                   | directly target the bulb with the given label |
+ +-----------------------------+-----------------------------------------------+
++| ``[#TagName, 123f31a5]``    | composite target (JSON array)                 |
+++-----------------------------+-----------------------------------------------+
+ 
+-You can use JSON-RPC's batch feature to send a command to multiple targets at
+-the same time.
++A target is either a string, a hexadecimal number (without any prefix like 0x)
++or an array of targets.
+ 
+ Available methods
+ -----------------
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
