@@ -8,7 +8,28 @@ as well.
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
 +++ b/core/client.c
-@@ -107,7 +107,9 @@
+@@ -16,6 +16,7 @@
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ #include <sys/queue.h>
++#include <sys/tree.h>
+ #include <assert.h>
+ #include <err.h>
+ #include <stdbool.h>
+@@ -26,9 +27,11 @@
+ #include <event2/bufferevent.h>
+ #include <event2/event.h>
+ 
++#include "lifx/wire_proto.h"
+ #include "jsmn.h"
++#include "jsonrpc.h"
+ #include "client.h"
+-#include "jsonrpc.h"
++#include "proto.h"
+ #include "lightsd.h"
+ 
+ struct lgtd_client_list lgtd_clients = LIST_HEAD_INITIALIZER(&lgtd_clients);
+@@ -107,7 +110,9 @@
          bufsz = evbuffer_get_length(input);
          goto retry_after_pullup;
      default:
@@ -19,7 +40,7 @@ diff --git a/core/client.c b/core/client.c
          evbuffer_drain(input, bufsz);
          jsmn_init(&client->jsmn_ctx);
          break;
-@@ -131,6 +133,20 @@
+@@ -131,6 +136,20 @@
      }
  }
  
@@ -31,10 +52,10 @@ diff --git a/core/client.c b/core/client.c
 +
 +void
 +lgtd_client_send_error(struct lgtd_client *client,
-+                       enum lgtd_client_send_error error,
++                       enum lgtd_client_error_code error,
 +                       const char *msg)
 +{
-+
++    lgtd_jsonrpc_send_error(client, (enum lgtd_jsonrpc_error_code)error, msg);
 +}
 +
  struct lgtd_client *
@@ -85,6 +106,16 @@ diff --git a/core/client.h b/core/client.h
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
+@@ -32,8 +32,8 @@
+ 
+ #include "lifx/wire_proto.h"
+ #include "jsmn.h"
++#include "jsonrpc.h"
+ #include "client.h"
+-#include "jsonrpc.h"
+ #include "proto.h"
+ #include "lightsd.h"
+ 
 @@ -408,35 +408,31 @@
  }
  
@@ -113,7 +144,8 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +        start = client->current_request->id->start;
 +        stop = client->current_request->id->end;
      }
-     bufferevent_write(client->io, &json[start], stop - start);
+-    bufferevent_write(client->io, &json[start], stop - start);
++    bufferevent_write(client->io, &client->json[start], stop - start);
  }
  
  void
@@ -125,7 +157,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  {
      LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
 -    lgtd_jsonrpc_write_id(client, request, json);
-+    lgtd_jsonrpc_write_id(client, client->current_client->current_request, json);
++    lgtd_jsonrpc_write_id(client);
      LGTD_CLIENT_WRITE_STRING(client, ", \"error\": {\"code\": ");
      char str_code[8] = { 0 };
      snprintf(str_code, sizeof(str_code), "%d", code);
@@ -139,11 +171,11 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  {
      LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
 -    lgtd_jsonrpc_write_id(client, request, json);
-+    lgtd_jsonrpc_write_id(client, client->current_client->current_request, json);
++    lgtd_jsonrpc_write_id(client);
      LGTD_CLIENT_WRITE_STRING(client, ", \"result\": ");
      LGTD_CLIENT_WRITE_STRING(client, result);
      LGTD_CLIENT_WRITE_STRING(client, "}");
-@@ -505,14 +499,11 @@
+@@ -505,45 +499,41 @@
  static bool
  lgtd_jsonrpc_build_target_list(struct lgtd_proto_target_list *targets,
                                 struct lgtd_client *client,
@@ -158,8 +190,19 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -    assert(request);
      assert(target);
      assert(target_ntokens >= 1);
-     assert(json);
-@@ -529,8 +520,7 @@
+-    assert(json);
+ 
+-    if (lgtd_jsonrpc_type_array(target, json)) {
++    if (lgtd_jsonrpc_type_array(target, client->json)) {
+         target_ntokens -= 1;
+         target++;
+     }
+ 
+     for (int ti = target_ntokens; ti--;) {
+         int token_len = LGTD_JSONRPC_TOKEN_LEN(&target[ti]);
+-        if (lgtd_jsonrpc_type_string_or_number(&target[ti], json)) {
++        if (lgtd_jsonrpc_type_string_or_number(&target[ti], client->json)) {
+             struct lgtd_proto_target *t = malloc(sizeof(*t) + token_len + 1);
              if (!t) {
                  lgtd_warn("can't allocate a new target");
                  lgtd_jsonrpc_send_error(
@@ -169,8 +212,16 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
                  );
                  goto error;
              }
-@@ -542,8 +532,7 @@
-                 "invalid target value %.*s", token_len, json + target[ti].start
+-            memcpy(t->target, json + target[ti].start, token_len);
++            memcpy(t->target, client->json + target[ti].start, token_len);
+             t->target[token_len] = '\0';
+             SLIST_INSERT_HEAD(targets, t, link);
+         } else {
+             lgtd_debug(
+-                "invalid target value %.*s", token_len, json + target[ti].start
++                "invalid target value %.*s",
++                token_len,
++                client->json + target[ti].start
              );
              lgtd_jsonrpc_send_error(
 -                client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
@@ -179,7 +230,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              );
              goto error;
          }
-@@ -557,9 +546,7 @@
+@@ -557,9 +547,7 @@
  }
  
  static void
@@ -190,18 +241,44 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  {
      struct lgtd_jsonrpc_set_light_from_hsbk_args {
          const jsmntok_t *target;
-@@ -619,8 +606,8 @@
+@@ -619,120 +607,53 @@
          &params,
          schema,
          LGTD_ARRAY_SIZE(schema),
 -        request->params,
 -        request->params_ntokens,
+-        json
 +        client->current_request->params,
 +        client->current_request->params_ntokens,
-         json
++        client->json
      );
      if (!ok) {
-@@ -648,91 +635,24 @@
+         goto error_invalid_params;
+     }
+ 
+     int h = lgtd_jsonrpc_float_range_to_uint16(
+-        &json[params.h->start], LGTD_JSONRPC_TOKEN_LEN(params.h), 0, 360
++        &client->json[params.h->start], LGTD_JSONRPC_TOKEN_LEN(params.h), 0, 360
+     );
+     int s = lgtd_jsonrpc_float_range_to_uint16(
+-        &json[params.s->start], LGTD_JSONRPC_TOKEN_LEN(params.s), 0, 1
++        &client->json[params.s->start], LGTD_JSONRPC_TOKEN_LEN(params.s), 0, 1
+     );
+     int b = lgtd_jsonrpc_float_range_to_uint16(
+-        &json[params.b->start], LGTD_JSONRPC_TOKEN_LEN(params.b), 0, 1
++        &client->json[params.b->start], LGTD_JSONRPC_TOKEN_LEN(params.b), 0, 1
+     );
+     errno = 0;
+-    int k = strtol(&json[params.k->start], NULL, 10);
++    int k = strtol(&client->json[params.k->start], NULL, 10);
+     if (k < 2500 || k > 9000 || errno == ERANGE) {
+         goto error_invalid_params;
+     }
+-    int t = strtol(&json[params.t->start], NULL, 10);
++    int t = strtol(&client->json[params.t->start], NULL, 10);
+     if (t < 0 || errno == ERANGE) {
+         goto error_invalid_params;
+     }
  
      struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
      ok = lgtd_jsonrpc_build_target_list(
@@ -213,7 +290,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      }
  
 -    ok = lgtd_proto_set_light_from_hsbk(&targets, h, s, b, k, t);
-+    lgtd_proto_set_light_from_hsbk(&targets, h, s, b, k, t);
++    lgtd_proto_set_light_from_hsbk(client, &targets, h, s, b, k, t);
      lgtd_proto_target_list_clear(&targets);
 -    if (ok) {
 -        lgtd_jsonrpc_send_response(client, request, json, "true");
@@ -298,18 +375,67 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  {
      struct lgtd_jsonrpc_set_waveform_args {
          const jsmntok_t *target;
-@@ -824,8 +744,8 @@
+@@ -824,9 +745,9 @@
          &params,
          schema,
          LGTD_ARRAY_SIZE(schema),
 -        request->params,
 -        request->params_ntokens,
+-        json
 +        client->current_request->params,
 +        client->current_request->params_ntokens,
-         json
++        client->json
      );
      if (!ok) {
-@@ -872,57 +792,88 @@
+         goto error_invalid_params;
+@@ -834,95 +755,128 @@
+ 
+     enum lgtd_lifx_waveform_type waveform;
+     waveform = lgtd_lifx_wire_waveform_string_id_to_type(
+-        &json[params.waveform->start], LGTD_JSONRPC_TOKEN_LEN(params.waveform)
++        &client->json[params.waveform->start], LGTD_JSONRPC_TOKEN_LEN(params.waveform)
+     );
+     if (waveform == LGTD_LIFX_WAVEFORM_INVALID) {
+         goto error_invalid_params;
+     }
+ 
+     int h = lgtd_jsonrpc_float_range_to_uint16(
+-        &json[params.h->start], LGTD_JSONRPC_TOKEN_LEN(params.h), 0, 360
++        &client->json[params.h->start], LGTD_JSONRPC_TOKEN_LEN(params.h), 0, 360
+     );
+     int s = lgtd_jsonrpc_float_range_to_uint16(
+-        &json[params.s->start], LGTD_JSONRPC_TOKEN_LEN(params.s), 0, 1
++        &client->json[params.s->start], LGTD_JSONRPC_TOKEN_LEN(params.s), 0, 1
+     );
+     int b = lgtd_jsonrpc_float_range_to_uint16(
+-        &json[params.b->start], LGTD_JSONRPC_TOKEN_LEN(params.b), 0, 1
++        &client->json[params.b->start], LGTD_JSONRPC_TOKEN_LEN(params.b), 0, 1
+     );
+     errno = 0;
+-    int k = strtol(&json[params.k->start], NULL, 10);
++    int k = strtol(&client->json[params.k->start], NULL, 10);
+     if (k < 2500 || k > 9000 || errno == ERANGE) {
+         goto error_invalid_params;
+     }
+-    int period = strtol(&json[params.period->start], NULL, 10);
++    int period = strtol(&client->json[params.period->start], NULL, 10);
+     if (period <= 0 || errno == ERANGE) {
+         goto error_invalid_params;
+     }
+-    int cycles = strtol(&json[params.cycles->start], NULL, 10);
++    int cycles = strtol(&client->json[params.cycles->start], NULL, 10);
+     if (cycles <= 0 || errno == ERANGE) {
+         goto error_invalid_params;
+     }
+     int skew_ratio = lgtd_jsonrpc_float_range_to_uint16(
+-        &json[params.skew_ratio->start],
++        &client->json[params.skew_ratio->start],
+         LGTD_JSONRPC_TOKEN_LEN(params.skew_ratio),
+         0, 1
+     );
+     skew_ratio -= UINT16_MAX / 2;
+-    bool transient = json[params.transient->start] == 't';
++    bool transient = client->json[params.transient->start] == 't';
  
      struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
      ok = lgtd_jsonrpc_build_target_list(
@@ -321,8 +447,11 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      }
  
 -    ok = lgtd_proto_set_waveform(
+-        &targets, waveform, h, s, b, k, period, cycles, skew_ratio, transient
 +    lgtd_proto_set_waveform(
-         &targets, waveform, h, s, b, k, period, cycles, skew_ratio, transient
++        client, &targets,
++        waveform, h, s, b, k,
++        period, cycles, skew_ratio, transient
      );
      lgtd_proto_target_list_clear(&targets);
 -    if (ok) {
@@ -359,7 +488,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +
 +    struct lgtd_jsonrpc_request *req = client->current_request;
 +    bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
-+        &params, schema, 1, req->params, req->params_ntokens, json
++        &params, schema, 1, req->params, req->params_ntokens, client->json
 +    );
 +    if (!ok) {
 +        lgtd_jsonrpc_send_error(
@@ -369,7 +498,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +    }
 +
 +    return lgtd_jsonrpc_build_target_list(
-+        targets, client, params.target, params.target_ntokens, json
++        targets, client, params.target, params.target_ntokens
      );
  }
  
@@ -388,7 +517,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      }
  
 -    ok = lgtd_proto_power_off(&targets);
-+    lgtd_proto_power_on(&targets);
++    lgtd_proto_power_on(client, &targets);
      lgtd_proto_target_list_clear(&targets);
 -    if (ok) {
 -        lgtd_jsonrpc_send_response(client, request, json, "true");
@@ -408,7 +537,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -        client, request, json, LGTD_JSONRPC_INVALID_PARAMS,
 -        "Invalid parameters"
 -    );
-+    lgtd_proto_power_off(&targets);
++    lgtd_proto_power_off(client, &targets);
 +    lgtd_proto_target_list_clear(&targets);
  }
  
@@ -420,7 +549,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  {
      static const struct lgtd_jsonrpc_method methods[] = {
          LGTD_JSONRPC_METHOD(
-@@ -947,22 +898,20 @@
+@@ -947,22 +901,20 @@
      assert(client);
      assert(parsed >= 0);
  
@@ -435,7 +564,8 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 -        tokens,
 +        client->jsmn_tokens,
          parsed,
-         json
+-        json
++        client->json
      );
 +    client->current_request = &request;
      if (!ok) {
@@ -446,7 +576,14 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          );
          return;
      }
-@@ -982,18 +931,20 @@
+@@ -976,24 +928,26 @@
+             continue;
+         }
+         int diff = memcmp(
+-            methods[i].name, &json[request.method->start], methods[i].namelen
++            methods[i].name, &client->json[request.method->start], methods[i].namelen
+         );
+         if (!diff) {
              int params_count = request.params->size;
              if (params_count != methods[i].params_count) {
                  lgtd_jsonrpc_send_error(
@@ -475,8 +612,32 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 --- a/core/jsonrpc.h
 +++ b/core/jsonrpc.h
-@@ -84,11 +84,7 @@
- void lgtd_jsonrpc_dispatch_request(struct lgtd_client *, const char *, int);
+@@ -17,6 +17,8 @@
+ 
+ #pragma once
+ 
++struct lgtd_client;
++
+ struct lgtd_jsonrpc_request {
+     const jsmntok_t *method;
+     const jsmntok_t *params;
+@@ -59,9 +61,7 @@
+     const char  *name;
+     int         namelen;
+     int         params_count;
+-    void        (*method)(struct lgtd_client *,
+-                          const struct lgtd_jsonrpc_request *,
+-                          const char *);
++    void        (*method)(struct lgtd_client *);
+ };
+ 
+ #define LGTD_JSONRPC_METHOD(name_, params_count_, method_) {    \
+@@ -81,14 +81,10 @@
+     LGTD_JSONRPC_SERVER_ERROR = -32000 // (to -32099)
+ };
+ 
+-void lgtd_jsonrpc_dispatch_request(struct lgtd_client *, const char *, int);
++void lgtd_jsonrpc_dispatch_request(struct lgtd_client *, int);
  
  void lgtd_jsonrpc_send_error(struct lgtd_client *,
 -                             const struct lgtd_jsonrpc_request *,
@@ -487,13 +648,41 @@ diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 -                                const struct lgtd_jsonrpc_request *,
 -                                const char *,
                                  const char *);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -42,6 +42,7 @@
+ #include "lifx/timer.h"
+ #include "version.h"
+ #include "jsmn.h"
++#include "jsonrpc.h"
+ #include "client.h"
+ #include "listen.h"
+ #include "lightsd.h"
+diff --git a/core/listen.c b/core/listen.c
+--- a/core/listen.c
++++ b/core/listen.c
+@@ -26,6 +26,7 @@
+ #include <event2/util.h>
+ 
+ #include "jsmn.h"
++#include "jsonrpc.h"
+ #include "client.h"
+ #include "listen.h"
+ #include "lightsd.h"
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -29,11 +29,18 @@
+@@ -26,14 +26,24 @@
+ #include <stdint.h>
+ #include <string.h>
+ 
++#include <event2/util.h>
++
  #include "lifx/wire_proto.h"
  #include "time_monotonic.h"
  #include "lifx/bulb.h"
++#include "jsmn.h"
 +#include "jsonrpc.h"
 +#include "client.h"
  #include "proto.h"
@@ -505,16 +694,18 @@ diff --git a/core/proto.c b/core/proto.c
 +    lgtd_jsonrpc_send_response((client), (ok) ? "true" : "false");  \
 +} while(0)
 +
-+void lgtd_proto_target_list_clear(struct lgtd_client *client,
-+                                  struct lgtd_proto_target_list *targets)
++void
++lgtd_proto_target_list_clear(struct lgtd_proto_target_list *targets)
  {
      assert(targets);
  
-@@ -45,25 +52,32 @@
+@@ -44,26 +54,33 @@
+     }
  }
  
- bool
+-bool
 -lgtd_proto_power_on(const struct lgtd_proto_target_list *targets)
++void
 +lgtd_proto_power_on(struct lgtd_client *client,
 +                    const struct lgtd_proto_target_list *targets)
  {
@@ -527,8 +718,9 @@ diff --git a/core/proto.c b/core/proto.c
 +    );
  }
  
- bool
+-bool
 -lgtd_proto_power_off(const struct lgtd_proto_target_list *targets)
++void
 +lgtd_proto_power_off(struct lgtd_client *client,
 +                     const struct lgtd_proto_target_list *targets)
  {
@@ -541,14 +733,15 @@ diff --git a/core/proto.c b/core/proto.c
 +    );
  }
  
- bool
+-bool
 -lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *targets,
++void
 +lgtd_proto_set_light_from_hsbk(struct lgtd_client *client,
 +                               const struct lgtd_proto_target_list *targets,
                                 int hue,
                                 int saturation,
                                 int brightness,
-@@ -85,11 +99,15 @@
+@@ -85,16 +102,21 @@
          .kelvin = kelvin,
          .transition = transition_msecs
      };
@@ -561,12 +754,23 @@ diff --git a/core/proto.c b/core/proto.c
  }
  
 -bool lgtd_proto_set_waveform(const struct lgtd_proto_target_list *targets,
-+bool lgtd_proto_set_waveform(struct lgtd_client *client,
-+                             const struct lgtd_proto_target_list *targets,
-                              enum lgtd_lifx_waveform_type waveform,
-                              int hue, int saturation,
-                              int brightness, int kelvin,
-@@ -120,5 +138,7 @@
+-                             enum lgtd_lifx_waveform_type waveform,
+-                             int hue, int saturation,
+-                             int brightness, int kelvin,
+-                             int period, float cycles,
+-                             int skew_ratio, bool transient)
++void
++lgtd_proto_set_waveform(struct lgtd_client *client,
++                        const struct lgtd_proto_target_list *targets,
++                        enum lgtd_lifx_waveform_type waveform,
++                        int hue, int saturation,
++                        int brightness, int kelvin,
++                        int period, float cycles,
++                        int skew_ratio, bool transient)
+ {
+     assert(targets);
+     assert(hue >= 0 && hue <= UINT16_MAX);
+@@ -120,5 +142,7 @@
      };
  
      lgtd_lifx_wire_encode_waveform(&pkt);
@@ -578,31 +782,42 @@ diff --git a/core/proto.c b/core/proto.c
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
 +++ b/core/proto.h
-@@ -23,14 +23,18 @@
- };
+@@ -24,13 +24,17 @@
  SLIST_HEAD(lgtd_proto_target_list, lgtd_proto_target);
  
--void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *);
+ void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *);
 -const struct lgtd_proto_target *lgtd_proto_target_list_add(struct lgtd_proto_target_list *,
-+void lgtd_proto_target_list_clear(struct lgtd_client *, struct lgtd_proto_target_list *);
 +const struct lgtd_proto_target *lgtd_proto_target_list_add(struct lgtd_client *,
 +                                                           struct lgtd_proto_target_list *,
                                                             const char *, int);
  
 -bool lgtd_proto_set_light_from_hsbk(const struct lgtd_proto_target_list *, int, int, int, int, int);
 -bool lgtd_proto_set_waveform(const struct lgtd_proto_target_list *,
-+bool lgtd_proto_set_light_from_hsbk(struct lgtd_client *,
++void lgtd_proto_set_light_from_hsbk(struct lgtd_client *,
 +                                    const struct lgtd_proto_target_list *,
 +                                    int, int, int, int, int);
-+bool lgtd_proto_set_waveform(struct lgtd_client *,
++void lgtd_proto_set_waveform(struct lgtd_client *,
 +                             const struct lgtd_proto_target_list *,
                               enum lgtd_lifx_waveform_type,
                               int, int, int, int,
                               int, float, int, bool);
 -bool lgtd_proto_power_on(const struct lgtd_proto_target_list *);
 -bool lgtd_proto_power_off(const struct lgtd_proto_target_list *);
-+bool lgtd_proto_power_on(struct lgtd_client *, const struct lgtd_proto_target_list *);
-+bool lgtd_proto_power_off(struct lgtd_client *, const struct lgtd_proto_target_list *);
++void lgtd_proto_power_on(struct lgtd_client *, const struct lgtd_proto_target_list *);
++void lgtd_proto_power_off(struct lgtd_client *, const struct lgtd_proto_target_list *);
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -34,6 +34,9 @@
+ #include "lifx/wire_proto.h"
+ #include "time_monotonic.h"
+ #include "lifx/bulb.h"
++#include "jsmn.h"
++#include "jsonrpc.h"
++#include "client.h"
+ #include "proto.h"
+ #include "router.h"
+ #include "lifx/gateway.h"
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 --- a/docs/protocol.rst
 +++ b/docs/protocol.rst
@@ -615,3 +830,16 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 +    Return an array of labels or adresses of the devices having the given tag.
 +
  .. vim: set tw=80 spelllang=en spell:
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -38,6 +38,9 @@
+ #include "gateway.h"
+ #include "broadcast.h"
+ #include "timer.h"
++#include "core/jsmn.h"
++#include "core/jsonrpc.h"
++#include "core/client.h"
+ #include "core/proto.h"
+ #include "core/router.h"
+ #include "core/lightsd.h"
