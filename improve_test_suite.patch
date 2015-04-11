@@ -1,0 +1,169 @@
+# HG changeset patch
+# Parent  d4eb56544898f0e7bd8f4bf777da3323485c8539
+Beef-up the test suite by testing the proto module
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -431,6 +431,9 @@
+                         enum lgtd_jsonrpc_error_code code,
+                         const char *message)
+ {
++    assert(client);
++    assert(message);
++
+     LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
+     lgtd_jsonrpc_write_id(client);
+     LGTD_CLIENT_WRITE_STRING(client, ", \"error\": {\"code\": ");
+@@ -446,6 +449,9 @@
+ lgtd_jsonrpc_send_response(struct lgtd_client *client,
+                            const char *result)
+ {
++    assert(client);
++    assert(result);
++
+     LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
+     lgtd_jsonrpc_write_id(client);
+     LGTD_CLIENT_WRITE_STRING(client, ", \"result\": ");
+diff --git a/tests/core/jsonrpc/test_jsonrpc_send_response.c b/tests/core/jsonrpc/test_jsonrpc_send_response.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_send_response.c
+@@ -0,0 +1,44 @@
++#include "jsonrpc.c"
++
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    const char *json = "\"42\"";
++    jsmntok_t token = { .start = 1, .end = 3, .type = JSMN_STRING };
++    struct lgtd_jsonrpc_request req = { .id = &token };
++    struct lgtd_client client = {
++        .io = NULL, .current_request = &req, .json = json
++    };
++    const char *expected = ("{"
++        "\"jsonrpc\": \"2.0\", "
++        "\"id\": \"42\", "
++        "\"result\": false"
++    "}");
++    lgtd_jsonrpc_send_response(&client, "false");
++    int diff = memcmp(client_write_buf, expected, strlen(expected));
++    if (diff) {
++        printf("expected: %s\n", expected);
++        printf("received: %s\n", client_write_buf);
++        return 1;
++    }
++
++    reset_client_write_buf();
++
++    req.id = NULL;
++    expected = ("{"
++        "\"jsonrpc\": \"2.0\", "
++        "\"id\": null, "
++        "\"result\": true"
++    "}");
++    lgtd_jsonrpc_send_response(&client, "true");
++    diff = memcmp(client_write_buf, expected, strlen(expected));
++    if (diff) {
++        printf("expected: %s\n", expected);
++        printf("received: %s\n", client_write_buf);
++        return 1;
++    }
++
++    return 0;
++}
+diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/CMakeLists.txt
+@@ -0,0 +1,26 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++ADD_LIBRARY(
++    test_core_proto STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
++    ${TIME_MONOTONIC_IMPL}
++)
++
++TARGET_LINK_LIBRARIES(test_core_proto ${EVENT2_CORE_LIBRARY})
++
++FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_ROUTER_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_power_on.c
+@@ -0,0 +1,57 @@
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "invalid packet type %d (expected %d)",
++             pkt_type, LGTD_LIFX_SET_POWER_STATE
++        );
++    }
++
++    struct lgtd_lifx_packet_power_state *power_on = pkt;
++    if (power_on->power != LGTD_LIFX_POWER_ON) {
++        errx(1, "invalid power state %hx (expected %x)",
++             power_on->power, LGTD_LIFX_POWER_ON);
++    }
++
++    return true;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "true")) {
++        errx(
++            1, "unexpected response [%s] (expected [%s])", msg, "true"
++        );
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_power_on(&client, targets);
++
++    return 0;
++}
