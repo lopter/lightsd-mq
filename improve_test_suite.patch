@@ -105,11 +105,132 @@ new file mode 100644
 +FOREACH(TEST ${TESTS})
 +    ADD_ROUTER_TEST(${TEST})
 +ENDFOREACH()
+diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_proto_power_off.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_power_off.c
+@@ -0,0 +1,55 @@
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "invalid packet type %d (expected %d)",
++             pkt_type, LGTD_LIFX_SET_POWER_STATE
++        );
++    }
++
++    struct lgtd_lifx_packet_power_state *power_off = pkt;
++    if (power_off->power != LGTD_LIFX_POWER_OFF) {
++        errx(1, "invalid power state %hx (expected %x)",
++             power_off->power, LGTD_LIFX_POWER_OFF);
++    }
++
++    return true;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "true")) {
++        errx(1, "unexpected response [%s] (expected [true])", msg);
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_power_off(&client, targets);
++
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_power_off_routing_error.c b/tests/core/proto/test_proto_power_off_routing_error.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_power_off_routing_error.c
+@@ -0,0 +1,56 @@
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "invalid packet type %d (expected %d)",
++             pkt_type, LGTD_LIFX_SET_POWER_STATE
++        );
++    }
++
++    struct lgtd_lifx_packet_power_state *power_off = pkt;
++    if (power_off->power != LGTD_LIFX_POWER_OFF) {
++        errx(1, "invalid power state %hx (expected %x)",
++             power_off->power, LGTD_LIFX_POWER_OFF);
++    }
++
++    return false;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "false")) {
++        errx(1, "unexpected response [%s] (expected [false])", msg);
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_power_off(&client, targets);
++
++    return 0;
++}
++
 diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/proto/test_proto_power_on.c
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,55 @@
 +#include "proto.c"
 +
 +#include "tests_utils.h"
@@ -149,9 +270,7 @@ new file mode 100644
 +    }
 +
 +    if (strcmp(msg, "true")) {
-+        errx(
-+            1, "unexpected response [%s] (expected [%s])", msg, "true"
-+        );
++        errx(1, "unexpected response [%s] (expected [true])", msg);
 +    }
 +}
 +
@@ -164,6 +283,426 @@ new file mode 100644
 +    struct lgtd_client client;
 +
 +    lgtd_proto_power_on(&client, targets);
++
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/proto/test_proto_power_on_routing_error.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_power_on_routing_error.c
+@@ -0,0 +1,55 @@
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "invalid packet type %d (expected %d)",
++             pkt_type, LGTD_LIFX_SET_POWER_STATE
++        );
++    }
++
++    struct lgtd_lifx_packet_power_state *power_on = pkt;
++    if (power_on->power != LGTD_LIFX_POWER_ON) {
++        errx(1, "invalid power state %hx (expected %x)",
++             power_on->power, LGTD_LIFX_POWER_ON);
++    }
++
++    return false;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "false")) {
++        errx(1, "unexpected response [%s] (expected [false])", msg);
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_power_on(&client, targets);
++
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/proto/test_proto_set_light_from_hsbk.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_set_light_from_hsbk.c
+@@ -0,0 +1,77 @@
++#include <endian.h>
++
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_LIGHT_COLOR) {
++        errx(
++            1, "invalid packet type %d (expected %d)",
++            pkt_type, LGTD_LIFX_SET_LIGHT_COLOR
++        );
++    }
++
++    struct lgtd_lifx_packet_light_color *light_color = pkt;
++    int hue = le16toh(light_color->hue);
++    int saturation = le16toh(light_color->saturation);
++    int brightness = le16toh(light_color->brightness);
++    int kelvin = le16toh(light_color->kelvin);
++    int transition = htole32(light_color->transition);
++
++    if (hue != 42) {
++        errx(1, "got hue = %d (expected 42)", hue);
++    }
++    if (saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", saturation);
++    }
++    if (brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", brightness);
++    }
++    if (kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", kelvin);
++    }
++    if (transition != 150) {
++        errx(1, "got transition = %d (expected 150)", transition);
++    }
++
++    return true;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "true")) {
++        errx(1, "unexpected response [%s] (expected [true])", msg);
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_set_light_from_hsbk(
++        &client, targets, 42, 10000, 20000, 4500, 150
++    );
++
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+@@ -0,0 +1,77 @@
++#include <endian.h>
++
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_LIGHT_COLOR) {
++        errx(
++            1, "invalid packet type %d (expected %d)",
++            pkt_type, LGTD_LIFX_SET_LIGHT_COLOR
++        );
++    }
++
++    struct lgtd_lifx_packet_light_color *light_color = pkt;
++    int hue = le16toh(light_color->hue);
++    int saturation = le16toh(light_color->saturation);
++    int brightness = le16toh(light_color->brightness);
++    int kelvin = le16toh(light_color->kelvin);
++    int transition = htole32(light_color->transition);
++
++    if (hue != 42) {
++        errx(1, "got hue = %d (expected 42)", hue);
++    }
++    if (saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", saturation);
++    }
++    if (brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", brightness);
++    }
++    if (kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", kelvin);
++    }
++    if (transition != 150) {
++        errx(1, "got transition = %d (expected 150)", transition);
++    }
++
++    return false;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "false")) {
++        errx(1, "unexpected response [%s] (expected [false])", msg);
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_set_light_from_hsbk(
++        &client, targets, 42, 10000, 20000, 4500, 150
++    );
++
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_set_waveform.c
+@@ -0,0 +1,93 @@
++#include <endian.h>
++
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_WAVEFORM) {
++        errx(
++            1, "invalid packet type %d (expected %d)",
++            pkt_type, LGTD_LIFX_SET_WAVEFORM
++        );
++    }
++
++    struct lgtd_lifx_packet_waveform *waveform = pkt;
++    enum lgtd_lifx_waveform_type waveform_type = waveform->waveform;
++    int hue = le16toh(waveform->hue);
++    int saturation = le16toh(waveform->saturation);
++    int brightness = le16toh(waveform->brightness);
++    int kelvin = le16toh(waveform->kelvin);
++    int period = le16toh(waveform->period);
++    float cycles = waveform->cycles;
++    int skew_ratio = le16toh(waveform->skew_ratio);
++
++    if (waveform_type != LGTD_LIFX_WAVEFORM_SAW) {
++        errx(
++            1, "got waveform = %d (expected %d)",
++            waveform_type, LGTD_LIFX_WAVEFORM_SAW
++        );
++    }
++    if (hue != 42) {
++        errx(1, "got hue = %d (expected 42)", hue);
++    }
++    if (saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", saturation);
++    }
++    if (brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", brightness);
++    }
++    if (kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", kelvin);
++    }
++    if (period != 200) {
++        errx(1, "got period = %d (expected 200)", period);
++    }
++    if (cycles != 10.) {
++        errx(1, "got cycles = %f (expected 10)", cycles);
++    }
++    if (skew_ratio != 0) {
++        errx(1, "got skew_ratio = %d (expected 0)", skew_ratio);
++    }
++
++    return true;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "true")) {
++        errx(1, "unexpected response [%s] (expected [true])", msg);
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_set_waveform(
++        &client, targets, LGTD_LIFX_WAVEFORM_SAW,
++        42, 10000, 20000, 4500, 200, 10., 0, false
++    );
++
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+@@ -0,0 +1,93 @@
++#include <endian.h>
++
++#include "proto.c"
++
++#include "tests_utils.h"
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_WAVEFORM) {
++        errx(
++            1, "invalid packet type %d (expected %d)",
++            pkt_type, LGTD_LIFX_SET_WAVEFORM
++        );
++    }
++
++    struct lgtd_lifx_packet_waveform *waveform = pkt;
++    enum lgtd_lifx_waveform_type waveform_type = waveform->waveform;
++    int hue = le16toh(waveform->hue);
++    int saturation = le16toh(waveform->saturation);
++    int brightness = le16toh(waveform->brightness);
++    int kelvin = le16toh(waveform->kelvin);
++    int period = le16toh(waveform->period);
++    float cycles = waveform->cycles;
++    int skew_ratio = le16toh(waveform->skew_ratio);
++
++    if (waveform_type != LGTD_LIFX_WAVEFORM_SAW) {
++        errx(
++            1, "got waveform = %d (expected %d)",
++            waveform_type, LGTD_LIFX_WAVEFORM_SAW
++        );
++    }
++    if (hue != 42) {
++        errx(1, "got hue = %d (expected 42)", hue);
++    }
++    if (saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", saturation);
++    }
++    if (brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", brightness);
++    }
++    if (kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", kelvin);
++    }
++    if (period != 200) {
++        errx(1, "got period = %d (expected 200)", period);
++    }
++    if (cycles != 10.) {
++        errx(1, "got cycles = %f (expected 10)", cycles);
++    }
++    if (skew_ratio != 0) {
++        errx(1, "got skew_ratio = %d (expected 0)", skew_ratio);
++    }
++
++    return false;
++}
++
++void
++lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't ne NULL");
++    }
++
++    if (strcmp(msg, "false")) {
++        errx(1, "unexpected response [%s] (expected [false])", msg);
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client;
++
++    lgtd_proto_set_waveform(
++        &client, targets, LGTD_LIFX_WAVEFORM_SAW,
++        42, 10000, 20000, 4500, 200, 10., 0, false
++    );
 +
 +    return 0;
 +}
