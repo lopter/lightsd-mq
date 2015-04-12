@@ -144,7 +144,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 new file mode 100644
 --- /dev/null
 +++ b/lifx/tagging.c
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,135 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -183,9 +183,8 @@ new file mode 100644
 +static struct lgtd_lifx_site_tags_list lgtd_lifx_site_tags_map =
 +    LIST_HEAD_INITIALIZER(&lgtd_lifx_site_tags_map);
 +
++// Kim Walisch (2012)
 +// http://chessprogramming.wikispaces.com/BitScan#DeBruijnMultiplation
-+//
-+// Kim Walisch (2012), TODO: test both BE and LE
 +static inline int
 +lgtd_lifx_tagging_bitscan64_forward(uint64_t n)
 +{
@@ -201,7 +200,7 @@ new file mode 100644
 +       13, 18,  8, 12,  7,  6,  5, 63
 +    };
 + 
-+    return n ? DEBRUIJN_SEQUENCE[((n ^ (n - 1)) * DEBRUIJN_NUMBER) >> 58] : 0;
++    return n ? DEBRUIJN_SEQUENCE[((n ^ (n - 1)) * DEBRUIJN_NUMBER) >> 58] : -1;
 +}
 +
 +bool
@@ -270,13 +269,22 @@ new file mode 100644
 +    }
 +#endif
 +
-+    // TODO
++    while (true) {
++        int i = lgtd_lifx_tagging_bitscan64_forward(tags);
++        if (i == -1) {
++            break;
++        }
++        int n = LGTD_MIN(LGTD_LIFX_LABEL_SIZE - 1, strlen(label));
++        memcpy(site_map->labels[i], label, n);
++        site_map->labels[i][n] = '\0';
++        tags &= ~(1 << i);
++    };
 +}
 diff --git a/lifx/tagging.h b/lifx/tagging.h
 new file mode 100644
 --- /dev/null
 +++ b/lifx/tagging.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,32 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -298,7 +306,6 @@ new file mode 100644
 +
 +struct lgtd_lifx_site_tags {
 +    LIST_ENTRY(lgtd_lifx_site_tags) link;
-+    uint64_t                        site_id;
 +    union {
 +        uint8_t                     as_array[LGTD_LIFX_ADDR_LENGTH];
 +        uint64_t                    as_integer;
