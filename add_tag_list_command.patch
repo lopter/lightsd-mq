@@ -341,7 +341,7 @@ new file mode 100644
 +       25, 39, 14, 33, 19, 30,  9, 24,
 +       13, 18,  8, 12,  7,  6,  5, 63
 +    };
-+ 
++
 +    return n ? DEBRUIJN_SEQUENCE[((n ^ (n - 1)) * DEBRUIJN_NUMBER) >> 58] : -1;
 +}
 +
@@ -419,7 +419,7 @@ new file mode 100644
 +        // NOTE: should we return an error if the label is too big? and/or
 +        // print a warning:
 +        int n = LGTD_MIN(LGTD_LIFX_LABEL_SIZE - 1, strlen(label));
-+        if (memcmp(site_map->labels[i][n], label, n)) {
++        if (memcmp(site_map->labels[i], label, n)) {
 +            if (n) {
 +                memcpy(site_map->labels[i], label, n);
 +                lgtd_info(
