@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  53a89e54492262170819c6d130ea510cd87981c6
+# Parent  97da5a287d16500aff148dcb4b81fe9da5e84d77
 Send one lifx packet per UDP datagram with a queue
 
 The firmware doesn't seem to support one more than one packet per
@@ -239,6 +239,20 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
  
  void lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *,
                                            const struct lgtd_lifx_packet_header *,
+diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
+--- a/tests/core/jsonrpc/test_jsonrpc_utils.h
++++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
+@@ -24,7 +24,9 @@
+ bufferevent_write(struct bufferevent *bev, const void *data, size_t nbytes)
+ {
+     (void)bev;
+-    int to_write = LGTD_MIN(nbytes, sizeof(client_write_buf));
++    int to_write = LGTD_MIN(
++        nbytes, sizeof(client_write_buf) - client_write_buf_idx
++    );
+     memcpy(&client_write_buf[client_write_buf_idx], data, to_write);
+     client_write_buf_idx += to_write;
+     return 0;
 diff --git a/tests/core/router/test_router_broadcast.c b/tests/core/router/test_router_broadcast.c
 --- a/tests/core/router/test_router_broadcast.c
 +++ b/tests/core/router/test_router_broadcast.c
@@ -372,17 +386,294 @@ diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.t
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/gateway/CMakeLists.txt
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,27 @@
 +INCLUDE_DIRECTORIES(
 +    ${CMAKE_CURRENT_SOURCE_DIR}
 +    ${CMAKE_CURRENT_BINARY_DIR}
 +)
 +
++ADD_LIBRARY(
++    test_lifx_gateway STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/core/proto.c
++    ${LIGHTSD_SOURCE_DIR}/core/router.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/broadcast.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${TIME_MONOTONIC_IMPL}
++)
++
 +FUNCTION(ADD_GATEWAY_TEST TEST_SOURCE)
-+    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} FALSE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_gateway)
 +ENDFUNCTION()
 +
 +FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
 +FOREACH(TEST ${TESTS})
 +    ADD_GATEWAY_TEST(${TEST})
 +ENDFOREACH()
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet.c b/tests/lifx/gateway/test_gateway_enqueue_packet.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet.c
+@@ -0,0 +1,65 @@
++#include "gateway.c"
++
++#include "test_gateway_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++    gw.write_ev = (void *)42;
++
++    struct lgtd_lifx_packet_power_state pkt;
++    pkt.power = LGTD_LIFX_POWER_ON;
++
++    union lgtd_lifx_target target = { .tags = 0 };
++
++    struct lgtd_lifx_packet_header hdr;
++    lgtd_lifx_wire_setup_header(
++        &hdr,
++        LGTD_LIFX_TARGET_ALL_DEVICES,
++        target,
++        gw.site,
++        LGTD_LIFX_SET_POWER_STATE
++    );
++
++    lgtd_lifx_gateway_enqueue_packet(
++        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
++    );
++
++    if (memcmp(gw_write_buf, &hdr, sizeof(hdr))) {
++        errx(1, "header incorrectly buffered");
++    }
++
++    if (memcmp(&gw_write_buf[sizeof(hdr)], &pkt, sizeof(pkt))) {
++        errx(1, "pkt incorrectly buffered");
++    }
++
++    if (gw.pkt_ring[0].type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "packet type incorrectly enqueued");
++    }
++
++    if (gw.pkt_ring[0].size != sizeof(pkt) + sizeof(hdr)) {
++        errx(1, "packet size incorrectly enqueued");
++    }
++
++    if (gw.pkt_ring_head != 1) {
++        errx(1, "packet ring head should be on index 1");
++    }
++
++    if (gw.pkt_ring_tail != 0) {
++        errx(1, "packet ring tail should be on index 0");
++    }
++
++    if (gw.pkt_ring_full == true) {
++        errx(1, "packet ring shouldn't be full");
++    }
++
++    if (last_event_passed_to_event_add != gw.write_ev) {
++        errx(1, "event_add should have been called with gw.write_ev");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_utils.h b/tests/lifx/gateway/test_gateway_utils.h
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_utils.h
+@@ -0,0 +1,130 @@
++#pragma once
++
++static char gw_write_buf[4096] = { 0 };
++static int gw_write_buf_idx = 0;
++
++static inline void
++reset_gw_write_buf(void)
++{
++    memset(gw_write_buf, 0, sizeof(gw_write_buf));
++    gw_write_buf_idx = 0;
++}
++
++int
++evbuffer_add(struct evbuffer *buf, const void *data, size_t datlen)
++{
++    (void)buf;
++    int to_write = LGTD_MIN(
++        datlen, sizeof(gw_write_buf) - gw_write_buf_idx
++    );
++    memcpy(&gw_write_buf[gw_write_buf_idx], data, to_write);
++    gw_write_buf_idx += to_write;
++    return 0;
++}
++
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    (void)buf;
++    return gw_write_buf_idx + 1;
++}
++
++int
++evbuffer_write_atmost(struct evbuffer *buf,
++                      evutil_socket_t fd,
++                      ev_ssize_t howmuch)
++{
++    (void)buf;
++    (void)fd;
++    (void)howmuch;
++    return howmuch;
++}
++
++struct evbuffer *
++evbuffer_new(void)
++{
++    return NULL;
++}
++
++void
++evbuffer_free(struct evbuffer *buf)
++{
++    (void)buf;
++}
++
++
++static struct event *last_event_passed_to_event_add = NULL;
++
++int
++event_add(struct event *ev, const struct timeval *timeout)
++{
++    (void)timeout;
++    last_event_passed_to_event_add = ev;
++    return 0;
++}
++
++int
++event_del(struct event *ev)
++{
++    (void)ev;
++    return 0;
++}
++
++void
++event_active(struct event *ev, int res, short ncalls)
++{
++    (void)ev;
++    (void)res;
++    (void)ncalls;
++}
++
++struct event *
++event_new(struct event_base *evbase,
++          evutil_socket_t sock,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    (void)evbase;
++    (void)sock;
++    (void)events;
++    (void)cb;
++    (void)ctx;
++    return NULL;
++}
++
++void
++event_free(struct event *ev)
++{
++    (void)ev;
++}
++
++int
++event_pending(const struct event *ev, short events, struct timeval *tv)
++{
++    (void)ev;
++    (void)events;
++    (void)tv;
++    return 0;
++}
++
++int
++evutil_closesocket(evutil_socket_t sock)
++{
++    (void)sock;
++    return 0;
++}
++
++int
++evutil_make_socket_nonblocking(evutil_socket_t sock)
++{
++    (void)sock;
++    return 0;
++}
++
++int
++evutil_make_listen_socket_reuseable(evutil_socket_t sock)
++{
++    (void)sock;
++    return 0;
++}
+diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/tests_shims.c
+@@ -0,0 +1,37 @@
++#include <sys/socket.h>
++#include <arpa/inet.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdlib.h>
++
++#include "core/lightsd.h"
++
++struct lgtd_opts lgtd_opts = {
++    .foreground = false,
++    .log_timestamps = false,
++    .verbosity = LGTD_DEBUG
++};
++
++struct event_base *lgtd_ev_base = NULL;
++
++void
++lgtd_cleanup(void)
++{
++}
++
++short
++lgtd_sockaddrport(const struct sockaddr_storage *peer)
++{
++    if (!peer) {
++        return -1;
++    }
++
++    if (peer->ss_family == AF_INET) {
++        const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
++        return ntohs(in_peer->sin_port);
++    } else {
++        const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
++        return ntohs(in6_peer->sin6_port);
++    }
++}
+diff --git a/tests/lifx/wire_proto/test_wire_proto_utils.h b/tests/lifx/wire_proto/test_wire_proto_utils.h
+--- a/tests/lifx/wire_proto/test_wire_proto_utils.h
++++ b/tests/lifx/wire_proto/test_wire_proto_utils.h
+@@ -26,3 +26,12 @@
+     (void)hdr;
+     (void)pkt;
+ }
++
++void lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
++                                         const struct lgtd_lifx_packet_header *hdr,
++                                         const struct lgtd_lifx_packet_tag_labels *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
