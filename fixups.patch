@@ -1,0 +1,340 @@
+# HG changeset patch
+# Parent  f2557233627c688391629644d9a011f48ee37877
+
+diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_proto_power_off.c
+--- a/tests/core/proto/test_proto_power_off.c
++++ b/tests/core/proto/test_proto_power_off.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -30,7 +31,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/test_proto_power_off_routing_error.c b/tests/core/proto/test_proto_power_off_routing_error.c
+--- a/tests/core/proto/test_proto_power_off_routing_error.c
++++ b/tests/core/proto/test_proto_power_off_routing_error.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -30,7 +31,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
+--- a/tests/core/proto/test_proto_power_on.c
++++ b/tests/core/proto/test_proto_power_on.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -30,7 +31,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/proto/test_proto_power_on_routing_error.c
+--- a/tests/core/proto/test_proto_power_on_routing_error.c
++++ b/tests/core/proto/test_proto_power_on_routing_error.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -30,7 +31,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/proto/test_proto_set_light_from_hsbk.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -50,7 +51,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -50,7 +51,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
+--- a/tests/core/proto/test_proto_set_waveform.c
++++ b/tests/core/proto/test_proto_set_waveform.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -65,7 +66,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_waveform_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "tests_utils.h"
++#include "tests_proto_utils.h"
+ 
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -65,7 +66,7 @@
+ }
+ 
+ void
+-lgtd_jsonrpc_send_response(struct lgtd_client *client, const char *msg)
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     if (!client) {
+         errx(1, "client shouldn't ne NULL");
+diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/tests_proto_utils.h
+@@ -0,0 +1,13 @@
++#pragma once
++
++void
++lgtd_client_start_send_response(struct lgtd_client *client)
++{
++    (void)client;
++}
++
++void
++lgtd_client_end_send_response(struct lgtd_client *client)
++{
++    (void)client;
++}
+diff --git a/tests/core/router/test_router_broadcast.c b/tests/core/router/test_router_broadcast.c
+--- a/tests/core/router/test_router_broadcast.c
++++ b/tests/core/router/test_router_broadcast.c
+@@ -18,12 +18,12 @@
+     targets = lgtd_tests_build_target_list("*", NULL);
+     lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &payload);
+ 
+-    if (lgtd_tests_gw_pkt_ring_size != 2) {
++    if (lgtd_tests_gw_pkt_queue_size != 2) {
+         lgtd_errx(1, "2 packets should have been sent");
+     }
+ 
+-    for (int i = lgtd_tests_gw_pkt_ring_size; i--;) {
+-        struct lgtd_lifx_gateway *gw = lgtd_tests_gw_pkt_ring[i].gw;
++    for (int i = lgtd_tests_gw_pkt_queue_size; i--;) {
++        struct lgtd_lifx_gateway *gw = lgtd_tests_gw_pkt_queue[i].gw;
+         if (gw->socket != i + 1) {
+             lgtd_errx(
+                 1, "packet was sent to wrong gateway (expected %d, got %d)",
+@@ -31,7 +31,7 @@
+             );
+         }
+         const struct lgtd_lifx_packet_header *hdr;
+-        hdr = lgtd_tests_gw_pkt_ring[i].hdr;
++        hdr = lgtd_tests_gw_pkt_queue[i].hdr;
+         if (!hdr->protocol.tagged || hdr->protocol.addressable) {
+             lgtd_errx(1, "packet header doesn't have the right bits set");
+         }
+@@ -41,13 +41,13 @@
+         if (memcmp(gw->site, hdr->site, sizeof(hdr->site))) {
+             lgtd_errx(1, "sites don't match");
+         }
+-        if (lgtd_tests_gw_pkt_ring[i].pkt != &payload) {
++        if (lgtd_tests_gw_pkt_queue[i].pkt != &payload) {
+             lgtd_errx(1, "the payload has been improperly set");
+         }
+-        if (lgtd_tests_gw_pkt_ring[i].pkt_size != sizeof(payload)) {
++        if (lgtd_tests_gw_pkt_queue[i].pkt_size != sizeof(payload)) {
+             lgtd_errx(
+                 1, "unexpected pkt size %d (expected %ld)",
+-                lgtd_tests_gw_pkt_ring[i].pkt_size, sizeof(payload)
++                lgtd_tests_gw_pkt_queue[i].pkt_size, sizeof(payload)
+             );
+         }
+     }
+diff --git a/tests/core/router/test_router_device.c b/tests/core/router/test_router_device.c
+--- a/tests/core/router/test_router_device.c
++++ b/tests/core/router/test_router_device.c
+@@ -20,14 +20,14 @@
+     targets = lgtd_tests_build_target_list("1", NULL);
+     lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &payload);
+ 
+-    if (lgtd_tests_gw_pkt_ring_size != 1) {
++    if (lgtd_tests_gw_pkt_queue_size != 1) {
+         lgtd_errx(1, "1 packet should have been sent");
+     }
+ 
+-    struct lgtd_lifx_gateway *recpt_gw = lgtd_tests_gw_pkt_ring[0].gw;
+-    struct lgtd_lifx_packet_header *hdr_queued = lgtd_tests_gw_pkt_ring[0].hdr;
+-    const void *pkt_ringd = lgtd_tests_gw_pkt_ring[0].pkt;
+-    int pkt_size = lgtd_tests_gw_pkt_ring[0].pkt_size;
++    struct lgtd_lifx_gateway *recpt_gw = lgtd_tests_gw_pkt_queue[0].gw;
++    struct lgtd_lifx_packet_header *hdr_queued = lgtd_tests_gw_pkt_queue[0].hdr;
++    const void *pkt_queued = lgtd_tests_gw_pkt_queue[0].pkt;
++    int pkt_size = lgtd_tests_gw_pkt_queue[0].pkt_size;
+ 
+     if (recpt_gw != gw_1) {
+         lgtd_errx(1, "the packet has been sent to the wrong gateway");
+@@ -45,7 +45,7 @@
+         lgtd_errx(1, "incorrect site in the headers");
+     }
+ 
+-    if (pkt_ringd != &payload) {
++    if (pkt_queued != &payload) {
+         lgtd_errx(1, "invalid payload");
+     }
+ 
+diff --git a/tests/core/router/test_router_invalid_targets.c b/tests/core/router/test_router_invalid_targets.c
+--- a/tests/core/router/test_router_invalid_targets.c
++++ b/tests/core/router/test_router_invalid_targets.c
+@@ -15,7 +15,7 @@
+     if (ok) {
+         lgtd_errx(1, "router_send didn't return false for an unknown device");
+     }
+-    if (lgtd_tests_gw_pkt_ring_size) {
++    if (lgtd_tests_gw_pkt_queue_size) {
+         lgtd_errx(1, "no packets should have been sent");
+     }
+ }
+diff --git a/tests/core/router/tests_router_utils.h b/tests/core/router/tests_router_utils.h
+--- a/tests/core/router/tests_router_utils.h
++++ b/tests/core/router/tests_router_utils.h
+@@ -1,28 +1,33 @@
+-int lgtd_tests_gw_pkt_ring_size = 0;
++#pragma once
++
++int lgtd_tests_gw_pkt_queue_size = 0;
+ struct {
+     struct lgtd_lifx_gateway        *gw;
+     struct lgtd_lifx_packet_header  *hdr;
+     const void                      *pkt;
+     int                             pkt_size;
+-} lgtd_tests_gw_pkt_ring[16] = { { NULL, NULL, NULL, 0}, };
++} lgtd_tests_gw_pkt_queue[16] = { { NULL, NULL, NULL, 0}, };
+ 
+ void
+-lgtd_lifx_gateway_send_packet(struct lgtd_lifx_gateway *gw,
+-                              const struct lgtd_lifx_packet_header *hdr,
+-                              const void *pkt,
+-                              int pkt_size)
++lgtd_lifx_gateway_enqueue_packet(struct lgtd_lifx_gateway *gw,
++                                 const struct lgtd_lifx_packet_header *hdr,
++                                 enum lgtd_lifx_packet_type pkt_type,
++                                 const void *pkt,
++                                 int pkt_size)
+ {
+-    lgtd_tests_gw_pkt_ring[lgtd_tests_gw_pkt_ring_size].gw = gw;
++    (void)pkt_type;
++
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].gw = gw;
+     // headers are created on the stack so we need to dup them:
+-    lgtd_tests_gw_pkt_ring[lgtd_tests_gw_pkt_ring_size].hdr = malloc(
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].hdr = malloc(
+         sizeof(*hdr)
+     );
+     memcpy(
+-        lgtd_tests_gw_pkt_ring[lgtd_tests_gw_pkt_ring_size].hdr,
++        lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].hdr,
+         hdr,
+         sizeof(*hdr)
+     );
+-    lgtd_tests_gw_pkt_ring[lgtd_tests_gw_pkt_ring_size].pkt = pkt;
+-    lgtd_tests_gw_pkt_ring[lgtd_tests_gw_pkt_ring_size].pkt_size = pkt_size;
+-    lgtd_tests_gw_pkt_ring_size++;
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].pkt = pkt;
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].pkt_size = pkt_size;
++    lgtd_tests_gw_pkt_queue_size++;
+ }
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -14,6 +14,7 @@
+ 
+ #include "lifx/wire_proto.h"
+ #include "core/time_monotonic.h"
++#include "lifx/tagging.h"
+ #include "core/jsmn.h"
+ #include "core/jsonrpc.h"
+ #include "core/client.h"
+@@ -25,6 +26,9 @@
+ struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
+     LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
+ 
++struct lgtd_lifx_label_site_tags_list lgtd_lifx_labels =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_labels);
++
+ struct lgtd_lifx_gateway *
+ lgtd_tests_insert_mock_gateway(int id)
+ {
