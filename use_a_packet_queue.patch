@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  97da5a287d16500aff148dcb4b81fe9da5e84d77
+# Parent  a56d576280caf91edaa0d02aed5e1764bb90fed1
 Send one lifx packet per UDP datagram with a queue
 
 The firmware doesn't seem to support one more than one packet per
@@ -84,7 +84,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
          if (nbytes == -1 && errno != EAGAIN) {
              lgtd_warn("can't write to [%s]:%hu", gw->ip_addr, gw->port);
              lgtd_lifx_gateway_close(gw);
-@@ -113,16 +119,32 @@
+@@ -113,16 +119,33 @@
              }
              return;
          }
@@ -114,6 +114,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +                    "%s --> [%s]:%hu", pkt_infos->name, gw->ip_addr, gw->port
 +                );
 +            }
++            gw->pkt_ring[gw->pkt_ring_tail].type = 0;
 +            LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(gw->pkt_ring_tail);
 +            gw->pkt_ring_full = false;
 +        }
@@ -121,7 +122,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
          if (!evbuffer_get_length(gw->write_buf)) {
              event_del(gw->write_ev);
          }
-@@ -136,20 +158,21 @@
+@@ -136,20 +159,21 @@
  
      struct lgtd_lifx_packet_header hdr;
      union lgtd_lifx_target target = { .addr = gw->site };
@@ -148,7 +149,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      gw->pending_refresh_req = true;
  }
-@@ -308,21 +331,37 @@
+@@ -308,21 +332,39 @@
  }
  
  void
@@ -171,7 +172,9 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +
 +    if (gw->pkt_ring_full) {
 +        lgtd_warnx(
-+            "dropping packet type %#x: packet queue is full", hdr->packet_type
++            "dropping packet type %s: packet queue on [%s]:%hu is full",
++            lgtd_lifx_wire_get_packet_infos(pkt_type)->name,
++            gw->ip_addr, gw->port
 +        );
 +        return;
 +    }
@@ -484,11 +487,181 @@ new file mode 100644
 +
 +    return 0;
 +}
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
+@@ -0,0 +1,89 @@
++#include "gateway.c"
++
++#include "test_gateway_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++    gw.write_ev = (void *)42;
++
++    struct lgtd_lifx_packet_power_state pkt;
++    pkt.power = LGTD_LIFX_POWER_ON;
++
++    union lgtd_lifx_target target = { .tags = 0 };
++
++    struct lgtd_lifx_packet_header hdr;
++    lgtd_lifx_wire_setup_header(
++        &hdr,
++        LGTD_LIFX_TARGET_ALL_DEVICES,
++        target,
++        gw.site,
++        LGTD_LIFX_SET_POWER_STATE
++    );
++
++    // set the head so it catches up the tail:
++    gw.pkt_ring_head = 1;
++    gw.pkt_ring_tail = 2;
++
++    lgtd_lifx_gateway_enqueue_packet(
++        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
++    );
++
++    if (memcmp(gw_write_buf, &hdr, sizeof(hdr))) {
++        errx(1, "header incorrectly buffered");
++    }
++
++    if (memcmp(&gw_write_buf[sizeof(hdr)], &pkt, sizeof(pkt))) {
++        errx(1, "pkt incorrectly buffered");
++    }
++
++    if (gw.pkt_ring[1].type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "packet type incorrectly enqueued");
++    }
++
++    if (gw.pkt_ring[1].size != sizeof(pkt) + sizeof(hdr)) {
++        errx(1, "packet size incorrectly enqueued");
++    }
++
++    if (gw.pkt_ring_head != 2) {
++        errx(1, "packet ring head should be on index 2");
++    }
++
++    if (gw.pkt_ring_tail != 2) {
++        errx(1, "packet ring tail should be on index 2");
++    }
++
++    if (gw.pkt_ring_full != true) {
++        errx(1, "packet ring should be full");
++    }
++
++    if (last_event_passed_to_event_add != gw.write_ev) {
++        errx(1, "event_add should have been called with gw.write_ev");
++    }
++
++    lgtd_lifx_gateway_enqueue_packet(
++        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
++    );
++
++    if (gw_write_buf_idx != sizeof(pkt) + sizeof(hdr)) {
++        errx(1, "nothing should have been buffered");
++    }
++
++    if (gw.pkt_ring_head != 2) {
++        errx(1, "packet ring head should be on index 2");
++    }
++
++    if (gw.pkt_ring_tail != 2) {
++        errx(1, "packet ring tail should be on index 2");
++    }
++
++    if (gw.pkt_ring_full != true) {
++        errx(1, "packet ring should be full");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
+@@ -0,0 +1,71 @@
++#include "gateway.c"
++
++#include "test_gateway_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++    gw.write_ev = (void *)42;
++
++    struct lgtd_lifx_packet_power_state pkt;
++    pkt.power = LGTD_LIFX_POWER_ON;
++
++    union lgtd_lifx_target target = { .tags = 0 };
++
++    struct lgtd_lifx_packet_header hdr;
++    lgtd_lifx_wire_setup_header(
++        &hdr,
++        LGTD_LIFX_TARGET_ALL_DEVICES,
++        target,
++        gw.site,
++        LGTD_LIFX_SET_POWER_STATE
++    );
++
++    int pkt_ring_last_idx = LGTD_ARRAY_SIZE(gw.pkt_ring) - 1;
++
++    // set the head so it has to wrap-around and set the tail somewhere:
++    gw.pkt_ring_head = pkt_ring_last_idx;
++    gw.pkt_ring_tail = 2;
++
++    lgtd_lifx_gateway_enqueue_packet(
++        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
++    );
++
++    if (memcmp(gw_write_buf, &hdr, sizeof(hdr))) {
++        errx(1, "header incorrectly buffered");
++    }
++
++    if (memcmp(&gw_write_buf[sizeof(hdr)], &pkt, sizeof(pkt))) {
++        errx(1, "pkt incorrectly buffered");
++    }
++
++    if (gw.pkt_ring[pkt_ring_last_idx].type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "packet type incorrectly enqueued");
++    }
++
++    if (gw.pkt_ring[pkt_ring_last_idx].size != sizeof(pkt) + sizeof(hdr)) {
++        errx(1, "packet size incorrectly enqueued");
++    }
++
++    if (gw.pkt_ring_head != 0) {
++        errx(1, "packet ring head should have wrapped around to index 0");
++    }
++
++    if (gw.pkt_ring_tail != 2) {
++        errx(1, "packet ring tail should be on index 2");
++    }
++
++    if (gw.pkt_ring_full == true) {
++        errx(1, "packet ring shouldn't be full");
++    }
++
++    if (last_event_passed_to_event_add != gw.write_ev) {
++        errx(1, "event_add should have been called with gw.write_ev");
++    }
++
++    return 0;
++}
 diff --git a/tests/lifx/gateway/test_gateway_utils.h b/tests/lifx/gateway/test_gateway_utils.h
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/gateway/test_gateway_utils.h
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,136 @@
 +#pragma once
 +
 +static char gw_write_buf[4096] = { 0 };
@@ -513,13 +686,16 @@ new file mode 100644
 +    return 0;
 +}
 +
++#ifndef LGTD_MOCKING_EVBUFFER_GET_LENGTH
 +size_t
 +evbuffer_get_length(const struct evbuffer *buf)
 +{
 +    (void)buf;
 +    return gw_write_buf_idx + 1;
 +}
++#endif
 +
++#ifndef LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
 +int
 +evbuffer_write_atmost(struct evbuffer *buf,
 +                      evutil_socket_t fd,
@@ -530,6 +706,7 @@ new file mode 100644
 +    (void)howmuch;
 +    return howmuch;
 +}
++#endif
 +
 +struct evbuffer *
 +evbuffer_new(void)
@@ -554,10 +731,12 @@ new file mode 100644
 +    return 0;
 +}
 +
++static struct event *last_event_passed_to_event_del = NULL;
++
 +int
 +event_del(struct event *ev)
 +{
-+    (void)ev;
++    last_event_passed_to_event_del = ev;
 +    return 0;
 +}
 +
@@ -617,6 +796,444 @@ new file mode 100644
 +evutil_make_listen_socket_reuseable(evutil_socket_t sock)
 +{
 +    (void)sock;
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_write_callback.c b/tests/lifx/gateway/test_gateway_write_callback.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_write_callback.c
+@@ -0,0 +1,77 @@
++#include "gateway.c"
++
++#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
++#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#include "test_gateway_utils.h"
++
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    if (buf != (void *)42) {
++        errx(1, "didn't get the expected evbuffer");
++    }
++
++    // fake another packet to write:
++    return sizeof(struct lgtd_lifx_packet_header);
++}
++
++int
++evbuffer_write_atmost(struct evbuffer *buf,
++                      evutil_socket_t fd,
++                      ev_ssize_t howmuch)
++{
++    if (fd != 25) {
++        errx(1, "evbuffer_write_atmost didn't get the expected socket");
++    }
++
++    if (buf != (void *)42) {
++        errx(1, "evbuffer_write_atmost didn't get the expected evbuffer");
++    }
++
++    int expected = sizeof(struct lgtd_lifx_packet_header);
++    expected += sizeof(struct lgtd_lifx_packet_power_state);
++    if (howmuch != expected) {
++        errx(
++            1, "evbuffer_write_atmost expected %d but got %ld",
++            expected, howmuch
++        );
++    }
++
++    return howmuch;
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    // fake some values:
++    gw.socket = 25;
++    gw.write_ev = (void *)21;
++    gw.write_buf = (void *)42;
++
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_header);
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_power_state);
++    gw.pkt_ring[0].type = LGTD_LIFX_SET_POWER_STATE;
++    gw.pkt_ring_head++;
++    gw.pkt_ring_head++;
++
++    lgtd_lifx_gateway_write_callback(-1, EV_WRITE, &gw);
++
++    if (gw.pkt_ring[0].size != 0 || gw.pkt_ring[0].type != 0) {
++        errx(1, "the ring entry should have been reset");
++    }
++
++    if (gw.pkt_ring_tail != 1) {
++        errx(1, "the tail shoud have been moved by one");
++    }
++
++    if (last_event_passed_to_event_del != NULL) {
++        errx(1, "event_del shouldn't have ben called");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c b/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
+@@ -0,0 +1,80 @@
++#include "gateway.c"
++
++#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
++#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#include "test_gateway_utils.h"
++
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    if (buf != (void *)42) {
++        errx(1, "didn't get the expected evbuffer");
++    }
++
++    // fake another packet to write:
++    return sizeof(struct lgtd_lifx_packet_header);
++}
++
++int
++evbuffer_write_atmost(struct evbuffer *buf,
++                      evutil_socket_t fd,
++                      ev_ssize_t howmuch)
++{
++    if (fd != 25) {
++        errx(1, "evbuffer_write_atmost didn't get the expected socket");
++    }
++
++    if (buf != (void *)42) {
++        errx(1, "evbuffer_write_atmost didn't get the expected evbuffer");
++    }
++
++    int expected = sizeof(struct lgtd_lifx_packet_header);
++    expected += sizeof(struct lgtd_lifx_packet_power_state);
++    if (howmuch != expected) {
++        errx(
++            1, "evbuffer_write_atmost expected %d but got %ld",
++            expected, howmuch
++        );
++    }
++
++    return howmuch;
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    // fake some values:
++    gw.socket = 25;
++    gw.write_ev = (void *)21;
++    gw.write_buf = (void *)42;
++
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_header);
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_power_state);
++    gw.pkt_ring[0].type = LGTD_LIFX_SET_POWER_STATE;
++    gw.pkt_ring_full = true;
++
++    lgtd_lifx_gateway_write_callback(-1, EV_WRITE, &gw);
++
++    if (gw.pkt_ring[0].size != 0 || gw.pkt_ring[0].type != 0) {
++        errx(1, "the ring entry should have been reset");
++    }
++
++    if (gw.pkt_ring_tail != 1) {
++        errx(1, "the tail shoud have been moved by one");
++    }
++
++    if (last_event_passed_to_event_del != NULL) {
++        errx(1, "event_del shouldn't have ben called");
++    }
++
++    if (gw.pkt_ring_full) {
++        errx(1, "the ring full flag should have been cleared out");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c b/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
+@@ -0,0 +1,76 @@
++#include "gateway.c"
++
++#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
++#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#include "test_gateway_utils.h"
++
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    if (buf != (void *)42) {
++        errx(1, "didn't get the expected evbuffer");
++    }
++
++    return 0;
++}
++
++int
++evbuffer_write_atmost(struct evbuffer *buf,
++                      evutil_socket_t fd,
++                      ev_ssize_t howmuch)
++{
++    if (fd != 25) {
++        errx(1, "evbuffer_write_atmost didn't get the expected socket");
++    }
++
++    if (buf != (void *)42) {
++        errx(1, "evbuffer_write_atmost didn't get the expected evbuffer");
++    }
++
++    int expected = sizeof(struct lgtd_lifx_packet_header);
++    expected += sizeof(struct lgtd_lifx_packet_power_state);
++    if (howmuch != expected) {
++        errx(
++            1, "evbuffer_write_atmost expected %d but got %ld",
++            expected, howmuch
++        );
++    }
++
++    return howmuch;
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    // fake some values:
++    gw.socket = 25;
++    gw.write_ev = (void *)21;
++    gw.write_buf = (void *)42;
++
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_header);
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_power_state);
++    gw.pkt_ring[0].type = LGTD_LIFX_SET_POWER_STATE;
++    gw.pkt_ring_head++;
++    gw.pkt_ring_head++;
++
++    lgtd_lifx_gateway_write_callback(-1, EV_WRITE, &gw);
++
++    if (gw.pkt_ring[0].size != 0 || gw.pkt_ring[0].type != 0) {
++        errx(1, "the ring entry should have been reset");
++    }
++
++    if (gw.pkt_ring_tail != 1) {
++        errx(1, "the tail shoud have been moved by one");
++    }
++
++    if (last_event_passed_to_event_del != (void *)21) {
++        errx(1, "event_del should have ben called");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_partial_write.c b/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
+@@ -0,0 +1,101 @@
++#include "gateway.c"
++
++#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
++#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#include "test_gateway_utils.h"
++
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    if (buf != (void *)42) {
++        errx(1, "didn't get the expected evbuffer");
++    }
++
++    // fake another packet to write:
++    return sizeof(struct lgtd_lifx_packet_header);
++}
++
++int
++evbuffer_write_atmost(struct evbuffer *buf,
++                      evutil_socket_t fd,
++                      ev_ssize_t howmuch)
++{
++    if (fd != 25) {
++        errx(1, "evbuffer_write_atmost didn't get the expected socket");
++    }
++
++    if (buf != (void *)42) {
++        errx(1, "evbuffer_write_atmost didn't get the expected evbuffer");
++    }
++
++    static int expected = (
++        sizeof(struct lgtd_lifx_packet_header)
++        + sizeof(struct lgtd_lifx_packet_power_state)
++    );
++    if (howmuch != expected) {
++        errx(
++            1, "evbuffer_write_atmost expected %d but got %ld",
++            expected, howmuch
++        );
++    }
++
++    if (expected != sizeof(struct lgtd_lifx_packet_power_state)) {
++        expected -= sizeof(struct lgtd_lifx_packet_header);
++        return sizeof(struct lgtd_lifx_packet_header);
++    }
++
++    return howmuch;
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    // fake some values:
++    gw.socket = 25;
++    gw.write_buf = (void *)42;
++
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_header);
++    gw.pkt_ring[0].size += sizeof(struct lgtd_lifx_packet_power_state);
++    gw.pkt_ring[0].type = LGTD_LIFX_SET_POWER_STATE;
++    gw.pkt_ring_head++;
++    gw.pkt_ring_head++;
++
++    lgtd_lifx_gateway_write_callback(-1, EV_WRITE, &gw);
++
++    if (gw.pkt_ring[0].type != LGTD_LIFX_SET_POWER_STATE) {
++        errx(1, "the ring entry doesn't have the right packet type");
++    }
++
++    if (gw.pkt_ring[0].size != sizeof(struct lgtd_lifx_packet_power_state)) {
++        errx(1, "the ring entry doesn't have the right size value");
++    }
++
++    if (gw.pkt_ring_tail != 0) {
++        errx(1, "the tail shoudn't have been moved by one");
++    }
++
++    if (last_event_passed_to_event_del != NULL) {
++        errx(1, "event_del shouldn't have ben called");
++    }
++
++    lgtd_lifx_gateway_write_callback(-1, EV_WRITE, &gw);
++
++    if (gw.pkt_ring[0].size != 0 || gw.pkt_ring[0].type != 0) {
++        errx(1, "the ring entry should have been reset");
++    }
++
++    if (gw.pkt_ring_tail != 1) {
++        errx(1, "the tail shoud have been moved by one");
++    }
++
++    if (last_event_passed_to_event_del != NULL) {
++        errx(1, "event_del shouldn't have ben called");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c b/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
+@@ -0,0 +1,79 @@
++#include "gateway.c"
++
++#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
++#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#include "test_gateway_utils.h"
++
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    if (buf != (void *)42) {
++        errx(1, "didn't get the expected evbuffer");
++    }
++
++    // fake another packet to write:
++    return sizeof(struct lgtd_lifx_packet_header);
++}
++
++int
++evbuffer_write_atmost(struct evbuffer *buf,
++                      evutil_socket_t fd,
++                      ev_ssize_t howmuch)
++{
++    if (fd != 25) {
++        errx(1, "evbuffer_write_atmost didn't get the expected socket");
++    }
++
++    if (buf != (void *)42) {
++        errx(1, "evbuffer_write_atmost didn't get the expected evbuffer");
++    }
++
++    int expected = sizeof(struct lgtd_lifx_packet_header);
++    expected += sizeof(struct lgtd_lifx_packet_power_state);
++    if (howmuch != expected) {
++        errx(
++            1, "evbuffer_write_atmost expected %d but got %ld",
++            expected, howmuch
++        );
++    }
++
++    return howmuch;
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    // fake some values:
++    gw.socket = 25;
++    gw.write_ev = (void *)21;
++    gw.write_buf = (void *)42;
++
++    int pkt_ring_last_idx = LGTD_ARRAY_SIZE(gw.pkt_ring) - 1;
++    gw.pkt_ring_tail = pkt_ring_last_idx;
++
++    gw.pkt_ring[pkt_ring_last_idx].size += sizeof(struct lgtd_lifx_packet_header);
++    gw.pkt_ring[pkt_ring_last_idx].size += sizeof(struct lgtd_lifx_packet_power_state);
++    gw.pkt_ring[pkt_ring_last_idx].type = LGTD_LIFX_SET_POWER_STATE;
++
++    lgtd_lifx_gateway_write_callback(-1, EV_WRITE, &gw);
++
++    if (gw.pkt_ring[pkt_ring_last_idx].size != 0 
++        || gw.pkt_ring[pkt_ring_last_idx].type != 0) {
++        errx(1, "the ring entry should have been reset");
++    }
++
++    if (gw.pkt_ring_tail != 0) {
++        errx(1, "the tail shoud have wrapped around to 0");
++    }
++
++    if (last_event_passed_to_event_del != NULL) {
++        errx(1, "event_del shouldn't have ben called");
++    }
++
 +    return 0;
 +}
 diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
