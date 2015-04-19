@@ -1,18 +1,26 @@
 # HG changeset patch
-# Parent  c93eee4c8054f1440abf146f41bd50cd9d224f29
+# Parent  8c48cb51feb8a52fb3c0ba7a001b0accb67dceb7
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -155,7 +155,7 @@
+@@ -155,11 +155,14 @@
      lgtd_client_start_send_response(client);
  
      LGTD_CLIENT_WRITE_STRING(client, "[");
 -    struct lgtd_lifx_label_site_tags *label;
 +    struct lgtd_lifx_label_sites_tags *label;
      LIST_FOREACH(label, &lgtd_lifx_labels, link) {
++        LGTD_CLIENT_WRITE_STRING(client, "\"");
          LGTD_CLIENT_WRITE_STRING(client, label->label);
          if (LIST_NEXT(label, link) != LIST_END(lgtd_lifx_labels)) {
+-            LGTD_CLIENT_WRITE_STRING(client, ",");
++            LGTD_CLIENT_WRITE_STRING(client, "\",");
++        } else {
++            LGTD_CLIENT_WRITE_STRING(client, "\"");
+         }
+     }
+     LGTD_CLIENT_WRITE_STRING(client, "]");
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
@@ -88,7 +96,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
  #else
      lgtd_warnx(
          "tried to remove unknown site %s from the tags list", lgtd_addrtoa(site)
-@@ -100,23 +100,75 @@
+@@ -100,23 +100,72 @@
  #endif
  }
  
@@ -97,7 +105,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 +{
 +    struct lgtd_lifx_label_sites_tags *label_sites_tags = NULL;
 +    LIST_FOREACH(label_sites_tags, &lgtd_lifx_labels, link) {
-+        if (strcmp(label_sites_tags->label, label)) {
++        if (!strcmp(label_sites_tags->label, label)) {
 +            break;
 +        }
 +    }
@@ -136,10 +144,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 +lgtd_lifx_tagging_labels_list_remove(const char *label,
 +                                     struct lgtd_lifx_site_tags *site_tags)
 +{
-+    struct lgtd_lifx_label_sites_tags *label_sites_tags =
-+        lgtd_lifx_tagging_labels_list_find(label);
-+    assert(label_sites_tags);
-+
++    assert(lgtd_lifx_tagging_labels_list_find(label));
 +    LIST_REMOVE(site_tags, link_by_label);
 +}
 +
