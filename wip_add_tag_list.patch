@@ -170,7 +170,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
          lgtd_warnx(
              "tried to add tag %s on unknown site %s", label, lgtd_addrtoa(site)
          );
-@@ -129,24 +181,30 @@
+@@ -129,24 +181,35 @@
          if (i == -1) {
              break;
          }
@@ -180,19 +180,22 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -        if (memcmp(site_map->labels[i], label, n)) {
 -            if (n) {
 -                memcpy(site_map->labels[i], label, n);
-+        int len = strlen(label);
-+        if (len) {
-+            if (memcmp(site_tags->labels[i], label, len)) {
-                 lgtd_info(
-                     "adding tag %s (id %d) on site %s",
-                     label, i, lgtd_addrtoa(site)
-                 );
+-                lgtd_info(
+-                    "adding tag %s (id %d) on site %s",
+-                    label, i, lgtd_addrtoa(site)
+-                );
 -            } else {
 -                lgtd_info(
 -                    "removing tag %s (id %d) on site %s",
 -                    site_map->labels[i], i, lgtd_addrtoa(site)
--                );
++        int len = strlen(label); // len ? adding a label : removing a label
++        if (len) {
++            if (!site_tags->labels[i][0]) {
 +                if (lgtd_lifx_tagging_labels_list_add(label, site_tags)) {
++                    lgtd_info(
++                        "adding tag %s (id %d) on site %s",
++                        label, i, lgtd_addrtoa(site)
++                    );
 +                    memcpy(site_tags->labels[i], label, len);
 +                } else {
 +                    lgtd_warn(
@@ -200,6 +203,11 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 +                        label, i, lgtd_addrtoa(site)
 +                    );
 +                }
++            } else if (!memcmp(site_tags->labels[i], label, len)) {
++                lgtd_warnx(
++                    "tried to overwrite tag %s (id %d) on site %s with tag %s",
++                    site_tags->labels[i], i, lgtd_addrtoa(site), label
+                 );
              }
 -            site_map->labels[i][n] = '\0';
 +        } else if (site_tags->labels[i][0]) {
