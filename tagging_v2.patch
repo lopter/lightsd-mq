@@ -1,24 +1,29 @@
 # HG changeset patch
-# Parent  89bb450c4b8ef5efaf6477ce4cd0a1df6e20ce28
+# Parent  50ca298865cf3eb744dd4e4e19c06405be50644f
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -155,10 +155,10 @@
+@@ -155,15 +155,10 @@
      lgtd_client_start_send_response(client);
  
      LGTD_CLIENT_WRITE_STRING(client, "[");
 -    struct lgtd_lifx_label_sites_tags *label;
 -    LIST_FOREACH(label, &lgtd_lifx_labels, link) {
+-        LGTD_CLIENT_WRITE_STRING(client, "\"");
 -        LGTD_CLIENT_WRITE_STRING(client, label->label);
 -        if (LIST_NEXT(label, link) != LIST_END(lgtd_lifx_labels)) {
+-            LGTD_CLIENT_WRITE_STRING(client, "\",");
+-        } else {
+-            LGTD_CLIENT_WRITE_STRING(client, "\"");
+-        }
 +    struct lgtd_lifx_tag *tag;
 +    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
 +        LGTD_CLIENT_WRITE_STRING(client, tag->tag);
 +        if (LIST_NEXT(tag, link) != LIST_END(lgtd_lifx_labels)) {
-             LGTD_CLIENT_WRITE_STRING(client, ",");
-         }
      }
+     LGTD_CLIENT_WRITE_STRING(client, "]");
+ 
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
@@ -188,7 +193,7 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 diff --git a/lifx/tagging.c b/lifx/tagging.c
 --- a/lifx/tagging.c
 +++ b/lifx/tagging.c
-@@ -33,183 +33,6 @@
+@@ -33,180 +33,5 @@
  #include "tagging.h"
  #include "core/lightsd.h"
  
@@ -196,9 +201,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -    LIST_HEAD_INITIALIZER(&lgtd_lifx_site_tags_map);
 -struct lgtd_lifx_label_sites_tags_list lgtd_lifx_labels =
 -    LIST_HEAD_INITIALIZER(&lgtd_lifx_labels);
-+struct lgtd_lifx_tag_list lgtd_lifx_tags =
-+    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
- 
+-
 -// Kim Walisch (2012)
 -// http://chessprogramming.wikispaces.com/BitScan#DeBruijnMultiplation
 -static inline int
@@ -266,7 +269,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -{
 -    struct lgtd_lifx_label_sites_tags *label_sites_tags = NULL;
 -    LIST_FOREACH(label_sites_tags, &lgtd_lifx_labels, link) {
--        if (strcmp(label_sites_tags->label, label)) {
+-        if (!strcmp(label_sites_tags->label, label)) {
 -            break;
 -        }
 -    }
@@ -305,10 +308,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -lgtd_lifx_tagging_labels_list_remove(const char *label,
 -                                     struct lgtd_lifx_site_tags *site_tags)
 -{
--    struct lgtd_lifx_label_sites_tags *label_sites_tags =
--        lgtd_lifx_tagging_labels_list_find(label);
--    assert(label_sites_tags);
--
+-    assert(lgtd_lifx_tagging_labels_list_find(label));
 -    LIST_REMOVE(site_tags, link_by_label);
 -}
 -
@@ -374,6 +374,8 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -        tags &= ~(1 << i);
 -    }
 -}
++struct lgtd_lifx_tag_list lgtd_lifx_tags =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
 diff --git a/lifx/tagging.h b/lifx/tagging.h
 --- a/lifx/tagging.h
 +++ b/lifx/tagging.h
