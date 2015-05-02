@@ -1,10 +1,10 @@
 # HG changeset patch
-# Parent  5b862e8ad06ad2de922f374b5bdc1d416bc757d5
+# Parent  56d4fc4d0e0d3fd6f69b23f7eb05306aa5dc591e
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -155,15 +155,10 @@
+@@ -155,14 +155,11 @@
      lgtd_client_start_send_response(client);
  
      LGTD_CLIENT_WRITE_STRING(client, "[");
@@ -16,14 +16,14 @@ diff --git a/core/proto.c b/core/proto.c
 -            LGTD_CLIENT_WRITE_STRING(client, "\",");
 -        } else {
 -            LGTD_CLIENT_WRITE_STRING(client, "\"");
--        }
 +    struct lgtd_lifx_tag *tag;
 +    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
-+        LGTD_CLIENT_WRITE_STRING(client, tag->tag);
-+        if (LIST_NEXT(tag, link) != LIST_END(lgtd_lifx_labels)) {
++        LGTD_CLIENT_WRITE_STRING(client, tag->label);
++        if (LIST_NEXT(tag, link)) {
++            LGTD_CLIENT_WRITE_STRING(client, ", ");
+         }
      }
      LGTD_CLIENT_WRITE_STRING(client, "]");
- 
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
@@ -83,7 +83,17 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  void
  lgtd_lifx_gateway_close(struct lgtd_lifx_gateway *gw)
  {
-@@ -68,16 +88,6 @@
+@@ -63,23 +83,19 @@
+     event_free(gw->refresh_ev);
+     event_free(gw->write_ev);
+     evbuffer_free(gw->write_buf);
++    for (int i = 0; i != LGTD_LIFX_GATEWAY_MAX_TAGS; i++) {
++        if (gw->tags[i]) {
++            lgtd_lifx_tagging_decref(gw->tags[i], gw);
++        }
++    }
+     struct lgtd_lifx_bulb *bulb, *next_bulb;
+     SLIST_FOREACH_SAFE(bulb, &gw->bulbs, link_by_gw, next_bulb) {
          lgtd_lifx_bulb_close(bulb);
      }
  
@@ -98,9 +108,13 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 -    }
 -
      lgtd_info(
-         "connection with gateway bulb [%s]:%hu closed", gw->ip_addr, gw->port
+-        "connection with gateway bulb [%s]:%hu closed", gw->ip_addr, gw->port
++        "connection with gateway bulb [%s]:%hu (site %s) closed",
++        gw->ip_addr, gw->port, lgtd_addrtoa(gw->site.as_array)
      );
-@@ -158,10 +168,14 @@
+     free(gw);
+ }
+@@ -158,10 +174,14 @@
      assert(gw);
  
      struct lgtd_lifx_packet_header hdr;
@@ -117,7 +131,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
      lgtd_lifx_gateway_enqueue_packet(
          gw, &hdr, LGTD_LIFX_GET_LIGHT_STATE, NULL, 0
-@@ -169,7 +183,11 @@
+@@ -169,7 +189,11 @@
  
      struct lgtd_lifx_packet_get_tag_labels pkt = { .tags = LGTD_LIFX_ALL_TAGS };
      lgtd_lifx_wire_setup_header(
@@ -130,7 +144,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
      lgtd_lifx_gateway_enqueue_packet(
          gw, &hdr, LGTD_LIFX_GET_TAG_LABELS, &pkt, sizeof(pkt)
-@@ -255,7 +273,7 @@
+@@ -255,7 +279,7 @@
      memcpy(&gw->peer, peer, sizeof(gw->peer));
      lgtd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
      gw->port = lgtd_sockaddrport(peer);
@@ -139,7 +153,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      gw->last_req_at = received_at;
      gw->next_req_at = received_at;
      gw->last_pkt_at = received_at;
-@@ -270,16 +288,9 @@
+@@ -270,16 +294,9 @@
          goto error_allocate;
      }
  
@@ -157,7 +171,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
      LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
  
-@@ -341,7 +352,7 @@
+@@ -341,7 +358,7 @@
      assert(gw);
      assert(hdr);
      assert(pkt_size >= 0 && pkt_size < LGTD_LIFX_MAX_PACKET_SIZE);
@@ -166,7 +180,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      assert(gw->pkt_ring_head >= 0);
      assert(gw->pkt_ring_head < (int)LGTD_ARRAY_SIZE(gw->pkt_ring));
  
-@@ -480,9 +491,46 @@
+@@ -480,9 +497,60 @@
      lgtd_lifx_bulb_set_power_state(b, pkt->power);
  }
  
@@ -180,13 +194,19 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +{
 +    assert(gw && tag);
 +    // allocating a new tag_id (tag_id == -1) isn't supported yet:
-+    assert(tag_id > 0);
++    assert(tag_id >= 0);
++    assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
 +
 +    struct lgtd_lifx_gateway *neighbor;
 +    LIST_FOREACH(neighbor, &lgtd_lifx_gateways, link) {
 +        if (gw->site.as_integer == neighbor->site.as_integer
-+            && !(neighbor->tags & tag_id)) {
-+            neighbor->tags |= tag_id;
++            && !(neighbor->tag_ids & tag_id)) {
++            lgtd_debug(
++                "tag_id %d allocated for tag [%s] on gw [%s]:%hu (site %s)",
++                tag_id, tag->label, neighbor->ip_addr, neighbor->port,
++                lgtd_addrtoa(gw->site.as_array)
++            );
++            neighbor->tag_ids |= tag_id;
 +            neighbor->tags[tag_id] = tag;
 +        }
 +    }
@@ -197,14 +217,22 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +void
 +lgtd_lifx_gateway_deallocate_tag_id(struct lgtd_lifx_gateway *gw, int tag_id)
 +{
-+    assert(gw)
-+    assert(tag_id > 0);
++    assert(gw);
++    assert(tag_id >= 0);
++    assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
 +
 +    struct lgtd_lifx_gateway *neighbor;
 +    LIST_FOREACH(neighbor, &lgtd_lifx_gateways, link) {
-+        if (gw->site.as_integer == neighbor->site.as_integer) {
++        if (gw->site.as_integer == neighbor->site.as_integer
++            && (neighbor->tag_ids & tag_id)) {
++            lgtd_debug(
++                "tag_id %d deallocated for tag [%s] on gw [%s]:%hu (site %s)",
++                tag_id, neighbor->tags[tag_id]->label,
++                neighbor->ip_addr, neighbor->port,
++                lgtd_addrtoa(gw->site.as_array)
++            );
++            neighbor->tag_ids &= ~tag_id;
 +            neighbor->tags[tag_id] = NULL;
-+            neighbor->tags &= ~tag_id;
 +        }
 +    }
 +}
@@ -216,11 +244,12 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  {
      assert(gw && hdr && pkt);
  
-@@ -492,5 +540,21 @@
+@@ -492,5 +560,22 @@
          pkt->label, (uintmax_t)pkt->tags
      );
  
 -    lgtd_lifx_tagging_update(gw->site, pkt->label, pkt->tags);
++    uint64_t tags = pkt->tags;
 +    while (true) {
 +        int tag_id = lgtd_lifx_bitscan64_forward(tags);
 +        if (tag_id == -1) {
@@ -232,9 +261,9 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +            if (tag) {
 +                lgtd_lifx_gateway_allocate_tag_id(gw, tag_id, tag);
 +            }
-+        } else {
-+            lgtd_lifx_tagging_decref(pkt->label, gw);
++        } else if (gw->tags[tag_id]) {
 +            lgtd_lifx_gateway_deallocate_tag_id(gw, tag_id);
++            lgtd_lifx_tagging_decref(gw->tags[tag_id], gw);
 +        }
 +        tags &= ~(1 << tag_id);
 +    }
@@ -242,7 +271,16 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 diff --git a/lifx/gateway.h b/lifx/gateway.h
 --- a/lifx/gateway.h
 +++ b/lifx/gateway.h
-@@ -42,7 +42,13 @@
+@@ -26,6 +26,8 @@
+ // You can't send more than one lifx packet per UDP datagram.
+ enum { LGTD_LIFX_GATEWAY_PACKET_RING_SIZE = 16 };
+ 
++enum { LGTD_LIFX_GATEWAY_MAX_TAGS = 64 };
++
+ struct lgtd_lifx_message {
+     enum lgtd_lifx_packet_type  type;
+     int                         size;
+@@ -42,7 +44,13 @@
      struct sockaddr_storage         peer;
      char                            ip_addr[INET6_ADDRSTRLEN];
      uint16_t                        port;
@@ -253,11 +291,11 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 +        uint64_t                    as_integer;
 +    }                               site;
 +    uint64_t                        tag_ids;
-+    struct lgtd_lifx_tag            *tags[64];
++    struct lgtd_lifx_tag            *tags[LGTD_LIFX_GATEWAY_MAX_TAGS];
      evutil_socket_t                 socket;
      // Those three timers let us measure the latency of the gateway. If we
      // aren't the only client on the network then this won't be accurate since
-@@ -85,6 +91,9 @@
+@@ -85,6 +93,9 @@
                                        const void *,
                                        int);
  
@@ -270,7 +308,13 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 diff --git a/lifx/tagging.c b/lifx/tagging.c
 --- a/lifx/tagging.c
 +++ b/lifx/tagging.c
-@@ -33,180 +33,5 @@
+@@ -30,183 +30,100 @@
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
++#include "core/time_monotonic.h"
++#include "bulb.h"
++#include "gateway.h"
  #include "tagging.h"
  #include "core/lightsd.h"
  
@@ -278,12 +322,16 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -    LIST_HEAD_INITIALIZER(&lgtd_lifx_site_tags_map);
 -struct lgtd_lifx_label_sites_tags_list lgtd_lifx_labels =
 -    LIST_HEAD_INITIALIZER(&lgtd_lifx_labels);
--
++struct lgtd_lifx_tag_list lgtd_lifx_tags =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
+ 
 -// Kim Walisch (2012)
 -// http://chessprogramming.wikispaces.com/BitScan#DeBruijnMultiplation
 -static inline int
 -lgtd_lifx_tagging_bitscan64_forward(uint64_t n)
--{
++static struct lgtd_lifx_tag *
++lgtd_lifx_tagging_find_tag(const char *tag_label)
+ {
 -    enum { DEBRUIJN_NUMBER = 0x03f79d71b4cb0a89 };
 -    static const int DEBRUIJN_SEQUENCE[64] = {
 -        0, 47,  1, 56, 48, 27,  2, 60,
@@ -297,32 +345,89 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -    };
 -
 -    return n ? DEBRUIJN_SEQUENCE[((n ^ (n - 1)) * DEBRUIJN_NUMBER) >> 58] : -1;
--}
--
++    struct lgtd_lifx_tag *tag = NULL;
++    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
++        if (!strcmp(tag->label, tag_label)) {
++            break;
++        }
++    }
++    return tag;
+ }
+ 
 -bool
 -lgtd_lifx_tagging_add_site(const uint8_t *site)
--{
++static struct lgtd_lifx_site *
++lgtd_lifx_tagging_find_site(struct lgtd_lifx_site_list *sites,
++                            const struct lgtd_lifx_gateway *gw)
+ {
 -    assert(site);
 -
 -    struct lgtd_lifx_site_tags *site_tags;
 -    LIST_FOREACH(site_tags, &lgtd_lifx_site_tags_map, link) {
 -        if (!memcmp(site_tags->site_id.as_array, site, LGTD_LIFX_ADDR_LENGTH)) {
 -            return true; // site already exists
--        }
--    }
--
++    struct lgtd_lifx_site *site = NULL;
++    LIST_FOREACH(site, sites, link) {
++        if (site->gw == gw) {
++            break;
+         }
+     }
++    return site;
++}
+ 
 -    site_tags = calloc(1, sizeof(*site_tags));
 -    memcpy(site_tags->site_id.as_array, site, LGTD_LIFX_ADDR_LENGTH);
 -    LIST_INSERT_HEAD(&lgtd_lifx_site_tags_map, site_tags, link);
--
++struct lgtd_lifx_tag *
++lgtd_lifx_tagging_incref(const char *tag_label,
++                         const struct lgtd_lifx_gateway *gw)
++{
++    assert(strlen(tag_label) < LGTD_LIFX_LABEL_SIZE);
++    assert(gw);
+ 
 -    return true;
--}
--
--void
++    bool dealloc_tag = false;
++    struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(tag_label);
++    if (!tag) {
++        tag = calloc(1, sizeof(*tag));
++        if (!tag) {
++            return NULL;
++        }
++        strncpy(tag->label, tag_label, sizeof(tag->label) - 1);
++        LIST_INSERT_HEAD(&lgtd_lifx_tags, tag, link);
++        dealloc_tag = true;
++    }
++
++    struct lgtd_lifx_site *site = lgtd_lifx_tagging_find_site(&tag->sites, gw);
++    if (!site) {
++        site = calloc(1, sizeof(*site));
++        if (!site) {
++            if (dealloc_tag) {
++                LIST_REMOVE(tag, link);
++                free(tag);
++            }
++            return NULL;
++        }
++        lgtd_info(
++            "tag [%s] added to gw [%s]:%hu (site %s)",
++            tag_label, gw->ip_addr, gw->port, lgtd_addrtoa(gw->site.as_array)
++        );
++        site->gw = gw;
++        LIST_INSERT_HEAD(&tag->sites, site, link);
++    }
++
++    return tag;
+ }
+ 
+ void
 -lgtd_lifx_tagging_remove_site(const uint8_t *site)
--{
++lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag,
++                         const struct lgtd_lifx_gateway *gw)
+ {
 -    assert(site);
--
++    assert(tag);
++    assert(gw);
+ 
 -    struct lgtd_lifx_site_tags *site_tags, *next_site_tags;
 -    LIST_FOREACH_SAFE(site_tags, &lgtd_lifx_site_tags_map, link, next_site_tags) {
 -        if (!memcmp(site_tags->site_id.as_array, site, LGTD_LIFX_ADDR_LENGTH)) {
@@ -330,7 +435,17 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -            free(site_tags);
 -            return;
 -        }
--    }
++    struct lgtd_lifx_site *site;
++    site = lgtd_lifx_tagging_find_site(&tag->sites, gw);
++    if (site) {
++        lgtd_info(
++            "tag [%s] removed from gw [%s]:%hu (site %s)",
++            tag->label, gw->ip_addr, gw->port,
++            lgtd_addrtoa(gw->site.as_array)
++        );
++        LIST_REMOVE(site, link);
++        free(site);
+     }
 -
 -#ifndef NDEBUG
 -    assert(site_tags != LIST_END(&lgtd_lifx_site_tags_map));
@@ -449,14 +564,15 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -            memset(site_tags->labels[i], 0, sizeof(site_tags->labels[i]));
 -        }
 -        tags &= ~(1 << i);
--    }
--}
-+struct lgtd_lifx_tag_list lgtd_lifx_tags =
-+    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
++    if (LIST_EMPTY(&tag->sites)) {
++        LIST_REMOVE(tag, link);
++        free(tag);
+     }
+ }
 diff --git a/lifx/tagging.h b/lifx/tagging.h
 --- a/lifx/tagging.h
 +++ b/lifx/tagging.h
-@@ -17,29 +17,19 @@
+@@ -17,29 +17,21 @@
  
  #pragma once
  
@@ -472,10 +588,11 @@ diff --git a/lifx/tagging.h b/lifx/tagging.h
 +extern struct lgtd_lifx_tag_list lgtd_lifx_tags;
 +
 +struct lgtd_lifx_site {
-+    LIST_ENTRY(lgtd_lifx_site)  link;
-+    struct lgtd_lifx_gateway    *site;
++    LIST_ENTRY(lgtd_lifx_site)      link;
++    const struct lgtd_lifx_gateway  *gw;
  };
 -LIST_HEAD(lgtd_lifx_site_tags_list, lgtd_lifx_site_tags);
++LIST_HEAD(lgtd_lifx_site_list, lgtd_lifx_site);
  
 -struct lgtd_lifx_label_sites_tags {
 -    LIST_ENTRY(lgtd_lifx_label_sites_tags)  link;
@@ -484,7 +601,7 @@ diff --git a/lifx/tagging.h b/lifx/tagging.h
 -    struct lgtd_lifx_site_tags_list         sites_tags;
 +struct lgtd_lifx_tag {
 +    LIST_ENTRY(lgtd_lifx_tag)   link;
-+    char                        tag[LGTD_LIFX_LABEL_SIZE];
++    char                        label[LGTD_LIFX_LABEL_SIZE];
 +    struct lgtd_lifx_site_list  sites;
  };
 -LIST_HEAD(lgtd_lifx_label_sites_tags_list, lgtd_lifx_label_sites_tags);
@@ -496,8 +613,9 @@ diff --git a/lifx/tagging.h b/lifx/tagging.h
 -void lgtd_lifx_tagging_remove_site(const uint8_t *site);
 -
 -void lgtd_lifx_tagging_update(const uint8_t *, const char *, uint64_t);
-+struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *, struct lgtd_lifx_gateway *);
-+void lgtd_lifx_tagging_decref(const char *, struct lgtd_lifx_gateway *);
++struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *,
++                                               const struct lgtd_lifx_gateway *);
++void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, const struct lgtd_lifx_gateway *);
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
