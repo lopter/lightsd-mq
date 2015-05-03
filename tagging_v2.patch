@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  56d4fc4d0e0d3fd6f69b23f7eb05306aa5dc591e
+# Parent  e8b6a82884d296f98a9b490e51413626944bff6a
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
@@ -180,7 +180,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      assert(gw->pkt_ring_head >= 0);
      assert(gw->pkt_ring_head < (int)LGTD_ARRAY_SIZE(gw->pkt_ring));
  
-@@ -480,9 +497,60 @@
+@@ -480,9 +497,71 @@
      lgtd_lifx_bulb_set_power_state(b, pkt->power);
  }
  
@@ -190,20 +190,30 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +int
 +lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
 +                                  int tag_id,
-+                                  struct lgtd_lifx_tag *tag)
++                                  const char *tag_label)
 +{
-+    assert(gw && tag);
++    assert(gw);
++    assert(tag_label);
 +    // allocating a new tag_id (tag_id == -1) isn't supported yet:
 +    assert(tag_id >= 0);
 +    assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
 +
-+    struct lgtd_lifx_gateway *neighbor;
++    struct lgtd_lifx_gateway *neighbor = NULL;
 +    LIST_FOREACH(neighbor, &lgtd_lifx_gateways, link) {
 +        if (gw->site.as_integer == neighbor->site.as_integer
 +            && !(neighbor->tag_ids & tag_id)) {
++            struct lgtd_lifx_tag *tag;
++            tag = lgtd_lifx_tagging_incref(tag_label, neighbor);
++            if (!tag) {
++                lgtd_warn(
++                    "couldn't allocate a new reference to tag [%s] (site %s)",
++                    tag_label, lgtd_addrtoa(gw->site.as_array)
++                );
++                return -1;
++            }
 +            lgtd_debug(
 +                "tag_id %d allocated for tag [%s] on gw [%s]:%hu (site %s)",
-+                tag_id, tag->label, neighbor->ip_addr, neighbor->port,
++                tag_id, tag_label, neighbor->ip_addr, neighbor->port,
 +                lgtd_addrtoa(gw->site.as_array)
 +            );
 +            neighbor->tag_ids |= tag_id;
@@ -231,6 +241,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +                neighbor->ip_addr, neighbor->port,
 +                lgtd_addrtoa(gw->site.as_array)
 +            );
++            lgtd_lifx_tagging_decref(neighbor->tags[tag_id], neighbor);
 +            neighbor->tag_ids &= ~tag_id;
 +            neighbor->tags[tag_id] = NULL;
 +        }
@@ -244,7 +255,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  {
      assert(gw && hdr && pkt);
  
-@@ -492,5 +560,22 @@
+@@ -492,5 +571,17 @@
          pkt->label, (uintmax_t)pkt->tags
      );
  
@@ -256,14 +267,9 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +            break;
 +        }
 +        if (pkt->label[0]) {
-+            struct lgtd_lifx_tag *tag;
-+            tag = lgtd_lifx_tagging_incref(pkt->label, gw);
-+            if (tag) {
-+                lgtd_lifx_gateway_allocate_tag_id(gw, tag_id, tag);
-+            }
++            lgtd_lifx_gateway_allocate_tag_id(gw, tag_id, pkt->label);
 +        } else if (gw->tags[tag_id]) {
 +            lgtd_lifx_gateway_deallocate_tag_id(gw, tag_id);
-+            lgtd_lifx_tagging_decref(gw->tags[tag_id], gw);
 +        }
 +        tags &= ~(1 << tag_id);
 +    }
@@ -299,7 +305,7 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
                                        const void *,
                                        int);
  
-+int lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *, int, struct lgtd_lifx_tag *);
++int lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *, int, const char *);
 +void lgtd_lifx_gateway_deallocate_tag_id(struct lgtd_lifx_gateway *, int);
 +
  void lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *,
@@ -308,7 +314,15 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 diff --git a/lifx/tagging.c b/lifx/tagging.c
 --- a/lifx/tagging.c
 +++ b/lifx/tagging.c
-@@ -30,183 +30,100 @@
+@@ -21,6 +21,7 @@
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
++#include <errno.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -30,183 +31,101 @@
  #include <event2/util.h>
  
  #include "wire_proto.h"
@@ -406,6 +420,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 +                LIST_REMOVE(tag, link);
 +                free(tag);
 +            }
++            errno = ENOMEM;
 +            return NULL;
 +        }
 +        lgtd_info(
