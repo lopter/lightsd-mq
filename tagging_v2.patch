@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  e8b6a82884d296f98a9b490e51413626944bff6a
+# Parent  e4365dbb8d548bf60e1ec4bb9069f7a5cbd69d4f
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
@@ -322,7 +322,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
  #include <stdarg.h>
  #include <stdbool.h>
  #include <stdint.h>
-@@ -30,183 +31,101 @@
+@@ -30,183 +31,105 @@
  #include <event2/util.h>
  
  #include "wire_proto.h"
@@ -423,7 +423,10 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 +            errno = ENOMEM;
 +            return NULL;
 +        }
-+        lgtd_info(
++        if (dealloc_tag) {
++            lgtd_info("discovered tag [%s]", tag_label);
++        }
++        lgtd_debug(
 +            "tag [%s] added to gw [%s]:%hu (site %s)",
 +            tag_label, gw->ip_addr, gw->port, lgtd_addrtoa(gw->site.as_array)
 +        );
@@ -453,7 +456,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 +    struct lgtd_lifx_site *site;
 +    site = lgtd_lifx_tagging_find_site(&tag->sites, gw);
 +    if (site) {
-+        lgtd_info(
++        lgtd_debug(
 +            "tag [%s] removed from gw [%s]:%hu (site %s)",
 +            tag->label, gw->ip_addr, gw->port,
 +            lgtd_addrtoa(gw->site.as_array)
@@ -581,6 +584,7 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 -        tags &= ~(1 << i);
 +    if (LIST_EMPTY(&tag->sites)) {
 +        LIST_REMOVE(tag, link);
++        lgtd_info("forgetting unused tag [%s]", tag->label);
 +        free(tag);
      }
  }
