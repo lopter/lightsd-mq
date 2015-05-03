@@ -180,13 +180,15 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      assert(gw->pkt_ring_head >= 0);
      assert(gw->pkt_ring_head < (int)LGTD_ARRAY_SIZE(gw->pkt_ring));
  
-@@ -480,9 +497,71 @@
+@@ -480,9 +497,65 @@
      lgtd_lifx_bulb_set_power_state(b, pkt->power);
  }
  
 -void lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
 -                                         const struct lgtd_lifx_packet_header *hdr,
 -                                         const struct lgtd_lifx_packet_tag_labels *pkt)
++#define TAG_ID_TO_VALUE(x) (1 << (x))
++
 +int
 +lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
 +                                  int tag_id,
@@ -198,27 +200,23 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +    assert(tag_id >= 0);
 +    assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
 +
-+    struct lgtd_lifx_gateway *neighbor = NULL;
-+    LIST_FOREACH(neighbor, &lgtd_lifx_gateways, link) {
-+        if (gw->site.as_integer == neighbor->site.as_integer
-+            && !(neighbor->tag_ids & tag_id)) {
-+            struct lgtd_lifx_tag *tag;
-+            tag = lgtd_lifx_tagging_incref(tag_label, neighbor);
-+            if (!tag) {
-+                lgtd_warn(
-+                    "couldn't allocate a new reference to tag [%s] (site %s)",
-+                    tag_label, lgtd_addrtoa(gw->site.as_array)
-+                );
-+                return -1;
-+            }
-+            lgtd_debug(
-+                "tag_id %d allocated for tag [%s] on gw [%s]:%hu (site %s)",
-+                tag_id, tag_label, neighbor->ip_addr, neighbor->port,
-+                lgtd_addrtoa(gw->site.as_array)
++    if (!(gw->tag_ids & TAG_ID_TO_VALUE(tag_id))) {
++        struct lgtd_lifx_tag *tag;
++        tag = lgtd_lifx_tagging_incref(tag_label, gw);
++        if (!tag) {
++            lgtd_warn(
++                "couldn't allocate a new reference to tag [%s] (site %s)",
++                tag_label, lgtd_addrtoa(gw->site.as_array)
 +            );
-+            neighbor->tag_ids |= tag_id;
-+            neighbor->tags[tag_id] = tag;
++            return -1;
 +        }
++        lgtd_debug(
++            "tag_id %d allocated for tag [%s] on gw [%s]:%hu (site %s)",
++            tag_id, tag_label, gw->ip_addr, gw->port,
++            lgtd_addrtoa(gw->site.as_array)
++        );
++        gw->tag_ids |= TAG_ID_TO_VALUE(tag_id);
++        gw->tags[tag_id] = tag;
 +    }
 +
 +    return tag_id;
@@ -231,20 +229,16 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +    assert(tag_id >= 0);
 +    assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
 +
-+    struct lgtd_lifx_gateway *neighbor;
-+    LIST_FOREACH(neighbor, &lgtd_lifx_gateways, link) {
-+        if (gw->site.as_integer == neighbor->site.as_integer
-+            && (neighbor->tag_ids & tag_id)) {
-+            lgtd_debug(
-+                "tag_id %d deallocated for tag [%s] on gw [%s]:%hu (site %s)",
-+                tag_id, neighbor->tags[tag_id]->label,
-+                neighbor->ip_addr, neighbor->port,
-+                lgtd_addrtoa(gw->site.as_array)
-+            );
-+            lgtd_lifx_tagging_decref(neighbor->tags[tag_id], neighbor);
-+            neighbor->tag_ids &= ~tag_id;
-+            neighbor->tags[tag_id] = NULL;
-+        }
++    if (gw->tag_ids & TAG_ID_TO_VALUE(tag_id)) {
++        lgtd_debug(
++            "tag_id %d deallocated for tag [%s] on gw [%s]:%hu (site %s)",
++            tag_id, gw->tags[tag_id]->label,
++            gw->ip_addr, gw->port,
++            lgtd_addrtoa(gw->site.as_array)
++        );
++        lgtd_lifx_tagging_decref(gw->tags[tag_id], gw);
++        gw->tag_ids &= ~TAG_ID_TO_VALUE(tag_id);
++        gw->tags[tag_id] = NULL;
 +    }
 +}
 +
@@ -255,7 +249,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  {
      assert(gw && hdr && pkt);
  
-@@ -492,5 +571,17 @@
+@@ -492,5 +565,17 @@
          pkt->label, (uintmax_t)pkt->tags
      );
  
@@ -271,7 +265,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +        } else if (gw->tags[tag_id]) {
 +            lgtd_lifx_gateway_deallocate_tag_id(gw, tag_id);
 +        }
-+        tags &= ~(1 << tag_id);
++        tags &= ~TAG_ID_TO_VALUE(tag_id);
 +    }
  }
 diff --git a/lifx/gateway.h b/lifx/gateway.h
