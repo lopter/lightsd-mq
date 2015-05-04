@@ -4,26 +4,26 @@
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -155,14 +155,11 @@
+@@ -155,15 +155,11 @@
      lgtd_client_start_send_response(client);
  
      LGTD_CLIENT_WRITE_STRING(client, "[");
 -    struct lgtd_lifx_label_sites_tags *label;
 -    LIST_FOREACH(label, &lgtd_lifx_labels, link) {
--        LGTD_CLIENT_WRITE_STRING(client, "\"");
++    struct lgtd_lifx_tag *tag;
++    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
+         LGTD_CLIENT_WRITE_STRING(client, "\"");
 -        LGTD_CLIENT_WRITE_STRING(client, label->label);
 -        if (LIST_NEXT(label, link) != LIST_END(lgtd_lifx_labels)) {
 -            LGTD_CLIENT_WRITE_STRING(client, "\",");
 -        } else {
 -            LGTD_CLIENT_WRITE_STRING(client, "\"");
-+    struct lgtd_lifx_tag *tag;
-+    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
+-        }
 +        LGTD_CLIENT_WRITE_STRING(client, tag->label);
-+        if (LIST_NEXT(tag, link)) {
-+            LGTD_CLIENT_WRITE_STRING(client, ", ");
-         }
++        LGTD_CLIENT_WRITE_STRING(client, LIST_NEXT(tag, link) ? "\", " : "\"");
      }
      LGTD_CLIENT_WRITE_STRING(client, "]");
+ 
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
