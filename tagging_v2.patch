@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  e4365dbb8d548bf60e1ec4bb9069f7a5cbd69d4f
+# Parent  00e4e3006dfc4566e8053ad10feeadd0d5a2e362
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
@@ -629,19 +629,52 @@ diff --git a/lifx/tagging.h b/lifx/tagging.h
 +struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *,
 +                                               const struct lgtd_lifx_gateway *);
 +void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, const struct lgtd_lifx_gateway *);
+diff --git a/tests/core/router/test_router_broadcast.c b/tests/core/router/test_router_broadcast.c
+--- a/tests/core/router/test_router_broadcast.c
++++ b/tests/core/router/test_router_broadcast.c
+@@ -32,13 +32,13 @@
+         }
+         const struct lgtd_lifx_packet_header *hdr;
+         hdr = lgtd_tests_gw_pkt_queue[i].hdr;
+-        if (!hdr->protocol.tagged || hdr->protocol.addressable) {
++        if (!hdr->protocol.tagged || !hdr->protocol.addressable) {
+             lgtd_errx(1, "packet header doesn't have the right bits set");
+         }
+         if (hdr->target.tags != 0) {
+             lgtd_errx(1, "tags should be 0 for broadcast");
+         }
+-        if (memcmp(gw->site, hdr->site, sizeof(hdr->site))) {
++        if (memcmp(gw->site.as_array, hdr->site, sizeof(hdr->site))) {
+             lgtd_errx(1, "sites don't match");
+         }
+         if (lgtd_tests_gw_pkt_queue[i].pkt != &payload) {
+diff --git a/tests/core/router/test_router_device.c b/tests/core/router/test_router_device.c
+--- a/tests/core/router/test_router_device.c
++++ b/tests/core/router/test_router_device.c
+@@ -41,7 +41,7 @@
+         lgtd_errx(1, "the packet header doesn't have the right target address");
+     }
+ 
+-    if (memcmp(gw_1->site, hdr_queued->site, sizeof(hdr_queued->site))) {
++    if (memcmp(gw_1->site.as_array, hdr_queued->site, sizeof(hdr_queued->site))) {
+         lgtd_errx(1, "incorrect site in the headers");
+     }
+ 
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
-@@ -26,16 +26,13 @@
+@@ -26,8 +26,8 @@
  struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
      LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
  
 -struct lgtd_lifx_label_sites_tags_list lgtd_lifx_labels =
 -    LIST_HEAD_INITIALIZER(&lgtd_lifx_labels);
--
++struct lgtd_lifx_tag_list lgtd_lifx_tags =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
+ 
  struct lgtd_lifx_gateway *
  lgtd_tests_insert_mock_gateway(int id)
- {
+@@ -35,7 +35,7 @@
      struct lgtd_lifx_gateway *gw = calloc(1, sizeof(*gw));
  
      gw->socket = id;
@@ -649,4 +682,40 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 +    gw->site.as_array[0] = id;
  
      LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
+ 
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet.c b/tests/lifx/gateway/test_gateway_enqueue_packet.c
+--- a/tests/lifx/gateway/test_gateway_enqueue_packet.c
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet.c
+@@ -21,7 +21,7 @@
+         &hdr,
+         LGTD_LIFX_TARGET_ALL_DEVICES,
+         target,
+-        gw.site,
++        gw.site.as_array,
+         LGTD_LIFX_SET_POWER_STATE
+     );
+ 
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
+--- a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
+@@ -21,7 +21,7 @@
+         &hdr,
+         LGTD_LIFX_TARGET_ALL_DEVICES,
+         target,
+-        gw.site,
++        gw.site.as_array,
+         LGTD_LIFX_SET_POWER_STATE
+     );
+ 
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
+--- a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
+@@ -21,7 +21,7 @@
+         &hdr,
+         LGTD_LIFX_TARGET_ALL_DEVICES,
+         target,
+-        gw.site,
++        gw.site.as_array,
+         LGTD_LIFX_SET_POWER_STATE
+     );
  
