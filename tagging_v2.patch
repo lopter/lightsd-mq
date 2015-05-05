@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  00e4e3006dfc4566e8053ad10feeadd0d5a2e362
+# Parent  bae87627b6af6c3ce18e0056e48d74c9bbb3f535
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
@@ -187,7 +187,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 -void lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
 -                                         const struct lgtd_lifx_packet_header *hdr,
 -                                         const struct lgtd_lifx_packet_tag_labels *pkt)
-+#define TAG_ID_TO_VALUE(x) (1 << (x))
++#define TAG_ID_TO_VALUE(x) (1L << (x))
 +
 +int
 +lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
@@ -629,6 +629,23 @@ diff --git a/lifx/tagging.h b/lifx/tagging.h
 +struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *,
 +                                               const struct lgtd_lifx_gateway *);
 +void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, const struct lgtd_lifx_gateway *);
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -201,11 +201,11 @@
+ 
+ enum { LGTD_LIFX_ALL_TAGS = ~0 };
+ struct lgtd_lifx_packet_get_tag_labels {
+-    uint64be_t  tags;
++    uint64le_t  tags;
+ };
+ 
+ struct lgtd_lifx_packet_tag_labels {
+-    uint64be_t  tags;
++    uint64le_t  tags;
+     char        label[LGTD_LIFX_LABEL_SIZE];
+ };
+ 
 diff --git a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
 --- a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
 +++ b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
@@ -1226,6 +1243,17 @@ diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
  struct lgtd_lifx_bulb *lgtd_tests_insert_mock_bulb(struct lgtd_lifx_gateway *, uint64_t);
  struct lgtd_proto_target_list *lgtd_tests_build_target_list(const char *, ...);
 +struct lgtd_lifx_tag *lgtd_tests_insert_mock_tag(const char *);
+diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.txt
+--- a/tests/lifx/gateway/CMakeLists.txt
++++ b/tests/lifx/gateway/CMakeLists.txt
+@@ -10,7 +10,6 @@
+     ${LIGHTSD_SOURCE_DIR}/core/router.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/broadcast.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+-    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
 diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet.c b/tests/lifx/gateway/test_gateway_enqueue_packet.c
 --- a/tests/lifx/gateway/test_gateway_enqueue_packet.c
 +++ b/tests/lifx/gateway/test_gateway_enqueue_packet.c
@@ -1262,3 +1290,122 @@ diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c b/
          LGTD_LIFX_SET_POWER_STATE
      );
  
+diff --git a/tests/lifx/gateway/test_gateway_utils.h b/tests/lifx/gateway/test_gateway_utils.h
+--- a/tests/lifx/gateway/test_gateway_utils.h
++++ b/tests/lifx/gateway/test_gateway_utils.h
+@@ -22,7 +22,9 @@
+     return 0;
+ }
+ 
+-#ifndef LGTD_MOCKING_EVBUFFER_GET_LENGTH
++struct lgtd_lifx_tag_list lgtd_lifx_tags = LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
++
++#ifndef MOCKED_EVBUFFER_GET_LENGTH
+ size_t
+ evbuffer_get_length(const struct evbuffer *buf)
+ {
+@@ -31,7 +33,7 @@
+ }
+ #endif
+ 
+-#ifndef LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
++#ifndef MOCKED_EVBUFFER_WRITE_ATMOST
+ int
+ evbuffer_write_atmost(struct evbuffer *buf,
+                       evutil_socket_t fd,
+@@ -44,6 +46,30 @@
+ }
+ #endif
+ 
++#ifndef MOCKED_LIFX_TAGGING_INCREF
++struct lgtd_lifx_tag *
++lgtd_lifx_tagging_incref(const char *label, const struct lgtd_lifx_gateway *gw)
++{
++    struct lgtd_lifx_tag *tag = calloc(1, sizeof(*tag));
++    strcpy(tag->label, label);
++    LIST_INSERT_HEAD(&lgtd_lifx_tags, tag, link);
++    struct lgtd_lifx_site *site = calloc(1, sizeof(*site));
++    site->gw = gw;
++    LIST_INSERT_HEAD(&tag->sites, site, link);
++    return tag;
++}
++#endif
++
++#ifndef MOCKED_LIFX_TAGGING_DECCREF
++void
++lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag,
++                         const struct lgtd_lifx_gateway *gw)
++{
++    (void)tag;
++    (void)gw;
++}
++#endif
++
+ struct evbuffer *
+ evbuffer_new(void)
+ {
+diff --git a/tests/lifx/gateway/test_gateway_write_callback.c b/tests/lifx/gateway/test_gateway_write_callback.c
+--- a/tests/lifx/gateway/test_gateway_write_callback.c
++++ b/tests/lifx/gateway/test_gateway_write_callback.c
+@@ -1,7 +1,7 @@
+ #include "gateway.c"
+ 
+-#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
+-#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#define MOCKED_EVBUFFER_WRITE_ATMOST
++#define MOCKED_EVBUFFER_GET_LENGTH
+ #include "test_gateway_utils.h"
+ 
+ size_t
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c b/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
+@@ -1,7 +1,7 @@
+ #include "gateway.c"
+ 
+-#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
+-#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#define MOCKED_EVBUFFER_WRITE_ATMOST
++#define MOCKED_EVBUFFER_GET_LENGTH
+ #include "test_gateway_utils.h"
+ 
+ size_t
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c b/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
+@@ -1,7 +1,7 @@
+ #include "gateway.c"
+ 
+-#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
+-#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#define MOCKED_EVBUFFER_WRITE_ATMOST
++#define MOCKED_EVBUFFER_GET_LENGTH
+ #include "test_gateway_utils.h"
+ 
+ size_t
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_partial_write.c b/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
+@@ -1,7 +1,7 @@
+ #include "gateway.c"
+ 
+-#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
+-#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#define MOCKED_EVBUFFER_WRITE_ATMOST
++#define MOCKED_EVBUFFER_GET_LENGTH
+ #include "test_gateway_utils.h"
+ 
+ size_t
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c b/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
+@@ -1,7 +1,7 @@
+ #include "gateway.c"
+ 
+-#define LGTD_MOCKING_EVBUFFER_WRITE_ATMOST
+-#define LGTD_MOCKING_EVBUFFER_GET_LENGTH
++#define MOCKED_EVBUFFER_WRITE_ATMOST
++#define MOCKED_EVBUFFER_GET_LENGTH
+ #include "test_gateway_utils.h"
+ 
+ size_t
