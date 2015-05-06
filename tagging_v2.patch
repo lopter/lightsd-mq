@@ -1,6 +1,49 @@
 # HG changeset patch
 # Parent  bae87627b6af6c3ce18e0056e48d74c9bbb3f535
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -25,10 +25,6 @@
+ FIND_PACKAGE(Endian REQUIRED)
+ INCLUDE(CompatTimeMonotonic)
+ 
+-INCLUDE(CheckTypeSize)
+-CHECK_TYPE_SIZE(suseconds_t SUSECONDS_T_SIZE)
+-ADD_DEFINITIONS("-DLGTD_SUSECONDS_T_SIZE=${SUSECONDS_T_SIZE}")
+-
+ ### Global definitions #########################################################
+ 
+ INCLUDE(AddAllSubdirectories)
+@@ -36,6 +32,8 @@
+ 
+ SET(CMAKE_C_FLAGS "-pipe -Wextra -Wall -Wstrict-prototypes -std=c99")
+ 
++ADD_DEFINITIONS("-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}")
++
+ # Only relevant for the GNU libc:
+ ADD_DEFINITIONS(
+     "-D_POSIX_C_SOURCE=200809L"
+diff --git a/core/log.c b/core/log.c
+--- a/core/log.c
++++ b/core/log.c
+@@ -48,14 +48,10 @@
+     }
+     // '2015-01-02T10:13:16.132222+00:00'
+     snprintf(
+-#if LGTD_SUSECONDS_T_SIZE == 4
+-        strbuf, bufsz, "%d-%02d-%02dT%02d:%02d:%02d.%d%c%02ld:%02ld",
+-#else
+-        strbuf, bufsz, "%d-%02d-%02dT%02d:%02d:%02d.%ld%c%02ld:%02ld",
+-#endif
++        strbuf, bufsz, "%d-%02d-%02dT%02d:%02d:%02d.%jd%c%02ld:%02ld",
+         1900 + tm_now.tm_year, 1 + tm_now.tm_mon, tm_now.tm_mday,
+         tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec,
+-        now.tv_usec, tm_now.tm_gmtoff >= 0 ? '+' : '-', // %+02ld doesn't work
++        (intmax_t)now.tv_usec, tm_now.tm_gmtoff >= 0 ? '+' : '-', // %+02ld doesn't work
+         LGTD_ABS(tm_now.tm_gmtoff / 60 / 60), tm_now.tm_gmtoff % (60 * 60)
+     );
+     return;
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
@@ -180,14 +223,18 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      assert(gw->pkt_ring_head >= 0);
      assert(gw->pkt_ring_head < (int)LGTD_ARRAY_SIZE(gw->pkt_ring));
  
-@@ -480,9 +497,65 @@
+@@ -480,9 +497,69 @@
      lgtd_lifx_bulb_set_power_state(b, pkt->power);
  }
  
 -void lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
 -                                         const struct lgtd_lifx_packet_header *hdr,
 -                                         const struct lgtd_lifx_packet_tag_labels *pkt)
-+#define TAG_ID_TO_VALUE(x) (1L << (x))
++#if LGTD_SIZEOF_VOID_P == 8
++#   define TAG_ID_TO_VALUE(x) (1UL << (x))
++#elif LGTD_SIZEOF_VOID_P == 4
++#   define TAG_ID_TO_VALUE(x) (1ULL << (x))
++#endif
 +
 +int
 +lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
@@ -249,7 +296,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  {
      assert(gw && hdr && pkt);
  
-@@ -492,5 +565,17 @@
+@@ -492,5 +569,17 @@
          pkt->label, (uintmax_t)pkt->tags
      );
  
