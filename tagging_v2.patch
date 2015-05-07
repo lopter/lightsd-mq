@@ -223,6 +223,19 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      assert(gw->pkt_ring_head >= 0);
      assert(gw->pkt_ring_head < (int)LGTD_ARRAY_SIZE(gw->pkt_ring));
  
+@@ -416,10 +433,10 @@
+         && b->last_light_state_at > b->dirty_at
+         && b->gw->last_pkt_at - b->dirty_at > 400) {
+         if (b->expected_power_on == b->state.power) {
+-            lgtd_warnx("clearing dirty_at on %s", b->state.label);
++            lgtd_debug("clearing dirty_at on %s", b->state.label);
+             b->dirty_at = 0;
+         } else {
+-            lgtd_warnx(
++            lgtd_info(
+                 "retransmiting power %s to %s",
+                 b->expected_power_on ? "on" : "off", b->state.label
+             );
 @@ -480,9 +497,69 @@
      lgtd_lifx_bulb_set_power_state(b, pkt->power);
  }
@@ -1301,6 +1314,210 @@ diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.t
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
      ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+@@ -0,0 +1,122 @@
++#include <string.h>
++
++#include "gateway.c"
++
++#define MOCKED_LIFX_TAGGING_INCREF
++#include "test_gateway_utils.h"
++
++static bool tagging_incref_called = false;
++
++struct lgtd_lifx_tag *
++lgtd_lifx_tagging_incref(const char *label, const struct lgtd_lifx_gateway *gw)
++{
++    if (!label) {
++        errx(1, "missing tag label");
++    }
++    if (!gw) {
++        errx(1, "missing gateway");
++    }
++
++    static struct lgtd_lifx_tag *tag = NULL;
++
++    if (!tag) {
++        tag = calloc(1, sizeof(*tag));
++        strcpy(tag->label, label);
++        struct lgtd_lifx_site *site = calloc(1, sizeof(*site));
++        site->gw = gw;
++        LIST_INSERT_HEAD(&tag->sites, site, link);
++    }
++
++    tagging_incref_called = true;
++
++    return tag;
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    struct lgtd_lifx_packet_header hdr;
++    memset(&hdr, 0, sizeof(hdr));
++
++    lgtd_lifx_gateway_allocate_tag_id(&gw, 4, "test");
++    if (!gw.tags[4]) {
++        errx(1, "gw.tag_ids[4] shouldn't be NULL");
++    }
++    if (strcmp(gw.tags[4]->label, "test")) {
++        errx(
++            1, "unexpected tag %.*s (expected test)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
++        );
++    }
++    if (gw.tag_ids != TAG_ID_TO_VALUE(4)) {
++        errx(
++            1, "tag_ids = %jx (expected %jx)",
++            (uintmax_t)gw.tag_ids, (uintmax_t)TAG_ID_TO_VALUE(4)
++        );
++    }
++
++    lgtd_lifx_gateway_allocate_tag_id(&gw, 63, "test");
++    if (!gw.tags[4]) {
++        errx(1, "gw.tag_ids[4] shouldn't be NULL");
++    }
++    if (strcmp(gw.tags[4]->label, "test")) {
++        errx(
++            1, "unexpected tag %.*s (expected test)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
++        );
++    }
++    if (!gw.tags[63]) {
++        errx(1, "gw.tag_ids[63] shouldn't be NULL");
++    }
++    if (strcmp(gw.tags[63]->label, "test")) {
++        errx(
++            1, "unexpected tag %.*s (expected test)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
++        );
++    }
++    if (gw.tag_ids != (TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))) {
++        errx(
++            1, "tag_ids = %jx (expected %jx)",
++            (uintmax_t)gw.tag_ids,
++            (uintmax_t)(TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))
++        );
++    }
++
++    tagging_incref_called = false;
++    lgtd_lifx_gateway_allocate_tag_id(&gw, 4, "test");
++    if (!gw.tags[4]) {
++        errx(1, "gw.tag_ids[4] shouldn't be NULL");
++    }
++    if (strcmp(gw.tags[4]->label, "test")) {
++        errx(
++            1, "unexpected tag %.*s (expected test)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
++        );
++    }
++    if (!gw.tags[63]) {
++        errx(1, "gw.tag_ids[63] shouldn't be NULL");
++    }
++    if (strcmp(gw.tags[63]->label, "test")) {
++        errx(
++            1, "unexpected tag %.*s (expected test)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
++        );
++    }
++    if (gw.tag_ids != (TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))) {
++        errx(
++            1, "tag_ids = %jx (expected %jx)",
++            (uintmax_t)gw.tag_ids,
++            (uintmax_t)(TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))
++        );
++    }
++    if (tagging_incref_called) {
++        errx(1, "lgtd_lifx_tagging_incref shouldn't have been called");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
+@@ -0,0 +1,72 @@
++#include <string.h>
++
++#include "gateway.c"
++
++#define MOCKED_LIFX_TAGGING_DECREF
++#include "test_gateway_utils.h"
++
++static bool tagging_decref_called = false;
++
++void
++lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag, const struct lgtd_lifx_gateway *gw)
++{
++    if (!tag) {
++        errx(1, "missing tag");
++    }
++    if (!gw) {
++        errx(1, "missing gateway");
++    }
++
++    tagging_decref_called = true;
++}
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    struct lgtd_lifx_packet_header hdr;
++    memset(&hdr, 0, sizeof(hdr));
++
++    struct lgtd_lifx_tag tag = {
++        .label = "test",
++        .sites = LIST_HEAD_INITIALIZER(&tag.sites)
++    };
++
++    gw.tags[0] = &tag;
++    gw.tag_ids = TAG_ID_TO_VALUE(0) | TAG_ID_TO_VALUE(42);
++
++    lgtd_lifx_gateway_deallocate_tag_id(&gw, 0);
++    if (gw.tags[0]) {
++        errx(1, "gw.tags[0] should have been set to NULL");
++    }
++    if (gw.tag_ids != TAG_ID_TO_VALUE(42)) {
++        errx(
++            1, "unexpected gw.tag_ids value = %jx (expected %jx)",
++            gw.tag_ids, TAG_ID_TO_VALUE(42)
++        );
++    }
++    if (!tagging_decref_called) {
++        errx(1, "lgtd_lifx_tagging_decref should have been called");
++    }
++
++    tagging_decref_called = false;
++    lgtd_lifx_gateway_deallocate_tag_id(&gw, 0);
++    if (gw.tags[0]) {
++        errx(1, "gw.tags[0] should be NULL");
++    }
++    if (gw.tag_ids != TAG_ID_TO_VALUE(42)) {
++        errx(
++            1, "unexpected gw.tag_ids value = %jx (expected %jx)",
++            gw.tag_ids, TAG_ID_TO_VALUE(42)
++        );
++    }
++    if (tagging_decref_called) {
++        errx(1, "lgtd_lifx_tagging_decref shouldn't have been called");
++    }
++
++    return 0;
++}
 diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet.c b/tests/lifx/gateway/test_gateway_enqueue_packet.c
 --- a/tests/lifx/gateway/test_gateway_enqueue_packet.c
 +++ b/tests/lifx/gateway/test_gateway_enqueue_packet.c
@@ -1337,6 +1554,89 @@ diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c b/
          LGTD_LIFX_SET_POWER_STATE
      );
  
+diff --git a/tests/lifx/gateway/test_gateway_handle_tag_labels.c b/tests/lifx/gateway/test_gateway_handle_tag_labels.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_handle_tag_labels.c
+@@ -0,0 +1,78 @@
++#include <string.h>
++
++#include "gateway.c"
++
++#include "test_gateway_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    struct lgtd_lifx_packet_header hdr;
++    memset(&hdr, 0, sizeof(hdr));
++
++    struct lgtd_lifx_packet_tag_labels pkt = {
++        .label = "test", .tags = 0
++    };
++
++    lgtd_lifx_gateway_handle_tag_labels(&gw, &hdr, &pkt);
++    if (gw.tag_ids != 0) {
++        errx(1, "expected gw.tags == 0 but got %jx", (uintmax_t)gw.tags);
++    }
++
++    pkt.tags = TAG_ID_TO_VALUE(42);
++    lgtd_lifx_gateway_handle_tag_labels(&gw, &hdr, &pkt);
++    if (gw.tag_ids != TAG_ID_TO_VALUE(42)) {
++        errx(
++            1, "expected gw.tags == %jx but got %jx",
++            TAG_ID_TO_VALUE(42), (uintmax_t)gw.tags
++        );
++    }
++    if (!gw.tags[42]) {
++        errx(1, "tag_id 42 should have been set");
++    }
++    if (strcmp(gw.tags[42]->label, pkt.label)) {
++        errx(
++            1, "unexpected label %.*s (expected %s)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[42]->label, pkt.label
++        );
++    }
++
++    strcpy(pkt.label, "toto");
++    pkt.tags = TAG_ID_TO_VALUE(2) | TAG_ID_TO_VALUE(4);
++    lgtd_lifx_gateway_handle_tag_labels(&gw, &hdr, &pkt);
++    memset(&pkt, 0, sizeof(pkt));
++    lgtd_lifx_gateway_handle_tag_labels(&gw, &hdr, &pkt);
++    uint64_t expected;
++    expected = TAG_ID_TO_VALUE(42) | TAG_ID_TO_VALUE(2) | TAG_ID_TO_VALUE(4);
++    if (gw.tag_ids != expected) {
++        errx(
++            1, "expected gw.tags == %jx but got %jx",
++            TAG_ID_TO_VALUE(42), (uintmax_t)gw.tags
++        );
++    }
++    if (strcmp(gw.tags[2]->label, "toto")) {
++        errx(
++            1, "unexpected label %.*s (expected %s)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[2]->label, "toto"
++        );
++    }
++    if (strcmp(gw.tags[4]->label, "toto")) {
++        errx(
++            1, "unexpected label %.*s (expected %s)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[4]->label, "toto"
++        );
++    }
++    if (strcmp(gw.tags[42]->label, "test")) {
++        errx(
++            1, "unexpected label %.*s (expected %s)",
++            (int)sizeof(gw.tags[0]->label), gw.tags[42]->label, "test"
++        );
++    }
++
++    return 0;
++}
 diff --git a/tests/lifx/gateway/test_gateway_utils.h b/tests/lifx/gateway/test_gateway_utils.h
 --- a/tests/lifx/gateway/test_gateway_utils.h
 +++ b/tests/lifx/gateway/test_gateway_utils.h
@@ -1378,7 +1678,7 @@ diff --git a/tests/lifx/gateway/test_gateway_utils.h b/tests/lifx/gateway/test_g
 +}
 +#endif
 +
-+#ifndef MOCKED_LIFX_TAGGING_DECCREF
++#ifndef MOCKED_LIFX_TAGGING_DECREF
 +void
 +lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag,
 +                         const struct lgtd_lifx_gateway *gw)
@@ -1456,3 +1756,169 @@ diff --git a/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c b/
  #include "test_gateway_utils.h"
  
  size_t
+diff --git a/tests/lifx/tagging/CMakeLists.txt b/tests/lifx/tagging/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/tagging/CMakeLists.txt
+@@ -0,0 +1,19 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++ADD_LIBRARY(
++    test_lifx_tagging STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++)
++
++FUNCTION(ADD_TAGGING_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_tagging)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_TAGGING_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/lifx/tagging/test_tagging_decref.c b/tests/lifx/tagging/test_tagging_decref.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/tagging/test_tagging_decref.c
+@@ -0,0 +1,67 @@
++#include "tagging.c"
++
++static int
++count_tag(const char *tag_label)
++{
++    int count = 0;
++    struct lgtd_lifx_tag *tag;
++    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
++        if (!strcmp(tag_label, tag->label)) {
++            count++;
++        }
++    }
++    return count;
++}
++
++static int
++count_site(struct lgtd_lifx_site_list *list, const struct lgtd_lifx_gateway *gw)
++{
++    int count = 0;
++    struct lgtd_lifx_site *site;
++    LIST_FOREACH(site, list, link) {
++        if (site->gw == gw) {
++            count++;
++        }
++    }
++    return count;
++}
++
++int
++main(void)
++{
++    struct lgtd_lifx_gateway gw1, gw2;
++    memset(&gw1, 0, sizeof(gw1));
++    memset(&gw2, 0, sizeof(gw2));
++
++    struct lgtd_lifx_site *site_gw1 = calloc(1, sizeof(*site_gw1));
++    site_gw1->gw = &gw1;
++    struct lgtd_lifx_site *site_gw2 = calloc(1, sizeof(*site_gw2));
++    site_gw2->gw = &gw2;
++
++    const char *rawr = "rawr";
++    struct lgtd_lifx_tag *tag = calloc(1, sizeof(*tag));
++    strcpy(tag->label, rawr);
++    LIST_INSERT_HEAD(&tag->sites, site_gw1, link);
++    LIST_INSERT_HEAD(&tag->sites, site_gw2, link);
++    LIST_INSERT_HEAD(&lgtd_lifx_tags, tag, link);
++
++    for (int i = 0; i != 2; i++) {
++        lgtd_lifx_tagging_decref(tag, &gw2);
++        if (count_site(&tag->sites, &gw2) != 0) {
++            errx(1, "gw2 shouldn't be in the sites list");
++        }
++        if (count_site(&tag->sites, &gw1) != 1) {
++            errx(1, "gw1 wasn't found once in the sites list");
++        }
++        if (count_tag(rawr) != 1) {
++            errx(1, "%s wasn't found once in the tags list");
++        }
++    }
++
++    lgtd_lifx_tagging_decref(tag, &gw1);
++    if (count_tag(rawr)) {
++        errx(1, "the tags list should be empty");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/tagging/test_tagging_incref.c b/tests/lifx/tagging/test_tagging_incref.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/tagging/test_tagging_incref.c
+@@ -0,0 +1,65 @@
++#include "tagging.c"
++
++static int
++count_tag(const char *tag_label)
++{
++    int count = 0;
++    struct lgtd_lifx_tag *tag;
++    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
++        if (!strcmp(tag_label, tag->label)) {
++            count++;
++        }
++    }
++    return count;
++}
++
++static int
++count_site(struct lgtd_lifx_site_list *list, const struct lgtd_lifx_gateway *gw)
++{
++    int count = 0;
++    struct lgtd_lifx_site *site;
++    LIST_FOREACH(site, list, link) {
++        if (site->gw == gw) {
++            count++;
++        }
++    }
++    return count;
++}
++
++int
++main(void)
++{
++    struct lgtd_lifx_gateway gw1, gw2;
++    memset(&gw1, 0, sizeof(gw1));
++    memset(&gw2, 0, sizeof(gw2));
++
++    const char *rawr = "rawr";
++    const char *awww = "awww";
++
++    for (int i = 0; i != 2; i++) {
++        lgtd_lifx_tagging_incref(rawr, &gw1);
++        if (count_tag(rawr) != 1) {
++            errx(1, "%s wasn't found once the list of tags", rawr);
++        }
++        if (count_site(&LIST_FIRST(&lgtd_lifx_tags)->sites, &gw1) != 1) {
++            errx(1, "site %p wasn't found once in the list of sites", &gw1);
++        }
++    }
++
++    lgtd_lifx_tagging_incref(rawr, &gw2);
++    struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(rawr);
++    if (count_site(&tag->sites, &gw2) != 1) {
++        errx(1, "gw2 wasn't found once in the sites of tag %s", tag->label);
++    }
++
++    lgtd_lifx_tagging_incref(awww, &gw1);
++    if (count_tag(awww) != 1) {
++        errx(1, "%s wasn't found once in the list of tags", awww);
++    }
++    tag = lgtd_lifx_tagging_find_tag(awww);
++    if (count_site(&tag->sites, &gw1) != 1) {
++        errx(1, "gw1 wasn't found once in the sites of tag %s", awww);
++    }
++
++    return 0;
++}
