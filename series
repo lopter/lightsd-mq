@@ -1,9 +1,5 @@
 remove_useless_type_instrospection.patch
 turn_gateway_site_into_an_union.patch
-fixup_tagging.patch
-fixup_packet_qeueing.patch
-fixup_tags_list.patch
-gateway_patches_to_split.patch
 fix_lifx_broadcasting_and_multicasting.patch
 one_lifx_packet_per_udp_datagram.patch
 handle_lifx_tag_labels_packets.patch
