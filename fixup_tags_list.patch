@@ -1,0 +1,116 @@
+# HG changeset patch
+# Parent  86a60ea1aae5366936c4558d231fc1be272ca524
+
+diff --git a/tests/core/mock_client_buf.h b/tests/core/mock_client_buf.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/mock_client_buf.h
+@@ -0,0 +1,23 @@
++#pragma once
++
++static char client_write_buf[4096] = { 0 };
++static int client_write_buf_idx = 0;
++
++static inline void
++reset_client_write_buf(void)
++{
++    memset(client_write_buf, 0, sizeof(client_write_buf));
++    client_write_buf_idx = 0;
++}
++
++int
++bufferevent_write(struct bufferevent *bev, const void *data, size_t nbytes)
++{
++    (void)bev;
++    int to_write = LGTD_MIN(
++        nbytes, sizeof(client_write_buf) - client_write_buf_idx
++    );
++    memcpy(&client_write_buf[client_write_buf_idx], data, to_write);
++    client_write_buf_idx += to_write;
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_list_tags.c b/tests/core/proto/test_proto_list_tags.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_list_tags.c
+@@ -0,0 +1,41 @@
++#include "proto.c"
++
++#include "mock_client_buf.h"
++#include "tests_utils.h"
++#include "tests_proto_utils.h"
++
++int
++main(void)
++{
++    struct lgtd_client client;
++
++    lgtd_proto_list_tags(&client);
++    if (strcmp(client_write_buf, "[]")) {
++        errx(
++            1, "expected empty list of tags but got %s instead",
++            client_write_buf
++        );
++    }
++
++    reset_client_write_buf();
++    lgtd_tests_insert_mock_tag("test");
++    lgtd_proto_list_tags(&client);
++    if (strcmp(client_write_buf, "[\"test\"]")) {
++        errx(
++            1, "expected [\"test\"] but got %s instead",
++            client_write_buf
++        );
++    }
++
++    reset_client_write_buf();
++    lgtd_tests_insert_mock_tag("@_@");
++    lgtd_proto_list_tags(&client);
++    if (strcmp(client_write_buf, "[\"@_@\", \"test\"]")) {
++        errx(
++            1, "expected [\"@_@\", \"test\"] but got %s instead",
++            client_write_buf
++        );
++    }
++
++    return 0;
++}
+diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/tests_proto_utils.h
+@@ -0,0 +1,34 @@
++#pragma once
++
++void
++lgtd_client_start_send_response(struct lgtd_client *client)
++{
++    (void)client;
++}
++
++void
++lgtd_client_end_send_response(struct lgtd_client *client)
++{
++    (void)client;
++}
++
++#ifndef MOCKED_CLIENT_SEND_RESPONSE
++void
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
++{
++    LGTD_CLIENT_WRITE_STRING(client, msg);
++}
++#endif
++
++#ifndef MOCKED_ROUTER_SEND
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    (void)targets;
++    (void)pkt_type;
++    (void)pkt;
++    return true;
++}
++#endif
