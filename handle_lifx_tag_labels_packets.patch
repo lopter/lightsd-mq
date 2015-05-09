@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  03dc3d776df993d419e3eb1eda6c14660d32440a
+# Parent  2331cb823a8b7de72314789742b77efb5c8d03d6
 Handle the LIFX tag labels traffic
 
 First step towards full tagging support.
@@ -903,7 +903,7 @@ new file mode 100644
 +            errx(1, "gw1 wasn't found once in the sites list");
 +        }
 +        if (count_tag(rawr) != 1) {
-+            errx(1, "%s wasn't found once in the tags list");
++            errx(1, "%s wasn't found once in the tags list", rawr);
 +        }
 +    }
 +
