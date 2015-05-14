@@ -1,0 +1,104 @@
+# HG changeset patch
+# Parent  ed5fbd7a6ea4b38013741d77ed652b7c36b82354
+Recognize the #tag target type
+
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -40,6 +40,7 @@
+ #include "proto.h"
+ #include "router.h"
+ #include "lifx/gateway.h"
++#include "lifx/tagging.h"
+ #include "lightsd.h"
+ 
+ void
+@@ -111,6 +112,23 @@
+     lgtd_info("sending %s to %s", pkt_infos->name, lgtd_addrtoa(bulb->addr));
+ }
+ 
++void
++lgtd_router_send_to_tag(const struct lgtd_lifx_tag *tag,
++                        enum lgtd_lifx_packet_type pkt_type,
++                        void *pkt)
++{
++    struct lgtd_lifx_site *site = NULL;
++    LIST_FOREACH(site, &tag->sites, link) {
++        for (int tag_id = 0;
++             tag_id != LGTD_ARRAY_SIZE(site->gw->tags);
++             tag_id++) {
++            if (!strcmp(tag->label, gw->tags[tag_id])) {
++                // TODO: prepare header & send packet
++            }
++        }
++    }
++}
++
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+                  enum lgtd_lifx_packet_type pkt_type,
+@@ -125,6 +143,14 @@
+         if (!strcmp(target->target, "*")) {
+             lgtd_router_broadcast(pkt_type, pkt);
+             continue;
++        } else if (target->target[0] == '#') {
++            const struct lgtd_lifx_tag *tag;
++            tag = lgtd_lifx_tagging_find_site(&target->target[1]);
++            if (tag) {
++                lgtd_router_send_to_tag(tag, pkt_type, pkt);
++                continue;
++            }
++            lgtd_debug("invalid target tag %s", target->target);
+         } else if (isxdigit(target->target[0])) {
+             const char *endptr = NULL;
+             errno = 0;
+diff --git a/lifx/tagging.c b/lifx/tagging.c
+--- a/lifx/tagging.c
++++ b/lifx/tagging.c
+@@ -40,18 +40,6 @@
+ struct lgtd_lifx_tag_list lgtd_lifx_tags =
+     LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
+ 
+-static struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_find_tag(const char *tag_label)
+-{
+-    struct lgtd_lifx_tag *tag = NULL;
+-    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
+-        if (!strcmp(tag->label, tag_label)) {
+-            break;
+-        }
+-    }
+-    return tag;
+-}
+-
+ static struct lgtd_lifx_site *
+ lgtd_lifx_tagging_find_site(struct lgtd_lifx_site_list *sites,
+                             const struct lgtd_lifx_gateway *gw)
+@@ -66,6 +54,18 @@
+ }
+ 
+ struct lgtd_lifx_tag *
++lgtd_lifx_tagging_find_tag(const char *tag_label)
++{
++    struct lgtd_lifx_tag *tag = NULL;
++    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
++        if (!strcmp(tag->label, tag_label)) {
++            break;
++        }
++    }
++    return tag;
++}
++
++struct lgtd_lifx_tag *
+ lgtd_lifx_tagging_incref(const char *tag_label,
+                          const struct lgtd_lifx_gateway *gw)
+ {
+diff --git a/lifx/tagging.h b/lifx/tagging.h
+--- a/lifx/tagging.h
++++ b/lifx/tagging.h
+@@ -35,3 +35,5 @@
+ struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *,
+                                                const struct lgtd_lifx_gateway *);
+ void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, const struct lgtd_lifx_gateway *);
++
++struct lgtd_lifx_tag *lgtd_lifx_tagging_find_tag(const char *);
