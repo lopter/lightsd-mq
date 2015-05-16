@@ -2,18 +2,58 @@
 # Parent  ed5fbd7a6ea4b38013741d77ed652b7c36b82354
 Recognize the #tag target type
 
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -33,8 +33,8 @@
+ lightsd can target single or multiple bulbs at once:
+ 
+ - by device address;
+-- by device label (coming up, labels are already discovered);
+-- by tag (coming up, tags are already discovered);
++- by device label;
++- by tag;
+ - broadcast;
+ - composite (list of targets);
+ 
+@@ -61,4 +61,22 @@
+ 
+ lightsd is actively developed and tested from Arch Linux and Mac OS X.
+ 
++Build instructions
++------------------
++
++Clone this repository and then:
++
++::
++
++   .../lightsd$ mkdir build && cd build
++   .../lightsd/build$ cmake ..
++   .../lightsd/build$ make -j5
++
++Finally, to start lightsd with the jsonrpc interface listening on localhost
++port 1234:
++
++::
++
++   .../lightsd/build$ core/lightsd -v info -l ::1:1234
++
+ .. vim: set tw=80 spelllang=en spell:
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
-@@ -40,6 +40,7 @@
+@@ -38,8 +38,9 @@
+ #include "jsonrpc.h"
+ #include "client.h"
  #include "proto.h"
- #include "router.h"
- #include "lifx/gateway.h"
++#include "lifx/gateway.h"
 +#include "lifx/tagging.h"
+ #include "router.h"
+-#include "lifx/gateway.h"
  #include "lightsd.h"
  
  void
-@@ -111,6 +112,23 @@
+@@ -111,6 +112,73 @@
      lgtd_info("sending %s to %s", pkt_infos->name, lgtd_addrtoa(bulb->addr));
  }
  
@@ -22,28 +62,78 @@ diff --git a/core/router.c b/core/router.c
 +                        enum lgtd_lifx_packet_type pkt_type,
 +                        void *pkt)
 +{
++    const struct lgtd_lifx_packet_infos *pkt_infos = NULL;
++
 +    struct lgtd_lifx_site *site = NULL;
 +    LIST_FOREACH(site, &tag->sites, link) {
-+        for (int tag_id = 0;
-+             tag_id != LGTD_ARRAY_SIZE(site->gw->tags);
-+             tag_id++) {
-+            if (!strcmp(tag->label, gw->tags[tag_id])) {
-+                // TODO: prepare header & send packet
++        struct lgtd_lifx_gateway *gw = site->gw;
++        for (int tag_id = 0; tag_id != LGTD_ARRAY_SIZE(gw->tags); tag_id++) {
++            if (tag == gw->tags[tag_id]) {
++                struct lgtd_lifx_packet_header hdr;
++                union lgtd_lifx_target target;
++                target.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
++                pkt_infos = lgtd_lifx_wire_setup_header(
++                    &hdr,
++                    LGTD_LIFX_TARGET_TAGS,
++                    target,
++                    gw->site.as_array,
++                    pkt_type
++                );
++                assert(pkt_infos);
++
++                lgtd_lifx_gateway_enqueue_packet(
++                    gw, &hdr, pkt_type, pkt, pkt_infos->size
++                );
 +            }
 +        }
++    }
++
++    if (pkt_infos) {
++        lgtd_info("sending %s to #%s", pkt_infos->name, tag->label);
++    }
++}
++
++void lgtd_router_send_to_label(const char *label,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               void *pkt)
++{
++    const struct lgtd_lifx_packet_infos *pkt_infos = NULL;
++
++    struct lgtd_lifx_bulb *bulb;
++    RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
++        if (!strcmp(bulb->state.label, label)) {
++            struct lgtd_lifx_packet_header hdr;
++            union lgtd_lifx_target target = { .addr = bulb->addr };
++            pkt_infos = lgtd_lifx_wire_setup_header(
++                &hdr,
++                LGTD_LIFX_TARGET_DEVICE,
++                target,
++                bulb->gw->site.as_array,
++                pkt_type
++            );
++            assert(pkt_infos);
++
++            lgtd_lifx_gateway_enqueue_packet(
++                bulb->gw, &hdr, pkt_type, pkt, pkt_infos->size
++            );
++        }
++    }
++
++    if (pkt_infos) {
++        lgtd_info("sending %s to #%s", pkt_infos->name, label);
 +    }
 +}
 +
  bool
  lgtd_router_send(const struct lgtd_proto_target_list *targets,
                   enum lgtd_lifx_packet_type pkt_type,
-@@ -125,6 +143,14 @@
+@@ -125,6 +193,14 @@
          if (!strcmp(target->target, "*")) {
              lgtd_router_broadcast(pkt_type, pkt);
              continue;
 +        } else if (target->target[0] == '#') {
 +            const struct lgtd_lifx_tag *tag;
-+            tag = lgtd_lifx_tagging_find_site(&target->target[1]);
++            tag = lgtd_lifx_tagging_find_tag(&target->target[1]);
 +            if (tag) {
 +                lgtd_router_send_to_tag(tag, pkt_type, pkt);
 +                continue;
@@ -52,32 +142,214 @@ diff --git a/core/router.c b/core/router.c
          } else if (isxdigit(target->target[0])) {
              const char *endptr = NULL;
              errno = 0;
+@@ -142,6 +218,8 @@
+                 continue;
+             }
+             lgtd_debug("target device %#llx not found", device);
++        } else if (target->target[0]) {
++            lgtd_router_send_to_label(target->target, pkt_type, pkt);
+         }
+         rv = false;
+     }
+diff --git a/core/router.h b/core/router.h
+--- a/core/router.h
++++ b/core/router.h
+@@ -25,4 +25,6 @@
+ 
+ bool lgtd_router_send(const struct lgtd_proto_target_list *, enum lgtd_lifx_packet_type, void *);
+ void lgtd_router_send_to_device(struct lgtd_lifx_bulb *, enum lgtd_lifx_packet_type, void *);
++void lgtd_router_send_to_tag(const struct lgtd_lifx_tag *, enum lgtd_lifx_packet_type, void *);
++void lgtd_router_send_to_label(const char *, enum lgtd_lifx_packet_type, void *);
+ void lgtd_router_broadcast(enum lgtd_lifx_packet_type, void *);
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -497,12 +497,6 @@
+     lgtd_lifx_bulb_set_power_state(b, pkt->power);
+ }
+ 
+-#if LGTD_SIZEOF_VOID_P == 8
+-#   define TAG_ID_TO_VALUE(x) (1UL << (x))
+-#elif LGTD_SIZEOF_VOID_P == 4
+-#   define TAG_ID_TO_VALUE(x) (1ULL << (x))
+-#endif
+-
+ int
+ lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
+                                   int tag_id,
+@@ -514,7 +508,7 @@
+     assert(tag_id >= 0);
+     assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
+ 
+-    if (!(gw->tag_ids & TAG_ID_TO_VALUE(tag_id))) {
++    if (!(gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))) {
+         struct lgtd_lifx_tag *tag;
+         tag = lgtd_lifx_tagging_incref(tag_label, gw);
+         if (!tag) {
+@@ -529,7 +523,7 @@
+             tag_id, tag_label, gw->ip_addr, gw->port,
+             lgtd_addrtoa(gw->site.as_array)
+         );
+-        gw->tag_ids |= TAG_ID_TO_VALUE(tag_id);
++        gw->tag_ids |= LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
+         gw->tags[tag_id] = tag;
+     }
+ 
+@@ -543,7 +537,7 @@
+     assert(tag_id >= 0);
+     assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
+ 
+-    if (gw->tag_ids & TAG_ID_TO_VALUE(tag_id)) {
++    if (gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id)) {
+         lgtd_debug(
+             "tag_id %d deallocated for tag [%s] on gw [%s]:%hu (site %s)",
+             tag_id, gw->tags[tag_id]->label,
+@@ -551,7 +545,7 @@
+             lgtd_addrtoa(gw->site.as_array)
+         );
+         lgtd_lifx_tagging_decref(gw->tags[tag_id], gw);
+-        gw->tag_ids &= ~TAG_ID_TO_VALUE(tag_id);
++        gw->tag_ids &= ~LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
+         gw->tags[tag_id] = NULL;
+     }
+ }
+@@ -580,6 +574,6 @@
+         } else if (gw->tags[tag_id]) {
+             lgtd_lifx_gateway_deallocate_tag_id(gw, tag_id);
+         }
+-        tags &= ~TAG_ID_TO_VALUE(tag_id);
++        tags &= ~LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
+     }
+ }
 diff --git a/lifx/tagging.c b/lifx/tagging.c
 --- a/lifx/tagging.c
 +++ b/lifx/tagging.c
-@@ -40,18 +40,6 @@
+@@ -40,7 +40,20 @@
  struct lgtd_lifx_tag_list lgtd_lifx_tags =
      LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
  
 -static struct lgtd_lifx_tag *
--lgtd_lifx_tagging_find_tag(const char *tag_label)
++static struct lgtd_lifx_site *
++lgtd_lifx_tagging_find_site(struct lgtd_lifx_site_list *sites,
++                            struct lgtd_lifx_gateway *gw)
++{
++    struct lgtd_lifx_site *site = NULL;
++    LIST_FOREACH(site, sites, link) {
++        if (site->gw == gw) {
++            break;
++        }
++    }
++    return site;
++}
++
++struct lgtd_lifx_tag *
+ lgtd_lifx_tagging_find_tag(const char *tag_label)
+ {
+     struct lgtd_lifx_tag *tag = NULL;
+@@ -52,22 +65,8 @@
+     return tag;
+ }
+ 
+-static struct lgtd_lifx_site *
+-lgtd_lifx_tagging_find_site(struct lgtd_lifx_site_list *sites,
+-                            const struct lgtd_lifx_gateway *gw)
 -{
--    struct lgtd_lifx_tag *tag = NULL;
--    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
--        if (!strcmp(tag->label, tag_label)) {
+-    struct lgtd_lifx_site *site = NULL;
+-    LIST_FOREACH(site, sites, link) {
+-        if (site->gw == gw) {
 -            break;
 -        }
 -    }
--    return tag;
+-    return site;
 -}
 -
- static struct lgtd_lifx_site *
- lgtd_lifx_tagging_find_site(struct lgtd_lifx_site_list *sites,
-                             const struct lgtd_lifx_gateway *gw)
-@@ -66,6 +54,18 @@
- }
- 
  struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_incref(const char *tag_label,
+-                         const struct lgtd_lifx_gateway *gw)
++lgtd_lifx_tagging_incref(const char *tag_label, struct lgtd_lifx_gateway *gw)
+ {
+     assert(strlen(tag_label) < LGTD_LIFX_LABEL_SIZE);
+     assert(gw);
+@@ -111,7 +110,7 @@
+ 
+ void
+ lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag,
+-                         const struct lgtd_lifx_gateway *gw)
++                         struct lgtd_lifx_gateway *gw)
+ {
+     assert(tag);
+     assert(gw);
+diff --git a/lifx/tagging.h b/lifx/tagging.h
+--- a/lifx/tagging.h
++++ b/lifx/tagging.h
+@@ -20,8 +20,8 @@
+ extern struct lgtd_lifx_tag_list lgtd_lifx_tags;
+ 
+ struct lgtd_lifx_site {
+-    LIST_ENTRY(lgtd_lifx_site)      link;
+-    const struct lgtd_lifx_gateway  *gw;
++    LIST_ENTRY(lgtd_lifx_site)  link;
++    struct lgtd_lifx_gateway    *gw;
+ };
+ LIST_HEAD(lgtd_lifx_site_list, lgtd_lifx_site);
+ 
+@@ -33,5 +33,7 @@
+ LIST_HEAD(lgtd_lifx_tag_list, lgtd_lifx_tag);
+ 
+ struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *,
+-                                               const struct lgtd_lifx_gateway *);
+-void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, const struct lgtd_lifx_gateway *);
++                                               struct lgtd_lifx_gateway *);
++void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, struct lgtd_lifx_gateway *);
++
++struct lgtd_lifx_tag *lgtd_lifx_tagging_find_tag(const char *);
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -247,6 +247,12 @@
+ 
+ extern union lgtd_lifx_target LGTD_LIFX_UNSPEC_TARGET;
+ 
++#if LGTD_SIZEOF_VOID_P == 8
++#   define LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(x) (1UL << (x))
++#elif LGTD_SIZEOF_VOID_P == 4
++#   define LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(x) (1ULL << (x))
++#endif
++
+ enum lgtd_lifx_waveform_type lgtd_lifx_wire_waveform_string_id_to_type(const char *, int);
+ 
+ const struct lgtd_lifx_packet_infos *lgtd_lifx_wire_get_packet_infos(enum lgtd_lifx_packet_type);
+diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
+--- a/tests/core/jsonrpc/CMakeLists.txt
++++ b/tests/core/jsonrpc/CMakeLists.txt
+@@ -8,8 +8,10 @@
+     ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
++    ${TIME_MONOTONIC_IMPL}
+ )
+ 
+ FUNCTION(ADD_JSONRPC_TEST TEST_SOURCE)
+diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
+--- a/tests/core/tests_shims.c
++++ b/tests/core/tests_shims.c
+@@ -14,6 +14,7 @@
+ #include "core/time_monotonic.h"
+ #include "lifx/bulb.h"
+ #include "lifx/gateway.h"
++#include "lifx/tagging.h"
+ #include "lightsd.h"
+ 
+ struct lgtd_opts lgtd_opts = {
+@@ -65,3 +66,15 @@
+     (void)hdr;
+     (void)pkt;
+ }
++
++struct lgtd_lifx_tag *
 +lgtd_lifx_tagging_find_tag(const char *tag_label)
 +{
 +    struct lgtd_lifx_tag *tag = NULL;
@@ -88,17 +360,179 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
 +    }
 +    return tag;
 +}
-+
-+struct lgtd_lifx_tag *
- lgtd_lifx_tagging_incref(const char *tag_label,
-                          const struct lgtd_lifx_gateway *gw)
+diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+--- a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
++++ b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+@@ -8,7 +8,7 @@
+ static bool tagging_incref_called = false;
+ 
+ struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_incref(const char *label, const struct lgtd_lifx_gateway *gw)
++lgtd_lifx_tagging_incref(const char *label, struct lgtd_lifx_gateway *gw)
  {
-diff --git a/lifx/tagging.h b/lifx/tagging.h
---- a/lifx/tagging.h
-+++ b/lifx/tagging.h
-@@ -35,3 +35,5 @@
- struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *,
-                                                const struct lgtd_lifx_gateway *);
- void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, const struct lgtd_lifx_gateway *);
-+
-+struct lgtd_lifx_tag *lgtd_lifx_tagging_find_tag(const char *);
+     if (!label) {
+         errx(1, "missing tag label");
+@@ -53,10 +53,10 @@
+             (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
+         );
+     }
+-    if (gw.tag_ids != TAG_ID_TO_VALUE(4)) {
++    if (gw.tag_ids != LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4)) {
+         errx(
+             1, "tag_ids = %jx (expected %jx)",
+-            (uintmax_t)gw.tag_ids, (uintmax_t)TAG_ID_TO_VALUE(4)
++            (uintmax_t)gw.tag_ids, (uintmax_t)LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4)
+         );
+     }
+ 
+@@ -79,11 +79,11 @@
+             (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
+         );
+     }
+-    if (gw.tag_ids != (TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))) {
++    if (gw.tag_ids != (LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(63))) {
+         errx(
+             1, "tag_ids = %jx (expected %jx)",
+             (uintmax_t)gw.tag_ids,
+-            (uintmax_t)(TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))
++            (uintmax_t)(LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(63))
+         );
+     }
+ 
+@@ -107,11 +107,11 @@
+             (int)sizeof(gw.tags[0]->label), gw.tags[4]->label
+         );
+     }
+-    if (gw.tag_ids != (TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))) {
++    if (gw.tag_ids != (LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(63))) {
+         errx(
+             1, "tag_ids = %jx (expected %jx)",
+             (uintmax_t)gw.tag_ids,
+-            (uintmax_t)(TAG_ID_TO_VALUE(4) | TAG_ID_TO_VALUE(63))
++            (uintmax_t)(LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(63))
+         );
+     }
+     if (tagging_incref_called) {
+diff --git a/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
+--- a/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
++++ b/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
+@@ -8,7 +8,7 @@
+ static bool tagging_decref_called = false;
+ 
+ void
+-lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag, const struct lgtd_lifx_gateway *gw)
++lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag, struct lgtd_lifx_gateway *gw)
+ {
+     if (!tag) {
+         errx(1, "missing tag");
+@@ -37,16 +37,16 @@
+     };
+ 
+     gw.tags[0] = &tag;
+-    gw.tag_ids = TAG_ID_TO_VALUE(0) | TAG_ID_TO_VALUE(42);
++    gw.tag_ids = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(0) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42);
+ 
+     lgtd_lifx_gateway_deallocate_tag_id(&gw, 0);
+     if (gw.tags[0]) {
+         errx(1, "gw.tags[0] should have been set to NULL");
+     }
+-    if (gw.tag_ids != TAG_ID_TO_VALUE(42)) {
++    if (gw.tag_ids != LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42)) {
+         errx(
+             1, "unexpected gw.tag_ids value = %jx (expected %jx)",
+-            gw.tag_ids, TAG_ID_TO_VALUE(42)
++            gw.tag_ids, LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42)
+         );
+     }
+     if (!tagging_decref_called) {
+@@ -58,10 +58,10 @@
+     if (gw.tags[0]) {
+         errx(1, "gw.tags[0] should be NULL");
+     }
+-    if (gw.tag_ids != TAG_ID_TO_VALUE(42)) {
++    if (gw.tag_ids != LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42)) {
+         errx(
+             1, "unexpected gw.tag_ids value = %jx (expected %jx)",
+-            gw.tag_ids, TAG_ID_TO_VALUE(42)
++            gw.tag_ids, LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42)
+         );
+     }
+     if (tagging_decref_called) {
+diff --git a/tests/lifx/gateway/test_gateway_handle_tag_labels.c b/tests/lifx/gateway/test_gateway_handle_tag_labels.c
+--- a/tests/lifx/gateway/test_gateway_handle_tag_labels.c
++++ b/tests/lifx/gateway/test_gateway_handle_tag_labels.c
+@@ -24,12 +24,12 @@
+         errx(1, "expected gw.tags == 0 but got %jx", (uintmax_t)gw.tags);
+     }
+ 
+-    pkt.tags = TAG_ID_TO_VALUE(42);
++    pkt.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42);
+     lgtd_lifx_gateway_handle_tag_labels(&gw, &hdr, &pkt);
+-    if (gw.tag_ids != TAG_ID_TO_VALUE(42)) {
++    if (gw.tag_ids != LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42)) {
+         errx(
+             1, "expected gw.tags == %jx but got %jx",
+-            TAG_ID_TO_VALUE(42), (uintmax_t)gw.tags
++            LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42), (uintmax_t)gw.tags
+         );
+     }
+     if (!gw.tags[42]) {
+@@ -43,16 +43,16 @@
+     }
+ 
+     strcpy(pkt.label, "toto");
+-    pkt.tags = TAG_ID_TO_VALUE(2) | TAG_ID_TO_VALUE(4);
++    pkt.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(2) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4);
+     lgtd_lifx_gateway_handle_tag_labels(&gw, &hdr, &pkt);
+     memset(&pkt, 0, sizeof(pkt));
+     lgtd_lifx_gateway_handle_tag_labels(&gw, &hdr, &pkt);
+     uint64_t expected;
+-    expected = TAG_ID_TO_VALUE(42) | TAG_ID_TO_VALUE(2) | TAG_ID_TO_VALUE(4);
++    expected = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(2) | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(4);
+     if (gw.tag_ids != expected) {
+         errx(
+             1, "expected gw.tags == %jx but got %jx",
+-            TAG_ID_TO_VALUE(42), (uintmax_t)gw.tags
++            LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(42), (uintmax_t)gw.tags
+         );
+     }
+     if (strcmp(gw.tags[2]->label, "toto")) {
+diff --git a/tests/lifx/gateway/test_gateway_utils.h b/tests/lifx/gateway/test_gateway_utils.h
+--- a/tests/lifx/gateway/test_gateway_utils.h
++++ b/tests/lifx/gateway/test_gateway_utils.h
+@@ -48,7 +48,7 @@
+ 
+ #ifndef MOCKED_LIFX_TAGGING_INCREF
+ struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_incref(const char *label, const struct lgtd_lifx_gateway *gw)
++lgtd_lifx_tagging_incref(const char *label, struct lgtd_lifx_gateway *gw)
+ {
+     struct lgtd_lifx_tag *tag = calloc(1, sizeof(*tag));
+     strcpy(tag->label, label);
+@@ -63,7 +63,7 @@
+ #ifndef MOCKED_LIFX_TAGGING_DECREF
+ void
+ lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag,
+-                         const struct lgtd_lifx_gateway *gw)
++                         struct lgtd_lifx_gateway *gw)
+ {
+     (void)tag;
+     (void)gw;
+@@ -82,6 +82,17 @@
+     (void)buf;
+ }
+ 
++struct lgtd_lifx_tag *
++lgtd_lifx_tagging_find_tag(const char *tag_label)
++{
++    struct lgtd_lifx_tag *tag = NULL;
++    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
++        if (!strcmp(tag->label, tag_label)) {
++            break;
++        }
++    }
++    return tag;
++}
+ 
+ static struct event *last_event_passed_to_event_add = NULL;
+ 
