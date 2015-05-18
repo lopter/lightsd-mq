@@ -1,3 +1,4 @@
 update_readme.patch
 labels_and_tags_routing_support.patch
 store_tag_id_with_sites.patch
+fix_release_warnings.patch
