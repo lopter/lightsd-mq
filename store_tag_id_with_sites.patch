@@ -1,0 +1,228 @@
+# HG changeset patch
+# Parent  ec69cd3d1a12088298611b263fe83383e7e44918
+Store the tag_id alongside each (tag) site
+
+So we don't have to iterate over gw->tags when routing to a tag.
+
+Note:
+
+We should probably rename the struct lgtd_lifx_site to
+lgtd_lifx_tag_site.
+
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -119,28 +119,26 @@
+ {
+     const struct lgtd_lifx_packet_infos *pkt_infos = NULL;
+ 
+-    struct lgtd_lifx_site *site = NULL;
++    struct lgtd_lifx_site *site;
+     LIST_FOREACH(site, &tag->sites, link) {
+         struct lgtd_lifx_gateway *gw = site->gw;
+-        for (int tag_id = 0; tag_id != LGTD_ARRAY_SIZE(gw->tags); tag_id++) {
+-            if (tag == gw->tags[tag_id]) {
+-                struct lgtd_lifx_packet_header hdr;
+-                union lgtd_lifx_target target;
+-                target.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
+-                pkt_infos = lgtd_lifx_wire_setup_header(
+-                    &hdr,
+-                    LGTD_LIFX_TARGET_TAGS,
+-                    target,
+-                    gw->site.as_array,
+-                    pkt_type
+-                );
+-                assert(pkt_infos);
++        int tag_id = site->tag_id;
++        struct lgtd_lifx_packet_header hdr;
++        union lgtd_lifx_target target;
++        assert(tag == gw->tags[tag_id]);
++        target.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
++        pkt_infos = lgtd_lifx_wire_setup_header(
++            &hdr,
++            LGTD_LIFX_TARGET_TAGS,
++            target,
++            gw->site.as_array,
++            pkt_type
++        );
++        assert(pkt_infos);
+ 
+-                lgtd_lifx_gateway_enqueue_packet(
+-                    gw, &hdr, pkt_type, pkt, pkt_infos->size
+-                );
+-            }
+-        }
++        lgtd_lifx_gateway_enqueue_packet(
++            gw, &hdr, pkt_type, pkt, pkt_infos->size
++        );
+     }
+ 
+     if (pkt_infos) {
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -510,7 +510,7 @@
+ 
+     if (!(gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))) {
+         struct lgtd_lifx_tag *tag;
+-        tag = lgtd_lifx_tagging_incref(tag_label, gw);
++        tag = lgtd_lifx_tagging_incref(tag_label, gw, tag_id);
+         if (!tag) {
+             lgtd_warn(
+                 "couldn't allocate a new reference to tag [%s] (site %s)",
+diff --git a/lifx/tagging.c b/lifx/tagging.c
+--- a/lifx/tagging.c
++++ b/lifx/tagging.c
+@@ -66,9 +66,12 @@
+ }
+ 
+ struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_incref(const char *tag_label, struct lgtd_lifx_gateway *gw)
++lgtd_lifx_tagging_incref(const char *tag_label,
++                         struct lgtd_lifx_gateway *gw,
++                         int tag_id)
+ {
+     assert(strlen(tag_label) < LGTD_LIFX_LABEL_SIZE);
++    assert(tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
+     assert(gw);
+ 
+     bool dealloc_tag = false;
+@@ -102,8 +105,10 @@
+             tag_label, gw->ip_addr, gw->port, lgtd_addrtoa(gw->site.as_array)
+         );
+         site->gw = gw;
++        site->tag_id = tag_id;
+         LIST_INSERT_HEAD(&tag->sites, site, link);
+     }
++    assert(site->tag_id == tag_id);
+ 
+     return tag;
+ }
+diff --git a/lifx/tagging.h b/lifx/tagging.h
+--- a/lifx/tagging.h
++++ b/lifx/tagging.h
+@@ -21,6 +21,7 @@
+ 
+ struct lgtd_lifx_site {
+     LIST_ENTRY(lgtd_lifx_site)  link;
++    int                         tag_id;
+     struct lgtd_lifx_gateway    *gw;
+ };
+ LIST_HEAD(lgtd_lifx_site_list, lgtd_lifx_site);
+@@ -33,7 +34,8 @@
+ LIST_HEAD(lgtd_lifx_tag_list, lgtd_lifx_tag);
+ 
+ struct lgtd_lifx_tag *lgtd_lifx_tagging_incref(const char *,
+-                                               struct lgtd_lifx_gateway *);
++                                               struct lgtd_lifx_gateway *,
++                                               int);
+ void lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *, struct lgtd_lifx_gateway *);
+ 
+ struct lgtd_lifx_tag *lgtd_lifx_tagging_find_tag(const char *);
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -97,6 +97,7 @@
+ {
+     struct lgtd_lifx_site *site = calloc(1, sizeof(*site));
+     site->gw = gw;
++    site->tag_id = tag_id;
+     gw->tags[tag_id] = tag;
+     LIST_INSERT_HEAD(&tag->sites, site, link);
+     return site;
+diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+--- a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
++++ b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+@@ -8,7 +8,9 @@
+ static bool tagging_incref_called = false;
+ 
+ struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_incref(const char *label, struct lgtd_lifx_gateway *gw)
++lgtd_lifx_tagging_incref(const char *label,
++                         struct lgtd_lifx_gateway *gw,
++                         int tag_id)
+ {
+     if (!label) {
+         errx(1, "missing tag label");
+@@ -16,6 +18,9 @@
+     if (!gw) {
+         errx(1, "missing gateway");
+     }
++    if (tag_id != 4 && tag_id != 63) {
++        errx(1, "got tag_id %d but expected 4 or 63", tag_id);
++    }
+ 
+     static struct lgtd_lifx_tag *tag = NULL;
+ 
+@@ -24,6 +29,7 @@
+         strcpy(tag->label, label);
+         struct lgtd_lifx_site *site = calloc(1, sizeof(*site));
+         site->gw = gw;
++        site->tag_id = tag_id;
+         LIST_INSERT_HEAD(&tag->sites, site, link);
+     }
+ 
+diff --git a/tests/lifx/gateway/test_gateway_utils.h b/tests/lifx/gateway/test_gateway_utils.h
+--- a/tests/lifx/gateway/test_gateway_utils.h
++++ b/tests/lifx/gateway/test_gateway_utils.h
+@@ -48,13 +48,16 @@
+ 
+ #ifndef MOCKED_LIFX_TAGGING_INCREF
+ struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_incref(const char *label, struct lgtd_lifx_gateway *gw)
++lgtd_lifx_tagging_incref(const char *label,
++                         struct lgtd_lifx_gateway *gw,
++                         int tag_id)
+ {
+     struct lgtd_lifx_tag *tag = calloc(1, sizeof(*tag));
+     strcpy(tag->label, label);
+     LIST_INSERT_HEAD(&lgtd_lifx_tags, tag, link);
+     struct lgtd_lifx_site *site = calloc(1, sizeof(*site));
+     site->gw = gw;
++    site->tag_id = tag_id;
+     LIST_INSERT_HEAD(&tag->sites, site, link);
+     return tag;
+ }
+diff --git a/tests/lifx/tagging/test_tagging_incref.c b/tests/lifx/tagging/test_tagging_incref.c
+--- a/tests/lifx/tagging/test_tagging_incref.c
++++ b/tests/lifx/tagging/test_tagging_incref.c
+@@ -37,7 +37,7 @@
+     const char *awww = "awww";
+ 
+     for (int i = 0; i != 2; i++) {
+-        lgtd_lifx_tagging_incref(rawr, &gw1);
++        lgtd_lifx_tagging_incref(rawr, &gw1, 1);
+         if (count_tag(rawr) != 1) {
+             errx(1, "%s wasn't found once the list of tags", rawr);
+         }
+@@ -46,13 +46,13 @@
+         }
+     }
+ 
+-    lgtd_lifx_tagging_incref(rawr, &gw2);
++    lgtd_lifx_tagging_incref(rawr, &gw2, 1);
+     struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(rawr);
+     if (count_site(&tag->sites, &gw2) != 1) {
+         errx(1, "gw2 wasn't found once in the sites of tag %s", tag->label);
+     }
+ 
+-    lgtd_lifx_tagging_incref(awww, &gw1);
++    lgtd_lifx_tagging_incref(awww, &gw1, 1);
+     if (count_tag(awww) != 1) {
+         errx(1, "%s wasn't found once in the list of tags", awww);
+     }
+@@ -61,5 +61,14 @@
+         errx(1, "gw1 wasn't found once in the sites of tag %s", awww);
+     }
+ 
++    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
++        struct lgtd_lifx_site *site;
++        LIST_FOREACH(site, &tag->sites, link) {
++            if (site->tag_id != 1) {
++                lgtd_errx(1, "site->tag_id = %d (expected 1)", site->tag_id);
++            }
++        }
++    }
++
+     return 0;
+ }
