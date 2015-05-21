@@ -1,0 +1,105 @@
+# HG changeset patch
+# Parent  3069c2c044913c33e15addd280668c14e2814c3b
+Add the get_light_state command
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -206,12 +206,13 @@
+     assert(len > 0);
+     assert(start < stop);
+ 
+-    int range = stop * 10E5 - start * 10E5;
++    int range;
++    range = stop * LGTD_JSONRPC_FLOAT_PREC - start * LGTD_JSONRPC_FLOAT_PREC;
+     const char *dot = NULL;
+     long fracpart = 0;
+-    long intpart = strtol(s, (char **)&dot, 10) * 10E5;
++    long intpart = strtol(s, (char **)&dot, 10) * LGTD_JSONRPC_FLOAT_PREC;
+     if (dot - s != len && *dot == '.') {
+-        for (int i = dot - s + 1, multiplier = 10E4;
++        for (int i = dot - s + 1, multiplier = LGTD_JSONRPC_FLOAT_PREC / 10;
+              i != len && multiplier != 0;
+              i++, multiplier /= 10) {
+             fracpart += (s[i] - '0') * multiplier;
+@@ -220,6 +221,37 @@
+     return ((intpart + fracpart) * UINT16_MAX) / range;
+ }
+ 
++static void
++lgtd_jsonrpc_uint16_range_to_float_string(uint16_t encoded, int start, int stop,
++                                          char *out, int size)
++{
++    assert(out);
++    assert(size > 0);
++    assert(start < stop);
++
++    int range;
++    range = stop * LGTD_JSONRPC_FLOAT_PREC - start * LGTD_JSONRPC_FLOAT_PREC;
++    int value = (uint64_t)encoded * (uint64_t)range / UINT16_MAX;
++
++    int multiplier = 1;
++    while (value / (multiplier * 10)) {
++        multiplier *= 10;
++    }
++
++    int i = 0;
++    do {
++        if (multiplier == (int)10E4) {
++            out[i++] = '.';
++        }
++        out[i++] = '0' + value / multiplier;
++        value -= value / multiplier * multiplier;
++        multiplier /= 10;
++    } while (multiplier && i != size);
++    out[LGTD_MIN(i, size - 1)] = '\0';
++
++    assert(i < size);
++}
++
+ static int
+ lgtd_jsonrpc_consume_object_or_array(const jsmntok_t *tokens,
+                                      int ti,
+diff --git a/core/jsonrpc.h b/core/jsonrpc.h
+--- a/core/jsonrpc.h
++++ b/core/jsonrpc.h
+@@ -19,6 +19,8 @@
+ 
+ struct lgtd_client;
+ 
++enum { LGTD_JSONRPC_FLOAT_PREC = (int)10E5 };
++
+ struct lgtd_jsonrpc_request {
+     const jsmntok_t *method;
+     const jsmntok_t *params;
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -165,3 +165,27 @@
+ 
+     lgtd_client_end_send_response(client);
+ }
++
++void
++lgtd_proto_get_light_state(struct lgtd_client *client,
++                           const struct lgtd_proto_target_list *targets)
++{
++    assert(targets);
++
++    lgtd_client_start_send_response(client);
++
++    static const char *state_fmt = ("{"
++        "\"hsbk\":[%s,%s,%s,%d],",
++        "\"power\":%s,"
++        "\"label\":\"%s\","
++        "\"tags\":[");
++
++    LGTD_CLIENT_WRITE_STRING(client, "[");
++    struct lgtd_lifx_bulb *bulb;
++    RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
++        LGTD_CLIENT_WRITE_STRING
++    }
++    LGTD_CLIENT_WRITE_STRING(client, "]");
++
++    lgtd_client_end_send_response(client);
++}
