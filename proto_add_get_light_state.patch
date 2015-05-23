@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  3069c2c044913c33e15addd280668c14e2814c3b
+# Parent  89f2876c755281fff3b7c9964b1280194a9f1362
 Add the get_light_state command
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
@@ -22,11 +22,11 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
               i != len && multiplier != 0;
               i++, multiplier /= 10) {
              fracpart += (s[i] - '0') * multiplier;
-@@ -220,6 +221,37 @@
+@@ -220,6 +221,40 @@
      return ((intpart + fracpart) * UINT16_MAX) / range;
  }
  
-+static void
++void
 +lgtd_jsonrpc_uint16_range_to_float_string(uint16_t encoded, int start, int stop,
 +                                          char *out, int size)
 +{
@@ -45,7 +45,10 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +
 +    int i = 0;
 +    do {
-+        if (multiplier == (int)10E4) {
++        if (multiplier == LGTD_JSONRPC_FLOAT_PREC / 10) {
++            if (i == 0) {
++                out[i++] = '0';
++            }
 +            out[i++] = '.';
 +        }
 +        out[i++] = '0' + value / multiplier;
@@ -60,6 +63,37 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  static int
  lgtd_jsonrpc_consume_object_or_array(const jsmntok_t *tokens,
                                       int ti,
+@@ -895,6 +930,19 @@
+     lgtd_proto_target_list_clear(&targets);
+ }
+ 
++static void
++lgtd_jsonrpc_check_and_call_get_light_state(struct lgtd_client *client)
++{
++    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
++    bool ok = lgtd_jsonrpc_extract_target_list(&targets, client);
++    if (!ok) {
++        return;
++    }
++
++    lgtd_proto_get_light_state(client, &targets);
++    lgtd_proto_target_list_clear(&targets);
++}
++
+ void
+ lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, int parsed)
+ {
+@@ -916,6 +964,10 @@
+             "set_waveform", 10,
+             lgtd_jsonrpc_check_and_call_set_waveform
+         ),
++        LGTD_JSONRPC_METHOD(
++            "get_light_state", 1, // t
++            lgtd_jsonrpc_check_and_call_get_light_state
++        ),
+         LGTD_JSONRPC_METHOD("list_tags", 0, lgtd_proto_list_tags),
+     };
+ 
 diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 --- a/core/jsonrpc.h
 +++ b/core/jsonrpc.h
@@ -72,10 +106,30 @@ diff --git a/core/jsonrpc.h b/core/jsonrpc.h
  struct lgtd_jsonrpc_request {
      const jsmntok_t *method;
      const jsmntok_t *params;
+@@ -90,3 +92,4 @@
+                                 const char *);
+ void lgtd_jsonrpc_start_send_response(struct lgtd_client *);
+ void lgtd_jsonrpc_end_send_response(struct lgtd_client *);
++void lgtd_jsonrpc_uint16_range_to_float_string(uint16_t, int, int, char *, int);
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -165,3 +165,27 @@
+@@ -36,6 +36,7 @@
+ #include "jsmn.h"
+ #include "jsonrpc.h"
+ #include "client.h"
++#include "lifx/gateway.h"
+ #include "proto.h"
+ #include "router.h"
+ #include "lightsd.h"
+@@ -159,9 +160,76 @@
+     LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
+         LGTD_CLIENT_WRITE_STRING(client, "\"");
+         LGTD_CLIENT_WRITE_STRING(client, tag->label);
+-        LGTD_CLIENT_WRITE_STRING(client, LIST_NEXT(tag, link) ? "\", " : "\"");
++        LGTD_CLIENT_WRITE_STRING(client, LIST_NEXT(tag, link) ? "\"," : "\"");
+     }
+     LGTD_CLIENT_WRITE_STRING(client, "]");
  
      lgtd_client_end_send_response(client);
  }
@@ -89,17 +143,246 @@ diff --git a/core/proto.c b/core/proto.c
 +    lgtd_client_start_send_response(client);
 +
 +    static const char *state_fmt = ("{"
-+        "\"hsbk\":[%s,%s,%s,%d],",
++        "\"hsbk\":[%s,%s,%s,%hu],"
 +        "\"power\":%s,"
 +        "\"label\":\"%s\","
 +        "\"tags\":[");
 +
++#define PRINT_COMPONENT(src, dst, start, stop)          \
++    lgtd_jsonrpc_uint16_range_to_float_string(          \
++        (src), (start), (stop), (dst), sizeof((dst))    \
++    )
++
 +    LGTD_CLIENT_WRITE_STRING(client, "[");
 +    struct lgtd_lifx_bulb *bulb;
 +    RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
-+        LGTD_CLIENT_WRITE_STRING
++        char h[16], s[16], b[16];
++        PRINT_COMPONENT(bulb->state.hue, h, 0, 360);
++        PRINT_COMPONENT(bulb->state.saturation, s, 0, 1);
++        PRINT_COMPONENT(bulb->state.brightness, b, 0, 1);
++
++        char buf[3072];
++        int written = snprintf(
++            buf, sizeof(buf), state_fmt,
++            h, s, b, bulb->state.kelvin,
++            bulb->state.power == LGTD_LIFX_POWER_ON ? "true" : "false",
++            bulb->state.label
++        );
++        if (written == sizeof(buf)) {
++            lgtd_warnx(
++                "can't send state of bulb %s (%s) to client "
++                "[%s]:%hu: output buffer to small",
++                bulb->state.label, lgtd_addrtoa(bulb->addr),
++                client->ip_addr, client->port
++            );
++            continue;
++        }
++        LGTD_CLIENT_WRITE_STRING(client, buf);
++
++        bool comma = false;
++        for (int tag_id = 0; tag_id != LGTD_LIFX_GATEWAY_MAX_TAGS; tag_id++) {
++            if (LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id) & bulb->state.tags) {
++                LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
++                LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
++                LGTD_CLIENT_WRITE_STRING(client, "\"");
++                comma = true;
++            }
++        }
++        LGTD_CLIENT_WRITE_STRING(client, "]");
++
++        if (RB_NEXT(lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table, bulb)) {
++            LGTD_CLIENT_WRITE_STRING(client, "},");
++        } else {
++            LGTD_CLIENT_WRITE_STRING(client, "}");
++        }
 +    }
 +    LGTD_CLIENT_WRITE_STRING(client, "]");
 +
 +    lgtd_client_end_send_response(client);
 +}
+diff --git a/core/proto.h b/core/proto.h
+--- a/core/proto.h
++++ b/core/proto.h
+@@ -38,4 +38,5 @@
+                              int, float, int, bool);
+ void lgtd_proto_power_on(struct lgtd_client *, const struct lgtd_proto_target_list *);
+ void lgtd_proto_power_off(struct lgtd_client *, const struct lgtd_proto_target_list *);
++void lgtd_proto_get_light_state(struct lgtd_client *, const struct lgtd_proto_target_list *);
+ void lgtd_proto_list_tags(struct lgtd_client *);
+diff --git a/docs/protocol.rst b/docs/protocol.rst
+--- a/docs/protocol.rst
++++ b/docs/protocol.rst
+@@ -60,9 +60,9 @@
+                           end of the waveform, otherwise it will revert back to
+                           its original state.
+ 
+-.. function:: list_tags()
++.. function:: get_light_state(target)
+ 
+-    Return a dictionnary with tags as keys and arrays of devices addresses or
+-    labels as values.
++    Return a list of dictionnaries, each dict representing the state of one
++    targeted bulb.
+ 
+ .. vim: set tw=80 spelllang=en spell:
+diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
+--- a/tests/core/jsonrpc/test_jsonrpc_utils.h
++++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
+@@ -85,3 +85,13 @@
+     (void)transient;
+ }
+ #endif
++
++#ifndef MOCKED_LGTD_GET_LIGHT_STATE
++void
++lgtd_proto_get_light_state(struct lgtd_client *client,
++                           const struct lgtd_proto_target_list *targets)
++{
++    (void)client;
++    (void)targets;
++}
++#endif
+diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
+--- a/tests/core/proto/CMakeLists.txt
++++ b/tests/core/proto/CMakeLists.txt
+@@ -6,6 +6,7 @@
+ ADD_LIBRARY(
+     test_core_proto STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/core/jsonrpc.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+diff --git a/tests/core/proto/test_proto_list_tags.c b/tests/core/proto/test_proto_list_tags.c
+--- a/tests/core/proto/test_proto_list_tags.c
++++ b/tests/core/proto/test_proto_list_tags.c
+@@ -30,9 +30,9 @@
+     reset_client_write_buf();
+     lgtd_tests_insert_mock_tag("@_@");
+     lgtd_proto_list_tags(&client);
+-    if (strcmp(client_write_buf, "[\"@_@\", \"test\"]")) {
++    if (strcmp(client_write_buf, "[\"@_@\",\"test\"]")) {
+         errx(
+-            1, "expected [\"@_@\", \"test\"] but got %s instead",
++            1, "expected [\"@_@\",\"test\"] but got %s instead",
+             client_write_buf
+         );
+     }
+diff --git a/tests/lightsc b/tests/lightsc
+--- a/tests/lightsc
++++ b/tests/lightsc
+@@ -1,43 +1,49 @@
+ #!/usr/bin/env python
+ 
+ import json
++import pprint
+ import socket
+ import sys
+ import time
++import uuid
+ 
+ from IPython.terminal.embed import InteractiveShellEmbed
+ 
+ 
+-def jsonrpc_call(socket, id, method, params):
++def jsonrpc_call(socket, method, params):
+     payload = {
+         "method": method,
+         "params": params,
+         "jsonrpc": "2.0",
+-        "id": id,
++        "id": str(uuid.uuid4()),
+     }
+-    socket.send(json.dumps(payload).encode("ascii"))
+-    response = socket.recv(2048)
+-    response = json.loads(response.decode("ascii"))
+-    print(response)
++    socket.send(json.dumps(payload).encode("utf-8"))
++    response = socket.recv(2048).decode("utf-8")
++    try:
++        response = json.loads(response)
++    except ValueError:
++        print("received invalid json: {}".format(response))
++        return None
++    return response
+ 
+ 
+-def set_light_from_hsbk(socket, id, target, h, s, b, k, t):
+-    jsonrpc_call(socket, id, "set_light_from_hsbk", [
++def set_light_from_hsbk(socket, target, h, s, b, k, t):
++    return jsonrpc_call(socket, "set_light_from_hsbk", [
+         target, h, s, b, k, t
+     ])
+ 
+ 
+-def set_waveform(socket, id, target, waveform,
++def set_waveform(socket, target, waveform,
+                  h, s, b, k,
+                  period, cycles, skew_ratio, transient):
+-    jsonrpc_call(socket, id, "set_waveform", [
++    return jsonrpc_call(socket, "set_waveform", [
+         target, waveform, h, s, b, k, period, cycles, skew_ratio, transient
+     ])
+ 
+ 
+-def saw(socket, id, target, h, s, b, k, period, cycles, transient=True):
+-    set_waveform(
+-        socket, id, target, "SAW", h, s, b, k,
++def saw(socket, target, h, s, b, k, period, cycles, transient=True):
++    return set_waveform(
++        socket, target, "SAW", h, s, b, k,
+         cycles=cycles,
+         period=period,
+         skew_ratio=0.5,
+@@ -45,9 +51,9 @@
+     )
+ 
+ 
+-def sine(socket, id, target, h, s, b, k, period, cycles, peak=0.5, transient=True):
+-    set_waveform(
+-        socket, id, target, "SINE", h, s, b, k,
++def sine(socket, target, h, s, b, k, period, cycles, peak=0.5, transient=True):
++    return set_waveform(
++        socket, target, "SINE", h, s, b, k,
+         cycles=cycles,
+         period=period,
+         skew_ratio=peak,
+@@ -55,16 +61,16 @@
+     )
+ 
+ 
+-def power_on(socket, id, target):
+-    jsonrpc_call(socket, id, "power_on", {"target": target})
++def power_on(socket, target):
++    return jsonrpc_call(socket, "power_on", {"target": target})
+ 
+ 
+-def power_off(socket, id, target):
+-    jsonrpc_call(socket, id, "power_off", {"target": target})
++def power_off(socket, target):
++    return jsonrpc_call(socket, "power_off", {"target": target})
+ 
+ 
+-def list_tags(socket, id):
+-    jsonrpc_call(socket, id, "list_tags", [])
++def get_light_state(socket, target):
++    return jsonrpc_call(socket, "get_light_state", [target])
+ 
+ if __name__ == "__main__":
+     s = socket.create_connection(("localhost", 1234))
+@@ -80,12 +86,12 @@
+             ipshell = InteractiveShellEmbed()
+             ipshell()
+             sys.exit(0)
+-        power_on(s, id, target)
++        power_on(s, target)
+         while True:
+             h = (h + 5) % 360
+             id += 1
+-            set_light_from_hsbk(s, id, target, h, 0.8, 0.1, 2500, 450)
++            set_light_from_hsbk(s, target, h, 0.8, 0.1, 2500, 450)
+             time.sleep(0.5)
+-        power_off(s, id, target)
++        power_off(s, target)
+     finally:
+         s.close()
