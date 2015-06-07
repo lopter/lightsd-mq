@@ -122,7 +122,7 @@ diff --git a/core/proto.c b/core/proto.c
  #include "proto.h"
  #include "router.h"
  #include "lightsd.h"
-@@ -159,9 +160,76 @@
+@@ -159,9 +160,85 @@
      LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
          LGTD_CLIENT_WRITE_STRING(client, "\"");
          LGTD_CLIENT_WRITE_STRING(client, tag->label);
@@ -140,7 +140,14 @@ diff --git a/core/proto.c b/core/proto.c
 +{
 +    assert(targets);
 +
-+    lgtd_client_start_send_response(client);
++    struct lgtd_router_device_list *devices;
++    devices = lgtd_router_targets_to_devices(targets);
++    if (!devices) {
++        lgtd_client_send_error(
++            client, LGTD_CLIENT_INTERNAL_ERROR, "couldn't allocate device list"
++        );
++        return;
++    }
 +
 +    static const char *state_fmt = ("{"
 +        "\"hsbk\":[%s,%s,%s,%hu],"
@@ -153,9 +160,12 @@ diff --git a/core/proto.c b/core/proto.c
 +        (src), (start), (stop), (dst), sizeof((dst))    \
 +    )
 +
++    lgtd_client_start_send_response(client);
 +    LGTD_CLIENT_WRITE_STRING(client, "[");
-+    struct lgtd_lifx_bulb *bulb;
-+    RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
++    struct lgtd_router_device *device;
++    SLIST_FOREACH(device, devices, link) {
++        struct lgtd_lifx_bulb *bulb = device->device;
++
 +        char h[16], s[16], b[16];
 +        PRINT_COMPONENT(bulb->state.hue, h, 0, 360);
 +        PRINT_COMPONENT(bulb->state.saturation, s, 0, 1);
@@ -197,7 +207,6 @@ diff --git a/core/proto.c b/core/proto.c
 +        }
 +    }
 +    LGTD_CLIENT_WRITE_STRING(client, "]");
-+
 +    lgtd_client_end_send_response(client);
 +}
 diff --git a/core/proto.h b/core/proto.h
@@ -209,10 +218,47 @@ diff --git a/core/proto.h b/core/proto.h
  void lgtd_proto_power_off(struct lgtd_client *, const struct lgtd_proto_target_list *);
 +void lgtd_proto_get_light_state(struct lgtd_client *, const struct lgtd_proto_target_list *);
  void lgtd_proto_list_tags(struct lgtd_client *);
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -254,3 +254,13 @@
+ 
+     return rv;
+ }
++
++struct lgtd_router_device_list *
++lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *targets)
++{
++}
++
++void
++lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
++{
++}
+diff --git a/core/router.h b/core/router.h
+--- a/core/router.h
++++ b/core/router.h
+@@ -23,8 +23,16 @@
+     LGTD_ROUTER_CANNOT_ENQUEUE_PACKET_ERROR
+ };
+ 
++struct lgtd_router_device {
++    SLIST_ENTRY(lgtd_router_device) link;
++    struct lgtd_lifx_bulb           *device;
++};
++SLIST_HEAD(lgtd_router_device_list, lgtd_router_device);
++
+ bool lgtd_router_send(const struct lgtd_proto_target_list *, enum lgtd_lifx_packet_type, void *);
+ void lgtd_router_send_to_device(struct lgtd_lifx_bulb *, enum lgtd_lifx_packet_type, void *);
+ void lgtd_router_send_to_tag(const struct lgtd_lifx_tag *, enum lgtd_lifx_packet_type, void *);
+ void lgtd_router_send_to_label(const char *, enum lgtd_lifx_packet_type, void *);
+ void lgtd_router_broadcast(enum lgtd_lifx_packet_type, void *);
++struct lgtd_router_device_list *lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *);
++void lgtd_router_device_list_free(struct lgtd_router_device_list *);
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 --- a/docs/protocol.rst
 +++ b/docs/protocol.rst
-@@ -60,9 +60,9 @@
+@@ -60,9 +60,15 @@
                            end of the waveform, otherwise it will revert back to
                            its original state.
  
@@ -222,7 +268,13 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 -    Return a dictionnary with tags as keys and arrays of devices addresses or
 -    labels as values.
 +    Return a list of dictionnaries, each dict representing the state of one
-+    targeted bulb.
++    targeted bulb, the list is not in any specific order. Each dict has the
++    following fields:
++
++    - hsbk: tuple (h, s, b, k) see function:`set_light_from_hsbk`;
++    - label: bulb label (utf-8 encoded string);
++    - power: boolean, true when the bulb is powered on false otherwise;
++    - tags: list of tags applied to the bulb (utf-8 encoded strings).
  
  .. vim: set tw=80 spelllang=en spell:
 diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
@@ -253,6 +305,80 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
      ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
      ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -0,0 +1,69 @@
++#include "proto.c"
++
++#include "mock_client_buf.h"
++#include "tests_utils.h"
++
++#define MOCKED_ROUTER_TARGETS_TO_DEVICES
++#include "tests_proto_utils.h"
++
++struct lgtd_router_device_list *
++lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *targets)
++{
++    if (targets != (void *)0x2a) {
++        lgtd_errx(1, "unexpected targets list");
++    }
++
++    static struct lgtd_lifx_bulb bulb_1 = {
++        .addr = { 1, 2, 3, 4, 5 },
++        .state = {
++            .hue = 0xaaaa,
++            .saturation = 0xffff,
++            .brightness = 0xbbbb,
++            .kelvin = 3600,
++            .label = "pouet",
++            .power = LGTD_LIFX_POWER_ON,
++            .tags = 0
++        }
++    };
++    static struct lgtd_router_device_list devices =
++        SLIST_HEAD_INITIALIZER(&devices);
++    static struct lgtd_router_device device = { .device = &bulb_1 };
++
++    SLIST_INSERT_HEAD(&devices, &device, link);
++
++    return &devices;
++}
++
++int
++main(void)
++{
++    struct lgtd_client client;
++    struct lgtd_proto_target_list *targets = (void *)0x2a;
++
++    lgtd_proto_get_light_state(&client, targets);
++
++    const char expected[] = (
++        "[{"
++            "\"hsbk\":[240.000000,1.000000,0.733333,3600],"
++            "\"power\":true,"
++            "\"label\":\"pouet\","
++            "\"tags\":[]"
++        "}]"
++    );
++
++    if (client_write_buf_idx != sizeof(expected) - 1) {
++        lgtd_errx(
++            1, "%d bytes written, expected %lu",
++            client_write_buf_idx, sizeof(expected) - 1
++        );
++    }
++
++    if (memcmp(expected, client_write_buf, sizeof(expected) - 1)) {
++        lgtd_errx(
++            1, "got %.*s instead of %s",
++            client_write_buf_idx, client_write_buf, expected
++        );
++    }
++
++    return 0;
++}
 diff --git a/tests/core/proto/test_proto_list_tags.c b/tests/core/proto/test_proto_list_tags.c
 --- a/tests/core/proto/test_proto_list_tags.c
 +++ b/tests/core/proto/test_proto_list_tags.c
@@ -268,6 +394,41 @@ diff --git a/tests/core/proto/test_proto_list_tags.c b/tests/core/proto/test_pro
              client_write_buf
          );
      }
+diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
+--- a/tests/core/proto/tests_proto_utils.h
++++ b/tests/core/proto/tests_proto_utils.h
+@@ -20,6 +20,18 @@
+ }
+ #endif
+ 
++#ifndef MOCKED_CLIENT_SEND_ERROR
++void
++lgtd_client_send_error(struct lgtd_client *client,
++                       enum lgtd_client_error_code error,
++                       const char *msg)
++{
++    (void)client;
++    (void)error;
++    (void)msg;
++}
++#endif
++
+ #ifndef MOCKED_ROUTER_SEND
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+@@ -32,3 +44,12 @@
+     return true;
+ }
+ #endif
++
++#ifndef MOCKED_ROUTER_TARGETS_TO_DEVICES
++struct lgtd_router_device_list *
++lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *targets)
++{
++    (void)targets;
++    return NULL;
++}
++#endif
 diff --git a/tests/lightsc b/tests/lightsc
 --- a/tests/lightsc
 +++ b/tests/lightsc
