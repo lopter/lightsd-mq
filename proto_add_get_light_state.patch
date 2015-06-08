@@ -122,7 +122,7 @@ diff --git a/core/proto.c b/core/proto.c
  #include "proto.h"
  #include "router.h"
  #include "lightsd.h"
-@@ -159,9 +160,85 @@
+@@ -159,9 +160,84 @@
      LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
          LGTD_CLIENT_WRITE_STRING(client, "\"");
          LGTD_CLIENT_WRITE_STRING(client, tag->label);
@@ -191,8 +191,7 @@ diff --git a/core/proto.c b/core/proto.c
 +
 +        bool comma = false;
 +        int tag_id;
-+        uint64_t tags;
-+        LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, tags, bulb->state.tags) {
++        LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, bulb->state.tags) {
 +            LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
 +            LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
 +            LGTD_CLIENT_WRITE_STRING(client, "\"");
@@ -200,7 +199,7 @@ diff --git a/core/proto.c b/core/proto.c
 +        }
 +        LGTD_CLIENT_WRITE_STRING(client, "]");
 +
-+        if (RB_NEXT(lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table, bulb)) {
++        if (SLIST_NEXT(device, link)) {
 +            LGTD_CLIENT_WRITE_STRING(client, "},");
 +        } else {
 +            LGTD_CLIENT_WRITE_STRING(client, "}");
@@ -307,7 +306,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  void
  lgtd_lifx_gateway_close(struct lgtd_lifx_gateway *gw)
  {
-@@ -565,17 +545,13 @@
+@@ -565,17 +545,12 @@
          pkt->label, (uintmax_t)pkt->tags
      );
  
@@ -318,8 +317,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 -            break;
 -        }
 +    int tag_id;
-+    uint64_t tags;
-+    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, tags, pkt->tags) {
++    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, pkt->tags) {
          if (pkt->label[0]) {
              lgtd_lifx_gateway_allocate_tag_id(gw, tag_id, pkt->label);
          } else if (gw->tags[tag_id]) {
@@ -363,35 +361,36 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  
  #if LGTD_SIZEOF_VOID_P == 8
  #   define LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(x) (1UL << (x))
-@@ -253,6 +253,33 @@
+@@ -253,6 +253,34 @@
  #   define LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(x) (1ULL << (x))
  #endif
  
 +// Kim Walisch (2012)
 +// http://chessprogramming.wikispaces.com/BitScan#DeBruijnMultiplation
++
++enum { LGTD_LIFX_DEBRUIJN_NUMBER = 0x03f79d71b4cb0a89 };
 +extern const int LGTD_LIFX_DEBRUIJN_SEQUENCE[64];
++
 +static inline int
 +lgtd_lifx_wire_bitscan64_forward(uint64_t n)
 +{
-+    enum { DEBRUIJN_NUMBER = 0x03f79d71b4cb0a89 };
 +    return n ? LGTD_LIFX_DEBRUIJN_SEQUENCE[
-+        ((n ^ (n - 1)) * DEBRUIJN_NUMBER) >> 58
++        ((n ^ (n - 1)) * LGTD_LIFX_DEBRUIJN_NUMBER) >> 58
 +    ] : -1;
 +}
 +
 +static inline int
-+lgtd_lifx_wire_next_tag_id(uint64_t *tags)
++lgtd_lifx_wire_next_tag_id(int current_tag_id, uint64_t tags)
 +{
-+    int tag_id = lgtd_lifx_wire_bitscan64_forward(*tags);
-+    *tags &= ~LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
-+    return tag_id;
++    tags &= ~0ULL << (current_tag_id + 1);
++    return lgtd_lifx_wire_bitscan64_forward(tags);
 +}
 +
-+#define LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id_varname, tags_varname, tags)        \
-+    (tags_varname) = (tags);                                                \
-+    for ((tag_id_varname) = lgtd_lifx_wire_next_tag_id(&(tags_varname));    \
-+         (tag_id_varname) != -1;                                            \
-+         tag_id_varname = lgtd_lifx_wire_next_tag_id(&(tags_varname)))
++#define LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id_varname, tags)                         \
++    (tag_id_varname) = -1;                                                          \
++    for ((tag_id_varname) = lgtd_lifx_wire_next_tag_id((tag_id_varname), (tags));   \
++         (tag_id_varname) != -1;                                                    \
++         (tag_id_varname) = lgtd_lifx_wire_next_tag_id((tag_id_varname), (tags)))
 +
 +
  enum lgtd_lifx_waveform_type lgtd_lifx_wire_waveform_string_id_to_type(const char *, int);
@@ -429,7 +428,7 @@ diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/te
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/proto/test_proto_get_light_state.c
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,103 @@
 +#include "proto.c"
 +
 +#include "mock_client_buf.h"
@@ -463,9 +462,16 @@ new file mode 100644
 +    static struct lgtd_router_device device_1 = { .device = &bulb_1 };
 +    SLIST_INSERT_HEAD(&devices, &device_1, link);
 +
++    struct lgtd_lifx_tag *gw_2_tag_1 = lgtd_tests_insert_mock_tag("vapor");
++    struct lgtd_lifx_tag *gw_2_tag_2 = lgtd_tests_insert_mock_tag("d^-^b");
++    struct lgtd_lifx_tag *gw_2_tag_3 = lgtd_tests_insert_mock_tag("wave~");
 +    static struct lgtd_lifx_gateway gw_bulb_2 = {
-+
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_2.bulbs),
++        .tag_ids = 0x7
 +    };
++    lgtd_tests_add_tag_to_gw(gw_2_tag_1, &gw_bulb_2, 0);
++    lgtd_tests_add_tag_to_gw(gw_2_tag_2, &gw_bulb_2, 1);
++    lgtd_tests_add_tag_to_gw(gw_2_tag_3, &gw_bulb_2, 2);
 +    static struct lgtd_lifx_bulb bulb_2 = {
 +        .addr = { 5, 4, 3, 2, 1 },
 +        .state = {
@@ -473,7 +479,7 @@ new file mode 100644
 +            .saturation = 0x0000,
 +            .brightness = 0xffff,
 +            .kelvin = 4000,
-+            .label = "white",
++            .label = "",
 +            .power = LGTD_LIFX_POWER_OFF,
 +            .tags = 0x3
 +        },
@@ -494,12 +500,20 @@ new file mode 100644
 +    lgtd_proto_get_light_state(&client, targets);
 +
 +    const char expected[] = (
-+        "[{"
-+            "\"hsbk\":[240.000000,1.000000,0.733333,3600],"
-+            "\"power\":true,"
-+            "\"label\":\"pouet\","
-+            "\"tags\":[]"
-+        "}]"
++        "["
++            "{"
++                "\"hsbk\":[0,0,1.000000,4000],"
++                "\"power\":false,"
++                "\"label\":\"\","
++                "\"tags\":[\"vapor\",\"d^-^b\"]"
++            "},"
++            "{"
++                "\"hsbk\":[240.000000,1.000000,0.733333,3600],"
++                "\"power\":true,"
++                "\"label\":\"pouet\","
++                "\"tags\":[]"
++            "}"
++        "]"
 +    );
 +
 +    if (client_write_buf_idx != sizeof(expected) - 1) {
@@ -588,7 +602,7 @@ diff --git a/tests/core/proto/test_proto_list_tags.c b/tests/core/proto/test_pro
 diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
 --- a/tests/core/proto/tests_proto_utils.h
 +++ b/tests/core/proto/tests_proto_utils.h
-@@ -20,6 +20,29 @@
+@@ -20,6 +20,18 @@
  }
  #endif
  
@@ -604,21 +618,10 @@ diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto
 +}
 +#endif
 +
-+const int LGTD_LIFX_DEBRUIJN_SEQUENCE[64] = {
-+    0, 47,  1, 56, 48, 27,  2, 60,
-+   57, 49, 41, 37, 28, 16,  3, 61,
-+   54, 58, 35, 52, 50, 42, 21, 44,
-+   38, 32, 29, 23, 17, 11,  4, 62,
-+   46, 55, 26, 59, 40, 36, 15, 53,
-+   34, 51, 20, 43, 31, 22, 10, 45,
-+   25, 39, 14, 33, 19, 30,  9, 24,
-+   13, 18,  8, 12,  7,  6,  5, 63
-+};
-+
  #ifndef MOCKED_ROUTER_SEND
  bool
  lgtd_router_send(const struct lgtd_proto_target_list *targets,
-@@ -32,3 +55,12 @@
+@@ -32,3 +44,12 @@
      return true;
  }
  #endif
