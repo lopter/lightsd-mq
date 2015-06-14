@@ -2,6 +2,21 @@
 # Parent  89f2876c755281fff3b7c9964b1280194a9f1362
 Add the get_light_state command
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -8,9 +8,8 @@
+ SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+ 
+ MESSAGE(STATUS "CMake version: ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}.${CMAKE_PATCH_VERSION}")
+-MESSAGE(STATUS "lgtd version: ${LIGHTSD_VERSION}")
+-MESSAGE(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+-MESSAGE(STATUS "System: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION}")
++MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
++MESSAGE(STATUS "Target system: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION} ${CMAKE_SYSTEM_PROCESSOR}")
+ MESSAGE(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
+ MESSAGE(STATUS "Source directory: ${LIGHTSD_SOURCE_DIR}")
+ 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
@@ -22,7 +37,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
               i != len && multiplier != 0;
               i++, multiplier /= 10) {
              fracpart += (s[i] - '0') * multiplier;
-@@ -220,6 +221,40 @@
+@@ -220,6 +221,45 @@
      return ((intpart + fracpart) * UINT16_MAX) / range;
  }
  
@@ -31,7 +46,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +                                          char *out, int size)
 +{
 +    assert(out);
-+    assert(size > 0);
++    assert(size > 1);
 +    assert(start < stop);
 +
 +    int range;
@@ -49,21 +64,26 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +            if (i == 0) {
 +                out[i++] = '0';
 +            }
-+            out[i++] = '.';
++            if (i != size) {
++                out[i++] = '.';
++            }
 +        }
-+        out[i++] = '0' + value / multiplier;
++        if (i != size) {
++            out[i++] = '0' + value / multiplier;
++        }
 +        value -= value / multiplier * multiplier;
 +        multiplier /= 10;
-+    } while (multiplier && i != size);
++    } while ((value || multiplier >= LGTD_JSONRPC_FLOAT_PREC)
++              && multiplier && i != size);
 +    out[LGTD_MIN(i, size - 1)] = '\0';
 +
-+    assert(i < size);
++    assert(i <= size);
 +}
 +
  static int
  lgtd_jsonrpc_consume_object_or_array(const jsmntok_t *tokens,
                                       int ti,
-@@ -895,6 +930,19 @@
+@@ -895,6 +935,19 @@
      lgtd_proto_target_list_clear(&targets);
  }
  
@@ -83,7 +103,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  void
  lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, int parsed)
  {
-@@ -916,6 +964,10 @@
+@@ -916,6 +969,10 @@
              "set_waveform", 10,
              lgtd_jsonrpc_check_and_call_set_waveform
          ),
@@ -396,6 +416,67 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  enum lgtd_lifx_waveform_type lgtd_lifx_wire_waveform_string_id_to_type(const char *, int);
  
  const struct lgtd_lifx_packet_infos *lgtd_lifx_wire_get_packet_infos(enum lgtd_lifx_packet_type);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c b/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
+@@ -0,0 +1,56 @@
++#include "jsonrpc.c"
++
++#include "mock_client_buf.h"
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    char buf[32];
++    int bufsz = sizeof(buf);
++
++    lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX, 0, 1, buf, bufsz);
++    if (strcmp(buf, "1")) {
++        lgtd_errx(
++            1, "UINT16_MAX converted to %.*s (expected %s)",
++            bufsz, buf, "1"
++        );
++    }
++
++    lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX / 2, 0, 1, buf, bufsz);
++    if (strcmp(buf, "0.499992")) {
++        lgtd_errx(
++            1, "UINT16_MAX / 2 converted to %.*s (expected %s)",
++            bufsz, buf, "0.499992"
++        );
++    }
++
++    lgtd_jsonrpc_uint16_range_to_float_string(0, 0, 1, buf, bufsz);
++    if (strcmp(buf, "0")) {
++        lgtd_errx(
++            1, "UINT16_MAX / 2 converted to %.*s (expected %s)",
++            bufsz, buf, "0"
++        );
++    }
++
++    lgtd_jsonrpc_uint16_range_to_float_string(0xaaaa, 0, 360, buf, bufsz);
++    if (strcmp(buf, "240")) {
++        lgtd_errx(
++            1, "0xaaaa converted to %.*s (expected %s)",
++            bufsz, buf, "240"
++        );
++    }
++
++    bufsz = 2;
++    lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX / 2, 0, 1, buf, bufsz);
++    if (strcmp(buf, "0")) {
++        lgtd_errx(
++            1,
++            "UINT16_MAX / 2 converted to %.*s "
++            "(expected %s in case of overflow)",
++            bufsz, buf, "0"
++        );
++    }
++
++    return 0;
++}
 diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
 --- a/tests/core/jsonrpc/test_jsonrpc_utils.h
 +++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
@@ -428,7 +509,7 @@ diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/te
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/proto/test_proto_get_light_state.c
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,106 @@
 +#include "proto.c"
 +
 +#include "mock_client_buf.h"
@@ -454,7 +535,7 @@ new file mode 100644
 +            .saturation = 0xffff,
 +            .brightness = 0xbbbb,
 +            .kelvin = 3600,
-+            .label = "pouet",
++            .label = "wave",
 +            .power = LGTD_LIFX_POWER_ON,
 +            .tags = 0
 +        }
@@ -502,15 +583,15 @@ new file mode 100644
 +    const char expected[] = (
 +        "["
 +            "{"
-+                "\"hsbk\":[0,0,1.000000,4000],"
++                "\"hsbk\":[0,0,1,4000],"
 +                "\"power\":false,"
 +                "\"label\":\"\","
 +                "\"tags\":[\"vapor\",\"d^-^b\"]"
 +            "},"
 +            "{"
-+                "\"hsbk\":[240.000000,1.000000,0.733333,3600],"
++                "\"hsbk\":[240,1,0.733333,3600],"
 +                "\"power\":true,"
-+                "\"label\":\"pouet\","
++                "\"label\":\"wave\","
 +                "\"tags\":[]"
 +            "}"
 +        "]"
@@ -518,8 +599,11 @@ new file mode 100644
 +
 +    if (client_write_buf_idx != sizeof(expected) - 1) {
 +        lgtd_errx(
-+            1, "%d bytes written, expected %lu",
-+            client_write_buf_idx, sizeof(expected) - 1
++            1,
++            "%d bytes written, expected %lu "
++            "(got %.*s instead of %s)",
++            client_write_buf_idx, sizeof(expected) - 1,
++            client_write_buf_idx, client_write_buf, expected
 +        );
 +    }
 +
