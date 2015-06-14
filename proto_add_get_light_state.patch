@@ -142,7 +142,7 @@ diff --git a/core/proto.c b/core/proto.c
  #include "proto.h"
  #include "router.h"
  #include "lightsd.h"
-@@ -159,9 +160,84 @@
+@@ -159,9 +160,86 @@
      LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
          LGTD_CLIENT_WRITE_STRING(client, "\"");
          LGTD_CLIENT_WRITE_STRING(client, tag->label);
@@ -227,6 +227,8 @@ diff --git a/core/proto.c b/core/proto.c
 +    }
 +    LGTD_CLIENT_WRITE_STRING(client, "]");
 +    lgtd_client_end_send_response(client);
++
++    lgtd_router_device_list_free(devices);
 +}
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
