@@ -1,0 +1,153 @@
+# HG changeset patch
+# Parent 89f2876c755281fff3b7c9964b1280194a9f1362
+Cope with older versions of CMake and the glibc
+
+- Early 2.8 versions of CMake don't have FOUND_VAR for FPHS;
+- clock_gettime is in librt for glibc < 2.17.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -48,7 +48,10 @@
+     ENDIF ()
+ ENDIF ()
+ 
+-INCLUDE_DIRECTORIES(${LIGHTSD_SOURCE_DIR}/compat/generic ${LIGHTSD_BINARY_DIR}/compat)
++INCLUDE_DIRECTORIES(
++    ${LIGHTSD_SOURCE_DIR}/compat/generic
++    ${LIGHTSD_BINARY_DIR}/compat
++)
+ 
+ ADD_SUBDIRECTORY(core)
+ ADD_SUBDIRECTORY(lifx)
+diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
+--- a/CMakeScripts/CompatTimeMonotonic.cmake
++++ b/CMakeScripts/CompatTimeMonotonic.cmake
+@@ -1,30 +1,39 @@
+ INCLUDE(CheckFunctionExists)
+ 
+-IF (NOT TIME_MONOTONIC_IMPL)
++IF (NOT TIME_MONOTONIC_LIBRARY)
+     SET(COMPAT_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.c")
+     SET(COMPAT_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.h")
+     SET(GENERIC_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.c")
+     SET(GENERIC_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.h")
+ 
++    IF (TRUE) # TODO glibc < 2.17 only
++        SET(CLOCK_GETTIME_LIBRARY rt)
++    ENDIF (TRUE)
++
+     SET(CMAKE_REQUIRED_QUIET TRUE)
++    SET(CMAKE_REQUIRED_LIBRARIES ${CLOCK_GETTIME_LIBRARY})
+     MESSAGE(STATUS "Looking for clock_gettime")
+     CHECK_FUNCTION_EXISTS("clock_gettime" HAVE_CLOCK_GETTIME)
++    UNSET(CMAKE_REQUIRED_LIBRARIES)
+     UNSET(CMAKE_REQUIRED_QUIET)
+ 
+     IF (HAVE_CLOCK_GETTIME)
+         MESSAGE(STATUS "Looking for clock_gettime - found")
+         FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
+         SET(
+-            TIME_MONOTONIC_IMPL "${GENERIC_TIME_MONOTONIC_IMPL}"
++            TIME_MONOTONIC_LIBRARY time_monotonic
+             CACHE INTERNAL "lgtd_time_monotonic (POSIX generic implementation)"
+         )
++        ADD_LIBRARY(${TIME_MONOTONIC_LIBRARY} STATIC "${GENERIC_TIME_MONOTONIC_IMPL}")
++        TARGET_LINK_LIBRARIES(${TIME_MONOTONIC_LIBRARY} ${CLOCK_GETTIME_LIBRARY})
+     ELSEIF (EXISTS "${COMPAT_TIME_MONOTONIC_IMPL}")
+         MESSAGE(STATUS "Looking for clock_gettime - not found, using built-in compatibilty file")
+         FILE(COPY "${COMPAT_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
+         SET(
+-            TIME_MONOTONIC_IMPL "${COMPAT_TIME_MONOTONIC_IMPL}"
++            TIME_MONOTONIC_LIBRARY time_monotonic
+             CACHE INTERNAL "lgtd_time_monotonic (${CMAKE_SYSTEM_NAME} specific implementation)"
+         )
++        ADD_LIBRARY(${TIME_MONOTONIC_LIBRARY} STATIC "${COMPAT_TIME_MONOTONIC_IMPL}")
+     ELSE ()
+         MESSAGE(SEND_ERROR "Looking for clock_gettime - not found")
+     ENDIF ()
+diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
+--- a/CMakeScripts/FindEndian.cmake
++++ b/CMakeScripts/FindEndian.cmake
+@@ -10,7 +10,7 @@
+     UNSET(CMAKE_REQUIRED_QUIET)
+ 
+     IF (HAVE_ENDIAN_H)
+-        MESSAGE(STATUS "Looking for endan.h - found")
++        MESSAGE(STATUS "Looking for endian.h - found")
+         SET(ENDIAN_H_PATH "using native headers" CACHE INTERNAL "endian.h path")
+     ELSEIF (EXISTS "${COMPAT_ENDIAN_H}")
+         MESSAGE(STATUS "Looking for endian.h - not found, using built-in compatibility file")
+diff --git a/CMakeScripts/FindEvent2.cmake b/CMakeScripts/FindEvent2.cmake
+--- a/CMakeScripts/FindEvent2.cmake
++++ b/CMakeScripts/FindEvent2.cmake
+@@ -12,7 +12,6 @@
+ 
+ FIND_PACKAGE_HANDLE_STANDARD_ARGS(
+     Event2
+-    FOUND_VAR Event2_FOUND
+     HANDLE_COMPONENTS
+     REQUIRED_VARS EVENT2_CORE_LIBRARY EVENT2_INCLUDE_DIR
+ )
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -22,7 +22,11 @@
+     log.c
+     proto.c
+     router.c
+-    ${TIME_MONOTONIC_IMPL}
+ )
+ 
+-TARGET_LINK_LIBRARIES(lightsd lifx ${EVENT2_CORE_LIBRARY})
++TARGET_LINK_LIBRARIES(
++    lightsd
++    lifx
++    ${EVENT2_CORE_LIBRARY}
++    ${TIME_MONOTONIC_LIBRARY}
++)
+diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
+--- a/tests/core/jsonrpc/CMakeLists.txt
++++ b/tests/core/jsonrpc/CMakeLists.txt
+@@ -11,8 +11,8 @@
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+-    ${TIME_MONOTONIC_IMPL}
+ )
++TARGET_LINK_LIBRARIES(test_core_jsonrpc ${TIME_MONOTONIC_LIBRARY})
+ 
+ FUNCTION(ADD_JSONRPC_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_jsonrpc)
+diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
+--- a/tests/core/proto/CMakeLists.txt
++++ b/tests/core/proto/CMakeLists.txt
+@@ -11,8 +11,8 @@
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+-    ${TIME_MONOTONIC_IMPL}
+ )
++TARGET_LINK_LIBRARIES(test_core_proto ${TIME_MONOTONIC_LIBRARY})
+ 
+ FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
+diff --git a/tests/core/router/CMakeLists.txt b/tests/core/router/CMakeLists.txt
+--- a/tests/core/router/CMakeLists.txt
++++ b/tests/core/router/CMakeLists.txt
+@@ -12,10 +12,13 @@
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+-    ${TIME_MONOTONIC_IMPL}
+ )
+ 
+-TARGET_LINK_LIBRARIES(test_core_router ${EVENT2_CORE_LIBRARY})
++TARGET_LINK_LIBRARIES(
++    test_core_router
++    ${EVENT2_CORE_LIBRARY}
++    ${TIME_MONOTONIC_LIBRARY}
++)
+ 
+ FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_router)

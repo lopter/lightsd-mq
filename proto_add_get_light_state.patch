@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  89f2876c755281fff3b7c9964b1280194a9f1362
+# Parent 2e97dc5fcde8302bf8222afc4ead0c0a0ea2520e
 Add the get_light_state command
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -1016,7 +1016,7 @@ new file mode 100644
 +    SLIST_FOREACH(it, devices, link) {
 +        count++;
 +    }
-+    
++
 +    return count;
 +}
 +

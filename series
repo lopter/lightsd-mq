@@ -1,1 +1,5 @@
+cope_with_older_glibc_versions.patch
+fix_mips32_build_warnings.patch
 proto_add_get_light_state.patch
+fix_float_to_uint16_integer_overflow.patch
+fix_bit_shift_in_insert_mock_bulb.patch
