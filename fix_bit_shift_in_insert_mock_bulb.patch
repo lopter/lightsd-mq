@@ -1,23 +1,19 @@
 # HG changeset patch
 # Parent 8219e7dec57d72bc88c17df59aa4682638478daf
-Fix bitshift direction in test_utils_insert_mock_bulb...
-
+# Parent  a6582c808671b87b60a9c3ef06e8059b07515ca3
+Fix bitshift in test_utils_insert_mock_bulb...
 
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
-@@ -50,9 +50,13 @@
+@@ -50,7 +50,9 @@
      union {
          uint8_t     as_array[LGTD_LIFX_ADDR_LENGTH];
          uint64_t    as_scalar;
 -    } bulb_addr = { .as_scalar = htobe64(addr) >> 16 };
 +    } bulb_addr = {
-+        .as_scalar = htobe64(addr) << 8 * (sizeof(addr) - LGTD_LIFX_ADDR_LENGTH)
++        .as_scalar = addr << 8 * (LGTD_LIFX_ADDR_LENGTH - 1)
 +    };
      struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_open(gw, bulb_addr.as_array);
  
-+    lgtd_debug("mock bulb addr: %s", lgtd_addrtoa(bulb->addr));
-+
      SLIST_INSERT_HEAD(&gw->bulbs, bulb, link_by_gw);
- 
-     return bulb;
