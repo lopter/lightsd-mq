@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 8219e7dec57d72bc88c17df59aa4682638478daf
+# Parent 8b4808ddd7484f0efa54ff7ee33d4b178e164366
 # Parent  a6582c808671b87b60a9c3ef06e8059b07515ca3
 Fix bitshift in test_utils_insert_mock_bulb...
 
@@ -29,16 +29,25 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
 --- a/CMakeScripts/CompatTimeMonotonic.cmake
 +++ b/CMakeScripts/CompatTimeMonotonic.cmake
-@@ -24,8 +24,16 @@
-             TIME_MONOTONIC_LIBRARY time_monotonic
-             CACHE INTERNAL "lgtd_time_monotonic (POSIX generic implementation)"
+@@ -5,6 +5,7 @@
+     SET(COMPAT_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.h")
+     SET(GENERIC_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.c")
+     SET(GENERIC_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.h")
++    SET(TIME_MONOTONIC_LIBRARY time_monotonic CACHE INTERNAL "lgtd_time_monotonic implementation")
+ 
+     IF (TRUE) # TODO glibc < 2.17 only
+         SET(CLOCK_GETTIME_LIBRARY rt)
+@@ -21,20 +22,29 @@
+         MESSAGE(STATUS "Looking for clock_gettime - found")
+         FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
+         SET(
+-            TIME_MONOTONIC_LIBRARY time_monotonic
+-            CACHE INTERNAL "lgtd_time_monotonic (POSIX generic implementation)"
++            TIME_MONOTONIC_IMPL ${GENERIC_TIME_MONOTONIC_IMPL}
++            CACHE INTERNAL "lgtd_time_monotonic (POSIX generic source)"
          )
 -        ADD_LIBRARY(${TIME_MONOTONIC_LIBRARY} STATIC "${GENERIC_TIME_MONOTONIC_IMPL}")
 -        TARGET_LINK_LIBRARIES(${TIME_MONOTONIC_LIBRARY} ${CLOCK_GETTIME_LIBRARY})
-+        SET(
-+            TIME_MONOTONIC_IMPL time_monotonic
-+            CACHE INTERNAL "lgtd_time_monotonic (POSIX generic source)"
-+        )
 +        IF (CLOCK_GETTIME_LIBRARY)
 +            SET(
 +                TIME_MONOTONIC_LIBRARY_DEP
@@ -48,15 +57,13 @@ diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMon
      ELSEIF (EXISTS "${COMPAT_TIME_MONOTONIC_IMPL}")
          MESSAGE(STATUS "Looking for clock_gettime - not found, using built-in compatibilty file")
          FILE(COPY "${COMPAT_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
-@@ -33,8 +41,17 @@
-             TIME_MONOTONIC_LIBRARY time_monotonic
-             CACHE INTERNAL "lgtd_time_monotonic (${CMAKE_SYSTEM_NAME} specific implementation)"
-         )
--        ADD_LIBRARY(${TIME_MONOTONIC_LIBRARY} STATIC "${COMPAT_TIME_MONOTONIC_IMPL}")
-+        SET(
+         SET(
+-            TIME_MONOTONIC_LIBRARY time_monotonic
+-            CACHE INTERNAL "lgtd_time_monotonic (${CMAKE_SYSTEM_NAME} specific implementation)"
 +            TIME_MONOTONIC_IMPL "${COMPAT_TIME_MONOTONIC_IMPL}"
 +            CACHE INTERNAL "lgtd_time_monotonic (${CMAKE_SYSTEM_NAME} specific source)"
-+        )
+         )
+-        ADD_LIBRARY(${TIME_MONOTONIC_LIBRARY} STATIC "${COMPAT_TIME_MONOTONIC_IMPL}")
      ELSE ()
          MESSAGE(SEND_ERROR "Looking for clock_gettime - not found")
      ENDIF ()
@@ -70,34 +77,15 @@ diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMon
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
-@@ -50,9 +50,29 @@
+@@ -50,7 +50,10 @@
      union {
          uint8_t     as_array[LGTD_LIFX_ADDR_LENGTH];
          uint64_t    as_scalar;
 -    } bulb_addr = { .as_scalar = htobe64(addr) >> 16 };
 +    } bulb_addr = {
-+#if LGTD_BIG_ENDIAN_SYSTEM
-+        .as_scalar = htobe64(addr) << 8 * (sizeof(addr) - 1)
-+#else
-+        .as_scalar = htobe64(addr) >> 16
-+#endif
++        .as_scalar = LGTD_BIG_ENDIAN_SYSTEM ?
++            htobe64(addr) << 16 : htobe64(addr) >> 16
 +    };
      struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_open(gw, bulb_addr.as_array);
  
-+#if 0
-+    for (int i = 0; i != 8; i++) {
-+        bulb_addr.as_scalar = addr << 8 * i;
-+        printf("==== i := %d ====\n", i);
-+        for (int j = 0; j != LGTD_LIFX_ADDR_LENGTH; j++) {
-+            printf("bulb_addr.as_array[%d] = %hhu\n", j, bulb_addr.as_array[j]);
-+        }
-+    }
-+#else
-+    for (int j = 0; j != LGTD_LIFX_ADDR_LENGTH; j++) {
-+        printf("bulb_addr.as_array[%d] = %hhu\n", j, bulb_addr.as_array[j]);
-+    }
-+#endif
-+
      SLIST_INSERT_HEAD(&gw->bulbs, bulb, link_by_gw);
- 
-     return bulb;
