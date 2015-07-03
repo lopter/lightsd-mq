@@ -1,6 +1,6 @@
 # HG changeset patch
 # Parent 8b4808ddd7484f0efa54ff7ee33d4b178e164366
-# Parent  a6582c808671b87b60a9c3ef06e8059b07515ca3
+# Parent  eba8a13e6de07b607fb33eaaac4b1b06d638189d
 Fix bitshift in test_utils_insert_mock_bulb...
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -29,7 +29,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
 --- a/CMakeScripts/CompatTimeMonotonic.cmake
 +++ b/CMakeScripts/CompatTimeMonotonic.cmake
-@@ -5,36 +5,44 @@
+@@ -5,36 +5,46 @@
      SET(COMPAT_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.h")
      SET(GENERIC_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.c")
      SET(GENERIC_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.h")
@@ -48,11 +48,13 @@ diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMon
 +        # glibc < 2.17:
 +        MESSAGE(STATUS "Looking for clock_gettime again in librt")
 +        UNSET(HAVE_CLOCK_GETTIME CACHE)
-+        UNSET(HAVE_CLOCK_GETTIME)
 +        SET(TIME_MONOTONIC_LIBRARY_DEP rt CACHE INTERNAL "dependency for lgtd_time_monotonic")
 +        SET(CMAKE_REQUIRED_LIBRARIES ${TIME_MONOTONIC_LIBRARY_DEP})
 +        CHECK_FUNCTION_EXISTS("clock_gettime" HAVE_CLOCK_GETTIME)
 +        UNSET(CMAKE_REQUIRED_LIBRARIES)
++        IF (NOT HAVE_CLOCK_GETTIME)
++            UNSET(TIME_MONOTONIC_LIBRARY_DEP CACHE)
++        ENDIF ()
 +    ENDIF ()
      UNSET(CMAKE_REQUIRED_QUIET)
  
