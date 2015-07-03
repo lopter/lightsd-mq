@@ -29,15 +29,34 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
 --- a/CMakeScripts/CompatTimeMonotonic.cmake
 +++ b/CMakeScripts/CompatTimeMonotonic.cmake
-@@ -5,6 +5,7 @@
+@@ -5,36 +5,44 @@
      SET(COMPAT_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.h")
      SET(GENERIC_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.c")
      SET(GENERIC_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.h")
+-
+-    IF (TRUE) # TODO glibc < 2.17 only
+-        SET(CLOCK_GETTIME_LIBRARY rt)
+-    ENDIF (TRUE)
 +    SET(TIME_MONOTONIC_LIBRARY time_monotonic CACHE INTERNAL "lgtd_time_monotonic implementation")
  
-     IF (TRUE) # TODO glibc < 2.17 only
-         SET(CLOCK_GETTIME_LIBRARY rt)
-@@ -21,20 +22,29 @@
+     SET(CMAKE_REQUIRED_QUIET TRUE)
+-    SET(CMAKE_REQUIRED_LIBRARIES ${CLOCK_GETTIME_LIBRARY})
+     MESSAGE(STATUS "Looking for clock_gettime")
+     CHECK_FUNCTION_EXISTS("clock_gettime" HAVE_CLOCK_GETTIME)
+-    UNSET(CMAKE_REQUIRED_LIBRARIES)
++    IF (NOT HAVE_CLOCK_GETTIME)
++        # glibc < 2.17:
++        MESSAGE(STATUS "Looking for clock_gettime again in librt")
++        UNSET(HAVE_CLOCK_GETTIME CACHE)
++        UNSET(HAVE_CLOCK_GETTIME)
++        SET(TIME_MONOTONIC_LIBRARY_DEP rt CACHE INTERNAL "dependency for lgtd_time_monotonic")
++        SET(CMAKE_REQUIRED_LIBRARIES ${TIME_MONOTONIC_LIBRARY_DEP})
++        CHECK_FUNCTION_EXISTS("clock_gettime" HAVE_CLOCK_GETTIME)
++        UNSET(CMAKE_REQUIRED_LIBRARIES)
++    ENDIF ()
+     UNSET(CMAKE_REQUIRED_QUIET)
+ 
+     IF (HAVE_CLOCK_GETTIME)
          MESSAGE(STATUS "Looking for clock_gettime - found")
          FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
          SET(
@@ -48,12 +67,6 @@ diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMon
          )
 -        ADD_LIBRARY(${TIME_MONOTONIC_LIBRARY} STATIC "${GENERIC_TIME_MONOTONIC_IMPL}")
 -        TARGET_LINK_LIBRARIES(${TIME_MONOTONIC_LIBRARY} ${CLOCK_GETTIME_LIBRARY})
-+        IF (CLOCK_GETTIME_LIBRARY)
-+            SET(
-+                TIME_MONOTONIC_LIBRARY_DEP
-+                CACHE INTERNAL ${CLOCK_GETTIME_LIBRARY} "dependency for lgtd_time_monotonic"
-+            )
-+        ENDIF ()
      ELSEIF (EXISTS "${COMPAT_TIME_MONOTONIC_IMPL}")
          MESSAGE(STATUS "Looking for clock_gettime - not found, using built-in compatibilty file")
          FILE(COPY "${COMPAT_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
