@@ -1,5 +1,6 @@
 # HG changeset patch
 # Parent 2e97dc5fcde8302bf8222afc4ead0c0a0ea2520e
+# Parent  75fd2d168876e06cfd8af556f4bd08dd8e302ad6
 Add the get_light_state command
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -16,6 +17,18 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +MESSAGE(STATUS "Target system: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION} ${CMAKE_SYSTEM_PROCESSOR}")
  MESSAGE(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
  MESSAGE(STATUS "Source directory: ${LIGHTSD_SOURCE_DIR}")
+ 
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -28,7 +28,7 @@
+ - power_on;
+ - set_light_from_hsbk;
+ - set_waveform (change the light according to a function like SAW or SINE);
+-- get_light_status (coming up).
++- get_light_status.
+ 
+ lightsd can target single or multiple bulbs at once:
  
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
