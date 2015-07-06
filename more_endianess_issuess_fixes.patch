@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  2ae01ca79a069b1b4d5d52025426d8d3bb9c27c8
+# Parent 2ae01ca79a069b1b4d5d52025426d8d3bb9c27c8
 Fix things for big endian architectures
 
 Unfortunately, you can't use bitfields because they aren't standardized
@@ -202,17 +202,24 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
      //! Wrap-around sequence number, LIFX internal use.
      uint8_t         seqn;
      //! Apparently this is a unix epoch timestamp in milliseconds at which the
-@@ -71,7 +73,18 @@
+@@ -71,7 +73,25 @@
  
  enum { LGTD_LIFX_PACKET_HEADER_SIZE = sizeof(struct lgtd_lifx_packet_header) };
  
 -enum { LGTD_LIFX_PROTOCOL_V1 = 1024 };
 +enum lgtd_lifx_protocol {
-+    LGTD_LIFX_PROTOCOL_V1 = 1024,
++    LGTD_LIFX_PROTOCOL_V1 = 0x400,
++#if LGTD_BIG_ENDIAN_SYSTEM
++    LGTD_LIFX_PROTOCOL_VERSION_MASK = 0xff0f,
++    LGTD_LIFX_PROTOCOL_FLAGS_MASK = 0x00f0,
++    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 0x0020,
++    LGTD_LIFX_PROTOCOL_TAGGED = 0x0010
++#else
 +    LGTD_LIFX_PROTOCOL_VERSION_MASK = 0x0fff,
 +    LGTD_LIFX_PROTOCOL_FLAGS_MASK = 0xf000,
-+    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 1 << 13,
-+    LGTD_LIFX_PROTOCOL_TAGGED = 1 << 12
++    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 0x2000,
++    LGTD_LIFX_PROTOCOL_TAGGED = 0x1000
++#endif
 +};
 +
 +enum lgtd_lifx_flags {
@@ -222,7 +229,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  
  // Let's define a maximum packet size just in case somebody sends us weird
  // headers:
-@@ -114,6 +127,9 @@
+@@ -114,6 +134,9 @@
      LGTD_LIFX_REBOOT = 0x26,
      LGTD_LIFX_SET_FACTORY_TEST_MODE = 0x27,
      LGTD_LIFX_DISABLE_FACTORY_TEST_MODE = 0x28,
@@ -232,7 +239,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
      LGTD_LIFX_GET_LIGHT_STATE = 0x65,
      LGTD_LIFX_SET_LIGHT_COLOR = 0x66,
      LGTD_LIFX_SET_WAVEFORM = 0x67,
-@@ -211,6 +227,13 @@
+@@ -211,6 +234,13 @@
  
  #pragma pack(pop)
  
@@ -246,7 +253,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  struct lgtd_lifx_waveform_string_id {
      const char  *str;
      int         len;
-@@ -295,7 +318,6 @@
+@@ -295,7 +325,6 @@
                                                                   const uint8_t *,
                                                                   enum lgtd_lifx_packet_type);
  void lgtd_lifx_wire_decode_header(struct lgtd_lifx_packet_header *);
@@ -413,7 +420,7 @@ new file mode 100644
 +
 +    lgtd_lifx_wire_decode_header(&hdr);
 +
-+    int proto_version = hdr.protocol & 0x0fff;
++    int proto_version = hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK;
 +    if (proto_version !=  LGTD_LIFX_PROTOCOL_V1) {
 +        lgtd_errx(
 +            1, "protocol version = %d (expected %d)",
@@ -471,7 +478,7 @@ new file mode 100644
 +
 +    lgtd_lifx_wire_decode_header(&hdr);
 +
-+    proto_version = hdr.protocol & 0x0fff;
++    proto_version = hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK;
 +    if (proto_version !=  LGTD_LIFX_PROTOCOL_V1) {
 +        lgtd_errx(
 +            1, "protocol version = %d (expected %d)",
