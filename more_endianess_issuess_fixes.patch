@@ -1,0 +1,336 @@
+# HG changeset patch
+# Parent  2ae01ca79a069b1b4d5d52025426d8d3bb9c27c8
+Fix things for big endian architectures
+
+Unfortunately, you can't use bitfields because they aren't standardized
+across compilers and architectures. Also probably fixes how ack_required
+and res_required are handled even though I'm leaving that untesteed for
+now.
+
+diff --git a/lifx/broadcast.c b/lifx/broadcast.c
+--- a/lifx/broadcast.c
++++ b/lifx/broadcast.c
+@@ -105,10 +105,11 @@
+             );
+             return false;
+         }
+-        if (read.hdr.protocol.version != LGTD_LIFX_PROTOCOL_V1) {
++        int proto_version = read.hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK;
++        if (proto_version != LGTD_LIFX_PROTOCOL_V1) {
+             lgtd_warnx(
+                 "unsupported protocol %d from [%s]:%hu",
+-                read.hdr.protocol.version, peer_addr, peer_port
++                read.hdr.protocol & 0x0fff, peer_addr, peer_port
+             );
+         }
+         if (read.hdr.packet_type == LGTD_LIFX_GET_PAN_GATEWAY) {
+@@ -121,10 +122,11 @@
+             lgtd_warnx(
+                 "received unknown packet %#x from [%s]:%hu",
+                 read.hdr.packet_type, peer_addr, peer_port
+-            )
++            );
+             continue;
+         }
+-        if (read.hdr.protocol.tagged || !read.hdr.protocol.addressable) {
++        if ((read.hdr.protocol & LGTD_LIFX_PROTOCOL_TAGGED)
++            || !(read.hdr.protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE)) {
+             lgtd_warnx(
+                 "received non-addressable packet %s from [%s]:%hu",
+                 pkt_infos->name, peer_addr, peer_port
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -209,6 +209,30 @@
+     return LGTD_LIFX_WAVEFORM_INVALID;
+ }
+ 
++static void
++lgtd_lifx_wire_encode_header(struct lgtd_lifx_packet_header *hdr, int flags)
++{
++    assert(hdr);
++
++    hdr->size = htole16(hdr->size);
++    hdr->protocol = htole16(LGTD_LIFX_PROTOCOL_V1);
++    if (flags & LGTD_LIFX_ADDRESSABLE) {
++        hdr->protocol |= LGTD_LIFX_PROTOCOL_ADDRESSABLE;
++    }
++    if (flags & LGTD_LIFX_TAGGED) {
++        hdr->protocol |= LGTD_LIFX_PROTOCOL_TAGGED;
++    }
++    htole64(hdr->target.tags);
++    if (flags & LGTD_LIFX_ACK_REQUIRED) {
++        hdr->flags |= LGTD_LIFX_FLAG_ACK_REQUIRED;
++    }
++    if (flags & LGTD_LIFX_RES_REQUIRED) {
++        hdr->flags |= LGTD_LIFX_FLAG_RES_REQUIRED;
++    }
++    hdr->at_time = htole64(hdr->at_time);
++    hdr->packet_type = htole16(hdr->packet_type);
++}
++
+ // Convert all the fields in the header to the host endianness.
+ //
+ // \return The payload size or -1 if the header is invalid.
+@@ -218,10 +242,8 @@
+     assert(hdr);
+ 
+     hdr->size = le16toh(hdr->size);
+-    hdr->protocol.version = le16toh(hdr->protocol.version);
+-    if (hdr->protocol.tagged) {
+-        le64toh(hdr->target.tags);
+-    }
++    hdr->protocol = le16toh(hdr->protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK)
++        | (hdr->protocol & LGTD_LIFX_PROTOCOL_FLAGS_MASK);
+     hdr->at_time = le64toh(hdr->at_time);
+     hdr->packet_type = le16toh(hdr->packet_type);
+ }
+@@ -242,7 +264,6 @@
+ 
+     memset(hdr, 0, sizeof(*hdr));
+     hdr->size = pkt_infos->size + sizeof(*hdr);
+-    hdr->protocol.version = LGTD_LIFX_PROTOCOL_V1;
+     hdr->packet_type = packet_type;
+     if (site) {
+         memcpy(hdr->site, site, sizeof(hdr->site));
+@@ -250,43 +271,27 @@
+         assert(target_type == LGTD_LIFX_TARGET_ALL_DEVICES);
+     }
+ 
++    int flags = LGTD_LIFX_ADDRESSABLE;
+     switch (target_type) {
+     case LGTD_LIFX_TARGET_SITE:
+     case LGTD_LIFX_TARGET_ALL_DEVICES:
+-        hdr->protocol.tagged = true;
+-        hdr->protocol.addressable = true;
++        flags |= LGTD_LIFX_TAGGED;
+         break;
+     case LGTD_LIFX_TARGET_TAGS:
+-        hdr->protocol.tagged = true;
+-        hdr->protocol.addressable = true;
++        flags |= LGTD_LIFX_TAGGED;
+         hdr->target.tags = target.tags;
+         break;
+     case LGTD_LIFX_TARGET_DEVICE:
+-        hdr->protocol.addressable = true;
+         memcpy(hdr->target.device_addr, target.addr, LGTD_LIFX_ADDR_LENGTH);
+         break;
+     }
+ 
+-    lgtd_lifx_wire_encode_header(hdr);
++    lgtd_lifx_wire_encode_header(hdr, flags);
+ 
+     return pkt_infos;
+ }
+ 
+ void
+-lgtd_lifx_wire_encode_header(struct lgtd_lifx_packet_header *hdr)
+-{
+-    assert(hdr);
+-
+-    hdr->size = htole16(hdr->size);
+-    hdr->protocol.version = htole16(hdr->protocol.version);
+-    if (hdr->protocol.tagged) {
+-        le64toh(hdr->target.tags);
+-    }
+-    hdr->at_time = htole64(hdr->at_time);
+-    hdr->packet_type = htole16(hdr->packet_type);
+-}
+-
+-void
+ lgtd_lifx_wire_decode_pan_gateway(struct lgtd_lifx_packet_pan_gateway *pkt)
+ {
+     assert(pkt);
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -33,16 +33,16 @@
+ struct lgtd_lifx_packet_header {
+     //! Packet size including the headers (i.e: this structure).
+     uint16le_t      size;
+-    struct {
+-        //! Protocol version should be LGTD_LIFX_LIFX_PROTOCOL_V1.
+-        uint16le_t  version:12;
+-        //! True when the target field holds a device address.
+-        uint16le_t  addressable:1;
+-        //! True when the target field holds tags.
+-        uint16le_t  tagged:1;
+-        //! LIFX internal use should be 0.
+-        uint16le_t  origin:2;
+-    }               protocol;
++    //! 15 (MSB)          13           12                11             0
++    //! +-----------------+------------+-----------------+--------------+
++    //! | origin (2 bits) | tagged (1) | addressable (1) | version (12) |
++    //! +-----------------+------------+-----------------+--------------+
++    //!
++    //! - version: protocol version should be LGTD_LIFX_PROTOCOL_V1;
++    //! - addressable: true when the target field holds a device address;
++    //! - tagged: true when the target field holds tags;
++    //! - origin: LIFX internal use, should be 0.
++    uint16le_t      protocol;
+     //! Here is what LIFXKit says about it, maybe it's related to zigbee:
+     //! Message source identifier from NAT table (Internal LIFX use)
+     uint32le_t      source;
+@@ -53,13 +53,15 @@
+         uint8_t     device_addr[LGTD_LIFX_ADDR_LENGTH];
+     }               target;
+     uint8_t         site[LGTD_LIFX_ADDR_LENGTH];
+-    struct {
+-        //! True when a response is required, called acknowledge in lifx-gem...
+-        uint8_t     response_required:1;
+-        //! True when an acknowledgement is required, no idea what it means.
+-        uint8_t     ack_required:1;
+-        uint8_t     reserved:6;
+-    }               flags;
++    //! 7                   2                  1                  0
++    //! +-------------------+------------------+------------------+
++    //! | reserved (6 bits) | ack required (1) | res required (1) |
++    //! +-------------------+------------------+------------------+
++    //!
++    //! - ack required: true when an acknowledge packet is required;
++    //! - res required: true when a response is required (the response type
++    //!   depends on the request type).
++    uint8_t         flags;
+     //! Wrap-around sequence number, LIFX internal use.
+     uint8_t         seqn;
+     //! Apparently this is a unix epoch timestamp in milliseconds at which the
+@@ -71,7 +73,18 @@
+ 
+ enum { LGTD_LIFX_PACKET_HEADER_SIZE = sizeof(struct lgtd_lifx_packet_header) };
+ 
+-enum { LGTD_LIFX_PROTOCOL_V1 = 1024 };
++enum lgtd_lifx_protocol {
++    LGTD_LIFX_PROTOCOL_V1 = 1024,
++    LGTD_LIFX_PROTOCOL_VERSION_MASK = 0x0fff,
++    LGTD_LIFX_PROTOCOL_FLAGS_MASK = 0xf000,
++    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 1 << 13,
++    LGTD_LIFX_PROTOCOL_TAGGED = 1 << 12
++};
++
++enum lgtd_lifx_flags {
++    LGTD_LIFX_FLAG_ACK_REQUIRED = 1 << 1,
++    LGTD_LIFX_FLAG_RES_REQUIRED = 1
++};
+ 
+ // Let's define a maximum packet size just in case somebody sends us weird
+ // headers:
+@@ -211,6 +224,13 @@
+ 
+ #pragma pack(pop)
+ 
++enum lgtd_lifx_header_flags {
++    LGTD_LIFX_ADDRESSABLE = 1,
++    LGTD_LIFX_TAGGED = 1 << 1,
++    LGTD_LIFX_ACK_REQUIRED = 1 << 2,
++    LGTD_LIFX_RES_REQUIRED = 1 << 3
++};
++
+ struct lgtd_lifx_waveform_string_id {
+     const char  *str;
+     int         len;
+@@ -295,7 +315,6 @@
+                                                                  const uint8_t *,
+                                                                  enum lgtd_lifx_packet_type);
+ void lgtd_lifx_wire_decode_header(struct lgtd_lifx_packet_header *);
+-void lgtd_lifx_wire_encode_header(struct lgtd_lifx_packet_header *);
+ 
+ void lgtd_lifx_wire_decode_pan_gateway(struct lgtd_lifx_packet_pan_gateway *);
+ void lgtd_lifx_wire_encode_pan_gateway(struct lgtd_lifx_packet_pan_gateway *);
+diff --git a/tests/core/router/test_router_send_to_broadcast.c b/tests/core/router/test_router_send_to_broadcast.c
+--- a/tests/core/router/test_router_send_to_broadcast.c
++++ b/tests/core/router/test_router_send_to_broadcast.c
+@@ -32,7 +32,8 @@
+         }
+         const struct lgtd_lifx_packet_header *hdr;
+         hdr = lgtd_tests_gw_pkt_queue[i].hdr;
+-        if (!hdr->protocol.tagged || !hdr->protocol.addressable) {
++        int expected_flags = LGTD_LIFX_ADDRESSABLE|LGTD_LIFX_TAGGED;
++        if (!lgtd_tests_lifx_header_has_flags(hdr, expected_flags)) {
+             lgtd_errx(1, "packet header doesn't have the right bits set");
+         }
+         if (hdr->target.tags != 0) {
+diff --git a/tests/core/router/test_router_send_to_device.c b/tests/core/router/test_router_send_to_device.c
+--- a/tests/core/router/test_router_send_to_device.c
++++ b/tests/core/router/test_router_send_to_device.c
+@@ -33,7 +33,7 @@
+         lgtd_errx(1, "the packet has been sent to the wrong gateway");
+     }
+ 
+-    if (!hdr_queued->protocol.addressable || hdr_queued->protocol.tagged) {
++    if (!lgtd_tests_lifx_header_has_flags(hdr_queued, LGTD_LIFX_ADDRESSABLE)) {
+         lgtd_errx(1, "the packet header doesn't have the right protocol flags");
+     }
+ 
+diff --git a/tests/core/router/test_router_send_to_label.c b/tests/core/router/test_router_send_to_label.c
+--- a/tests/core/router/test_router_send_to_label.c
++++ b/tests/core/router/test_router_send_to_label.c
+@@ -37,7 +37,7 @@
+         lgtd_errx(1, "the packet has been sent to the wrong gateway");
+     }
+ 
+-    if (!hdr_queued->protocol.addressable || hdr_queued->protocol.tagged) {
++    if (!lgtd_tests_lifx_header_has_flags(hdr_queued, LGTD_LIFX_ADDRESSABLE)) {
+         lgtd_errx(1, "the packet header doesn't have the right protocol flags");
+     }
+ 
+diff --git a/tests/core/router/test_router_send_to_tag.c b/tests/core/router/test_router_send_to_tag.c
+--- a/tests/core/router/test_router_send_to_tag.c
++++ b/tests/core/router/test_router_send_to_tag.c
+@@ -34,7 +34,8 @@
+         lgtd_errx(1, "the packet has been sent to the wrong gateway");
+     }
+ 
+-    if (!hdr_queued->protocol.addressable || !hdr_queued->protocol.tagged) {
++    int expected_flags = LGTD_LIFX_ADDRESSABLE|LGTD_LIFX_TAGGED;
++    if (!lgtd_tests_lifx_header_has_flags(hdr_queued, expected_flags)) {
+         lgtd_errx(1, "the packet header doesn't have the right protocol flags");
+     }
+ 
+@@ -80,7 +81,7 @@
+         pkt_queued = lgtd_tests_gw_pkt_queue[i].pkt;
+         pkt_size = lgtd_tests_gw_pkt_queue[i].pkt_size;
+ 
+-        if (!hdr_queued->protocol.addressable || !hdr_queued->protocol.tagged) {
++        if (!lgtd_tests_lifx_header_has_flags(hdr_queued, expected_flags)) {
+             lgtd_errx(1, "the packet header doesn't have the right protocol flags");
+         }
+ 
+diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
+--- a/tests/core/tests_utils.h
++++ b/tests/core/tests_utils.h
+@@ -1,5 +1,35 @@
+ #pragma once
+ 
++static inline bool
++lgtd_tests_lifx_header_has_flags(const struct lgtd_lifx_packet_header *hdr,
++                                 int flags)
++{
++    int expected_protocol_flags = 0;
++    if (flags & LGTD_LIFX_ADDRESSABLE) {
++        expected_protocol_flags |= LGTD_LIFX_PROTOCOL_ADDRESSABLE;
++    }
++    if (flags & LGTD_LIFX_TAGGED) {
++        expected_protocol_flags |= LGTD_LIFX_PROTOCOL_TAGGED;
++    }
++    int protocol_flags = hdr->protocol & LGTD_LIFX_PROTOCOL_FLAGS_MASK;
++    if (protocol_flags != expected_protocol_flags) {
++        return false;
++    }
++
++    int expected_flags = 0;
++    if (flags & LGTD_LIFX_ACK_REQUIRED) {
++        expected_flags |= LGTD_LIFX_FLAG_ACK_REQUIRED;
++    }
++    if (flags & LGTD_LIFX_RES_REQUIRED) {
++        expected_flags |= LGTD_LIFX_FLAG_ACK_REQUIRED;
++    }
++    if (hdr->flags != expected_flags) {
++        return false;
++    }
++
++    return true;
++}
++
+ struct lgtd_lifx_gateway *lgtd_tests_insert_mock_gateway(int);
+ struct lgtd_lifx_bulb *lgtd_tests_insert_mock_bulb(struct lgtd_lifx_gateway *, uint64_t);
+ struct lgtd_proto_target_list *lgtd_tests_build_target_list(const char *, ...);
