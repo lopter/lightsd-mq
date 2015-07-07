@@ -1,5 +1,6 @@
 # HG changeset patch
 # Parent 2ae01ca79a069b1b4d5d52025426d8d3bb9c27c8
+# Parent  2ae01ca79a069b1b4d5d52025426d8d3bb9c27c8
 Fix things for big endian architectures
 
 Unfortunately, you can't use bitfields because they aren't standardized
@@ -7,6 +8,27 @@ across compilers and architectures. Also probably fixes how ack_required
 and res_required are handled even though I'm leaving that untesteed for
 now.
 
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -52,14 +52,15 @@
+ ------------
+ 
+ lightsd aims to be highly portable on any slightly POSIX system (win32 support
+-should be quite easy, but isn't really the goal) and on any kind of hardware
++should be quite easy, but isn't really the focus) and on any kind of hardware
+ including embedded devices. Hence why lightsd is written in C with reasonable
+ dependencies:
+ 
+ - CMake ≥ 2.8;
+ - libevent ≥ 2.0.19.
+ 
+-lightsd is actively developed and tested from Arch Linux and Mac OS X.
++lightsd is actively developed and tested from Arch Linux, Debian and Mac OS X;
++both for 32/64 bits and little/big endian architectures.
+ 
+ Build instructions
+ ------------------
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
