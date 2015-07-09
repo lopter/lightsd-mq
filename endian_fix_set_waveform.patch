@@ -1,0 +1,40 @@
+# HG changeset patch
+# Parent  04aa254290b0d363e8895ebd5eb685f559c0e855
+Fix endian conversion in lifx_wire_encode_waveform
+
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -350,7 +350,7 @@
+     pkt->saturation = htole16(pkt->saturation);
+     pkt->brightness = htole16(pkt->brightness);
+     pkt->kelvin = htole16(pkt->kelvin);
+-    pkt->period = htole16(pkt->period);
++    pkt->period = htole32(pkt->period);
+     pkt->skew_ratio = htole16(pkt->skew_ratio);
+ }
+ 
+diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
+--- a/tests/core/proto/test_proto_set_waveform.c
++++ b/tests/core/proto/test_proto_set_waveform.c
+@@ -34,7 +34,7 @@
+     int saturation = le16toh(waveform->saturation);
+     int brightness = le16toh(waveform->brightness);
+     int kelvin = le16toh(waveform->kelvin);
+-    int period = le16toh(waveform->period);
++    int period = le32toh(waveform->period);
+     float cycles = waveform->cycles;
+     int skew_ratio = le16toh(waveform->skew_ratio);
+ 
+diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_waveform_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+@@ -34,7 +34,7 @@
+     int saturation = le16toh(waveform->saturation);
+     int brightness = le16toh(waveform->brightness);
+     int kelvin = le16toh(waveform->kelvin);
+-    int period = le16toh(waveform->period);
++    int period = le32toh(waveform->period);
+     float cycles = waveform->cycles;
+     int skew_ratio = le16toh(waveform->skew_ratio);
+ 

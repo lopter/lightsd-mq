@@ -1,2 +1,3 @@
 more_endianess_issuess_fixes.patch
 remove_list_tags_command.patch
+endian_fix_set_waveform.patch
