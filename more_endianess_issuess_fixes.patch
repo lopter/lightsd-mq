@@ -54,7 +54,7 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
              );
          }
          if (read.hdr.packet_type == LGTD_LIFX_GET_PAN_GATEWAY) {
-@@ -121,10 +122,11 @@
+@@ -121,10 +122,10 @@
              lgtd_warnx(
                  "received unknown packet %#x from [%s]:%hu",
                  read.hdr.packet_type, peer_addr, peer_port
@@ -63,8 +63,7 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
              continue;
          }
 -        if (read.hdr.protocol.tagged || !read.hdr.protocol.addressable) {
-+        if ((read.hdr.protocol & LGTD_LIFX_PROTOCOL_TAGGED)
-+            || !(read.hdr.protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE)) {
++        if (!(read.hdr.protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE)) {
              lgtd_warnx(
                  "received non-addressable packet %s from [%s]:%hu",
                  pkt_infos->name, peer_addr, peer_port
@@ -234,12 +233,12 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 +#if LGTD_BIG_ENDIAN_SYSTEM
 +    LGTD_LIFX_PROTOCOL_VERSION_MASK = 0xff0f,
 +    LGTD_LIFX_PROTOCOL_FLAGS_MASK = 0x00f0,
-+    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 0x0030,
++    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 0x0010,
 +    LGTD_LIFX_PROTOCOL_TAGGED = 0x0020
 +#else
 +    LGTD_LIFX_PROTOCOL_VERSION_MASK = 0x0fff,
 +    LGTD_LIFX_PROTOCOL_FLAGS_MASK = 0xf000,
-+    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 0x3000,
++    LGTD_LIFX_PROTOCOL_ADDRESSABLE = 0x1000,
 +    LGTD_LIFX_PROTOCOL_TAGGED = 0x2000
 +#endif
 +};
@@ -476,8 +475,8 @@ new file mode 100644
 +    hdr.packet_type = LGTD_LIFX_ECHO_REQUEST;
 +    lgtd_lifx_wire_encode_header(&hdr, LGTD_LIFX_ADDRESSABLE);
 +
-+    if (htobe16(hdr.protocol) != 0x24) {
-+        lgtd_errx(1, "protocol = %#hx (expected = 0x24)", hdr.protocol);
++    if (htobe16(hdr.protocol) != 0x14) {
++        lgtd_errx(1, "protocol = %#hx (expected = 0x14)", hdr.protocol);
 +    }
 +    if (le16toh(hdr.size) != 42) {
 +        lgtd_errx(1, "size = %hu (expected = 42)", le16toh(hdr.size));
