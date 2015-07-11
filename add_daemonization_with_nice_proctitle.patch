@@ -57,10 +57,10 @@ new file mode 100644
 +    MESSAGE(STATUS "Looking for setproctitle")
 +    CHECK_FUNCTION_EXISTS("setproctitle" HAVE_PROCTITLE)
 +    IF (NOT HAVE_PROCTITLE)
-+        MESSAGE(STATUS "Looking for setproctitle again in libbsd")
++        MESSAGE(STATUS "Looking for setproctitle - not found, falling back on libbsd")
 +        FIND_PACKAGE(LibBSD)
 +        IF (NOT LibBSD_FOUND)
-+            MESSAGE(STATUS "couldn't find setproctitle, no fancy report in the process status")
++            MESSAGE(STATUS "Couldn't find setproctitle, no fancy report in the process list")
 +        ELSE ()
 +            SET(HAVE_PROCTITLE 1 CACHE INTERNAL "setproctitle found in libbsd")
 +            SET(HAVE_LIBBSD 1 CACHE INTERNAL "libbsd found")
@@ -150,7 +150,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  void
  lgtd_cleanup(void)
  {
-@@ -132,9 +141,55 @@
+@@ -132,9 +141,57 @@
      exit(0);
  }
  
@@ -203,11 +203,13 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 +
 +#if LGTD_HAVE_LIBBSD
 +    setproctitle_init(argc, argv, envp);
++#else
++    (void)envp;
 +#endif
      lgtd_configure_libevent();
      lgtd_configure_signal_handling();
  
-@@ -159,10 +214,19 @@
+@@ -159,10 +216,19 @@
              if (!sep || !sep[1]) {
                  lgtd_usage(argv[0]);
              }
@@ -227,7 +229,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          case 'f':
              lgtd_opts.foreground = true;
              break;
-@@ -193,6 +257,12 @@
+@@ -193,6 +259,12 @@
          }
      }
  
@@ -240,7 +242,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      argc -= optind;
      argv += optind;
  
-@@ -201,6 +271,10 @@
+@@ -201,6 +273,10 @@
          lgtd_err(1, "can't setup lightsd");
      }
  
