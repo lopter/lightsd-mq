@@ -256,7 +256,15 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -23,6 +23,7 @@
+@@ -17,12 +17,15 @@
+ 
+ #pragma once
+ 
++struct sockaddr_storage;
++
+ #ifndef __attribute__
+ # define __atttribute__(e)
+ #endif
  
  #define LGTD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
  #define LGTD_MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -264,7 +272,7 @@ diff --git a/core/lightsd.h b/core/lightsd.h
  #define LGTD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #define LGTD_MSECS_TO_TIMEVAL(v) { \
      .tv_sec = (v) / 1000,           \
-@@ -44,6 +45,7 @@
+@@ -44,6 +47,7 @@
      enum lgtd_verbosity verbosity;
  };
  
@@ -272,7 +280,7 @@ diff --git a/core/lightsd.h b/core/lightsd.h
  extern struct lgtd_opts lgtd_opts;
  extern struct event_base *lgtd_ev_base;
  
-@@ -62,5 +64,6 @@
+@@ -62,5 +66,6 @@
  void lgtd_info(const char *, ...) __attribute__((format(printf, 1, 2)));
  void lgtd_debug(const char *, ...) __attribute__((format(printf, 1, 2)));
  void lgtd_libevent_log(int, const char *);
@@ -308,8 +316,12 @@ diff --git a/core/log.c b/core/log.c
  #include "lightsd.h"
  
  static void
-@@ -172,3 +179,17 @@
-     default:                                        break;
+@@ -169,6 +176,20 @@
+     case EVENT_LOG_MSG:     lgtd_info("%s", msg);  break;
+     case EVENT_LOG_WARN:    lgtd_warnx("%s", msg)  break;
+     case EVENT_LOG_ERR:     lgtd_warnx("%s", msg); break;
+-    default:                                        break;
++    default:                                       break;
      }
  }
 +
@@ -318,7 +330,7 @@ diff --git a/core/log.c b/core/log.c
 +{
 +#if LGTD_HAVE_PROCTITLE
 +    setproctitle(
-+        "listening_on(%s); gateways(found=%d); bulbs(found=%d, on=%d)",
++        "listening_on(%s); lifx_gateways(found=%d); bulbs(found=%d, on=%d)",
 +        lgtd_binds,
 +        LGTD_STATS_GET(gateways),
 +        LGTD_STATS_GET(bulbs),
@@ -330,7 +342,7 @@ diff --git a/core/stats.c b/core/stats.c
 new file mode 100644
 --- /dev/null
 +++ b/core/stats.c
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,47 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -363,6 +375,9 @@ new file mode 100644
 +    assert(offset % sizeof(int) == 0);
 +
 +    int *counter = (int *)((uint8_t *)&lgtd_counters + offset);
++
++    assert(*counter + value >= 0);
++
 +    *counter += value;
 +}
 +
@@ -432,36 +447,39 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  
      bulb->last_light_state_at = lgtd_time_monotonic_msecs();
  
-@@ -73,6 +75,7 @@
+@@ -73,6 +75,10 @@
      assert(bulb);
      assert(bulb->gw);
  
 +    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs, -1);
++    if (bulb->state.power == LGTD_LIFX_POWER_ON) {
++        LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs_powered_on, -1);
++    }
      RB_REMOVE(lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table, bulb);
      SLIST_REMOVE(&bulb->gw->bulbs, bulb, lgtd_lifx_bulb, link_by_gw);
      lgtd_info(
-@@ -93,6 +96,13 @@
+@@ -93,6 +99,13 @@
  {
      assert(bulb);
      assert(state);
 +
 +    if (state->power != bulb->state.power) {
 +        LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
-+            bulbs_powered_on, state->power ? 1 : -1
++            bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
 +        );
 +    }
 +
      bulb->last_light_state_at = received_at;
      memcpy(&bulb->state, state, sizeof(bulb->state));
  }
-@@ -101,5 +111,12 @@
+@@ -101,5 +114,12 @@
  lgtd_lifx_bulb_set_power_state(struct lgtd_lifx_bulb *bulb, uint16_t power)
  {
      assert(bulb);
 +
 +    if (power != bulb->state.power) {
 +        LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
-+            bulbs_powered_on, power ? 1 : -1
++            bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
 +        );
 +    }
 +
@@ -495,6 +513,35 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      return gw;
  
  error_allocate:
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -317,16 +317,22 @@
+     pkt->brightness = le16toh(pkt->brightness);
+     pkt->kelvin = le16toh(pkt->kelvin);
+     pkt->dim = le16toh(pkt->dim);
+-    pkt->power = le16toh(pkt->power);
++    // The bulbs actually return power values between 0 and 0xffff, not sure
++    // what the intermediate values mean, let's pull them down to 0:
++    if (pkt->power != LGTD_LIFX_POWER_ON) {
++        pkt->power = LGTD_LIFX_POWER_OFF;
++    }
+     pkt->tags = le64toh(pkt->tags);
+ }
+ 
+ void
+ lgtd_lifx_wire_decode_power_state(struct lgtd_lifx_packet_power_state *pkt)
+ {
+-    (void)pkt;
++    assert(pkt);
+ 
+-    assert(pkt);
++    if (pkt->power != LGTD_LIFX_POWER_ON) {
++        pkt->power = LGTD_LIFX_POWER_OFF;
++    }
+ }
+ 
+ void
 diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
 --- a/tests/core/jsonrpc/CMakeLists.txt
 +++ b/tests/core/jsonrpc/CMakeLists.txt
