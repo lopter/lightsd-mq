@@ -583,6 +583,30 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
  
  FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
      ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+--- a/tests/core/proto/test_proto_get_light_state.c
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -103,7 +103,7 @@
+             1,
+             "%d bytes written, expected %lu "
+             "(got %.*s instead of %s)",
+-            client_write_buf_idx, sizeof(expected) - 1,
++            client_write_buf_idx, sizeof(expected) - 1UL,
+             client_write_buf_idx, client_write_buf, expected
+         );
+     }
+diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+@@ -45,7 +45,7 @@
+     if (client_write_buf_idx != sizeof(expected) - 1) {
+         lgtd_errx(
+             1, "%d bytes written, expected %lu",
+-            client_write_buf_idx, sizeof(expected) - 1
++            client_write_buf_idx, sizeof(expected) - 1UL
+         );
+     }
+ 
 diff --git a/tests/core/router/CMakeLists.txt b/tests/core/router/CMakeLists.txt
 --- a/tests/core/router/CMakeLists.txt
 +++ b/tests/core/router/CMakeLists.txt
