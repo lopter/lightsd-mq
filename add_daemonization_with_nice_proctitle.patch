@@ -103,12 +103,14 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
  )
  
  TARGET_LINK_LIBRARIES(
-@@ -29,4 +30,5 @@
-     lifx
+@@ -30,3 +31,7 @@
      ${EVENT2_CORE_LIBRARY}
      ${TIME_MONOTONIC_LIBRARY}
-+    ${LIBBSD_LIBRARY}
  )
++
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(lightsd ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -492,7 +494,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
 --- a/tests/core/jsonrpc/CMakeLists.txt
 +++ b/tests/core/jsonrpc/CMakeLists.txt
-@@ -7,12 +7,15 @@
+@@ -7,12 +7,16 @@
      test_core_jsonrpc STATIC
      ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
      ${LIGHTSD_SOURCE_DIR}/core/log.c
@@ -502,17 +504,17 @@ diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.t
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
  )
--TARGET_LINK_LIBRARIES(test_core_jsonrpc ${TIME_MONOTONIC_LIBRARY})
-+TARGET_LINK_LIBRARIES(
-+    test_core_jsonrpc ${TIME_MONOTONIC_LIBRARY} ${LIBBSD_LIBRARY}
-+)
+ TARGET_LINK_LIBRARIES(test_core_jsonrpc ${TIME_MONOTONIC_LIBRARY})
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(test_core_jsonrpc ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
  
  FUNCTION(ADD_JSONRPC_TEST TEST_SOURCE)
      ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_jsonrpc)
 diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
 --- a/tests/core/proto/CMakeLists.txt
 +++ b/tests/core/proto/CMakeLists.txt
-@@ -7,13 +7,16 @@
+@@ -7,6 +7,7 @@
      test_core_proto STATIC
      ${LIGHTSD_SOURCE_DIR}/core/log.c
      ${LIGHTSD_SOURCE_DIR}/core/jsonrpc.c
@@ -520,13 +522,13 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
      ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
      ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
-     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+@@ -14,6 +15,9 @@
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
  )
--TARGET_LINK_LIBRARIES(test_core_proto ${TIME_MONOTONIC_LIBRARY})
-+TARGET_LINK_LIBRARIES(
-+    test_core_proto ${TIME_MONOTONIC_LIBRARY} ${LIBBSD_LIBRARY}
-+)
+ TARGET_LINK_LIBRARIES(test_core_proto ${TIME_MONOTONIC_LIBRARY})
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(test_core_proto ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
  
  FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
      ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
@@ -541,14 +543,21 @@ diff --git a/tests/core/router/CMakeLists.txt b/tests/core/router/CMakeLists.txt
      ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
      ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
-@@ -18,6 +19,7 @@
-     test_core_router
-     ${EVENT2_CORE_LIBRARY}
-     ${TIME_MONOTONIC_LIBRARY}
-+    ${LIBBSD_LIBRARY}
+@@ -15,10 +16,11 @@
  )
  
+ TARGET_LINK_LIBRARIES(
+-    test_core_router
+-    ${EVENT2_CORE_LIBRARY}
+-    ${TIME_MONOTONIC_LIBRARY}
++    test_core_router ${EVENT2_CORE_LIBRARY} ${TIME_MONOTONIC_LIBRARY}
+ )
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(test_core_router ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
+ 
  FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_router)
 diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 --- a/tests/core/tests_shims.c
 +++ b/tests/core/tests_shims.c
@@ -564,7 +573,7 @@ diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.txt
 --- a/tests/lifx/gateway/CMakeLists.txt
 +++ b/tests/lifx/gateway/CMakeLists.txt
-@@ -8,13 +8,16 @@
+@@ -8,6 +8,7 @@
      ${LIGHTSD_SOURCE_DIR}/core/log.c
      ${LIGHTSD_SOURCE_DIR}/core/proto.c
      ${LIGHTSD_SOURCE_DIR}/core/router.c
@@ -572,27 +581,29 @@ diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.t
      ${LIGHTSD_SOURCE_DIR}/lifx/broadcast.c
      ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
-     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+@@ -15,6 +16,9 @@
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
  )
--TARGET_LINK_LIBRARIES(test_lifx_gateway ${TIME_MONOTONIC_LIBRARY})
-+TARGET_LINK_LIBRARIES(
-+    test_lifx_gateway ${TIME_MONOTONIC_LIBRARY} ${LIBBSD_LIBRARY}
-+)
+ TARGET_LINK_LIBRARIES(test_lifx_gateway ${TIME_MONOTONIC_LIBRARY})
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(test_lifx_gateway ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
  
  FUNCTION(ADD_GATEWAY_TEST TEST_SOURCE)
      ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_gateway)
 diff --git a/tests/lifx/tagging/CMakeLists.txt b/tests/lifx/tagging/CMakeLists.txt
 --- a/tests/lifx/tagging/CMakeLists.txt
 +++ b/tests/lifx/tagging/CMakeLists.txt
-@@ -6,8 +6,10 @@
+@@ -6,8 +6,12 @@
  ADD_LIBRARY(
      test_lifx_tagging STATIC
      ${LIGHTSD_SOURCE_DIR}/core/log.c
 +    ${LIGHTSD_SOURCE_DIR}/core/stats.c
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
  )
-+TARGET_LINK_LIBRARIES(test_lifx_tagging ${LIBBSD_LIBRARY})
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(test_lifx_tagging ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
  
  FUNCTION(ADD_TAGGING_TEST TEST_SOURCE)
      ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_tagging)
@@ -611,14 +622,16 @@ diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
 diff --git a/tests/lifx/wire_proto/CMakeLists.txt b/tests/lifx/wire_proto/CMakeLists.txt
 --- a/tests/lifx/wire_proto/CMakeLists.txt
 +++ b/tests/lifx/wire_proto/CMakeLists.txt
-@@ -6,8 +6,10 @@
+@@ -6,8 +6,12 @@
  ADD_LIBRARY(
      test_lifx_wire_proto STATIC
      ${LIGHTSD_SOURCE_DIR}/core/log.c
 +    ${LIGHTSD_SOURCE_DIR}/core/stats.c
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
  )
-+TARGET_LINK_LIBRARIES(test_lifx_wire_proto ${LIBBSD_LIBRARY})
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(test_lifx_wire_proto ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
  
  FUNCTION(ADD_WIRE_PROTO_TEST TEST_SOURCE)
      ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_wire_proto)
