@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  09ca1bf96d2b1c29a57e2373798673dbfff4a706
+# Parent  206f4a5f66bc6afe80fe1b9320380e609a8506b1
 Add the ability to tag (group) or untag (ungroup) bulbs
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
@@ -114,7 +114,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -224,3 +224,30 @@
+@@ -224,3 +224,76 @@
  
      lgtd_router_device_list_free(devices);
  }
@@ -127,9 +127,55 @@ diff --git a/core/proto.c b/core/proto.c
 +    assert(targets);
 +    assert(tag_label);
 +
-+    struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(tag_label);
++    struct lgtd_router_device_list *devices;
++    devices = lgtd_router_targets_to_devices(targets);
++    if (!devices) {
++        return;
++    }
 +
-+    SEND_RESULT(client, true);
++    struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(tag_label);
++    if (!tag) {
++        tag = lgtd_lifx_tagging_allocate_tag(tag_label);
++        if (!tag) {
++            goto error_tag_alloc;
++        }
++
++        struct ligtd_lifx_gateway *gw;
++        LIST_FOREACH(gw, &lgtd_lifx_gateways, link) {
++            int tag_id = lgtd_lifx_gateway_allocate_tag_id(gw, -1, tag_label);
++            if (tag_id == -1) {
++                goto error_site_alloc;
++            }
++        }
++    }
++
++    struct lgtd_router_device *device;
++    SLIST_FOREACH(device, devices, link) {
++        struct lgtd_lifx_bulb *bulb = device->device;
++        // TODO: et là c'est reloud il faut retrouver le site qui
++        // correspond a bulb->gw pour chopper le tag id (soit via
++        // gw->tags ou tag->sites):
++        int tag_id = ;
++        struct lgtd_lifx_packet_tags pkt;
++        pkt.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
++        lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_TAGS, &pkt);
++    }
++
++error_site_alloc:
++    if (LIST_EMPTY(&tag->sites)) {
++        lgtd_lifx_tagging_deallocate_tag(tag);
++    } else { // tagging_decref will deallocate the tag for us:
++        struct ligtd_lifx_site *next_site;
++        LIST_FOREACH_SAFE(site, &tag->sites, link, next_site) {
++            lgtd_lifx_gateway_deallocate_tag_id(site->gw, site->tag_id);
++        }
++    }
++error_tag_alloc:
++    lgtd_client_send_error(
++        client, LGTD_CLIENT_INTERNAL_ERROR, "couldn't allocate device list"
++    );
++    lgtd_router_device_list_free(devices);
++    return;
 +}
 +
 +void lgtd_proto_untag(struct lgtd_client *client,
@@ -154,6 +200,101 @@ diff --git a/core/proto.h b/core/proto.h
  void lgtd_proto_get_light_state(struct lgtd_client *, const struct lgtd_proto_target_list *);
 +void lgtd_proto_tag(struct lgtd_client *, const struct lgtd_proto_target_list *, const char *);
 +void lgtd_proto_untag(struct lgtd_client *, const struct lgtd_proto_target_list *, const char *);
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -530,6 +530,7 @@
+             gw->ip_addr, gw->port,
+             lgtd_addrtoa(gw->site.as_array)
+         );
++        if (gw->tags[tag_id]) 
+         lgtd_lifx_tagging_decref(gw->tags[tag_id], gw);
+         gw->tag_ids &= ~LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
+         gw->tags[tag_id] = NULL;
+diff --git a/lifx/tagging.c b/lifx/tagging.c
+--- a/lifx/tagging.c
++++ b/lifx/tagging.c
+@@ -66,6 +66,32 @@
+ }
+ 
+ struct lgtd_lifx_tag *
++lgtd_lifx_tagging_allocate_tag(const char *tag_label)
++{
++    assert(tag_label);
++    assert(strlen(tag_label) < LGTD_LIFX_LABEL_SIZE);
++
++    struct lgtd_lifx_tag *tag = calloc(1, sizeof(*tag));
++    if (!tag) {
++        return NULL;
++    }
++
++    strncpy(tag->label, tag_label, sizeof(tag->label) - 1);
++    LIST_INSERT_HEAD(&lgtd_lifx_tags, tag, link);
++    return tag;
++}
++
++void
++lgtd_lifx_tagging_deallocate_tag(struct lgtd_lifx_tag *tag)
++{
++    assert(tag);
++    assert(LIST_EMPTY(&tag->sites));
++
++    LIST_REMOVE(tag, link);
++    free(tag);
++}
++
++struct lgtd_lifx_tag *
+ lgtd_lifx_tagging_incref(const char *tag_label,
+                          struct lgtd_lifx_gateway *gw,
+                          int tag_id)
+@@ -77,12 +103,10 @@
+     bool dealloc_tag = false;
+     struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(tag_label);
+     if (!tag) {
+-        tag = calloc(1, sizeof(*tag));
++        tag = lgtd_lifx_tagging_allocate_tag(tag_label);
+         if (!tag) {
+             return NULL;
+         }
+-        strncpy(tag->label, tag_label, sizeof(tag->label) - 1);
+-        LIST_INSERT_HEAD(&lgtd_lifx_tags, tag, link);
+         dealloc_tag = true;
+     }
+ 
+@@ -91,8 +115,7 @@
+         site = calloc(1, sizeof(*site));
+         if (!site) {
+             if (dealloc_tag) {
+-                LIST_REMOVE(tag, link);
+-                free(tag);
++                lgtd_lifx_tagging_deallocate_tag(tag);
+             }
+             errno = ENOMEM;
+             return NULL;
+@@ -132,8 +155,7 @@
+         free(site);
+     }
+     if (LIST_EMPTY(&tag->sites)) {
+-        LIST_REMOVE(tag, link);
+         lgtd_info("forgetting unused tag [%s]", tag->label);
+-        free(tag);
++        lgtd_lifx_tagging_deallocate_tag(tag);
+     }
+ }
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -247,6 +247,10 @@
+     char        label[LGTD_LIFX_LABEL_SIZE];
+ };
+ 
++struct lgtd_lifx_packet_tags {
++    uint64le_t  tags;
++};
++
+ #pragma pack(pop)
+ 
+ enum lgtd_lifx_header_flags {
 diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
 --- a/tests/core/jsonrpc/test_jsonrpc_utils.h
 +++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
