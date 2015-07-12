@@ -1,0 +1,54 @@
+# HG changeset patch
+# Parent  7fc14281f5b3582451dc0ca447be6c2701f02b68
+Add a small shell module and small README fix
+
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -28,7 +28,7 @@
+ - power_on;
+ - set_light_from_hsbk;
+ - set_waveform (change the light according to a function like SAW or SINE);
+-- get_light_status.
++- get_light_state.
+ 
+ lightsd can target single or multiple bulbs at once:
+ 
+diff --git a/tests/lightsc.sh b/tests/lightsc.sh
+new file mode 100644
+--- /dev/null
++++ b/tests/lightsc.sh
+@@ -0,0 +1,33 @@
++#!/bin/sh
++
++lightsc() {
++    if [ -z $LIGHTSD_HOST ] || [ -z $LIGHTSD_PORT ]; then
++        printf >&2 "Please set LIGHTSD_HOST and LIGHTSD_PORT\n"
++        return 1
++    fi
++
++    local method=$1
++    local params=$2
++    cat << EOF
++> {
++>     "method": "$method",
++>     "params": [$params],
++>     "jsonrpc": "2.0",
++>     "id": 1
++> }
++EOF
++    printf '< '
++    nc $LIGHTSD_HOST $LIGHTSD_PORT << EOF
++{
++    "method": "$method",
++    "params": [$params],
++    "jsonrpc": "2.0",
++    "id": 1
++}
++EOF
++    local rv=$?
++
++    echo
++
++    return $?
++}

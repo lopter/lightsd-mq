@@ -1,1 +1,4 @@
 add_daemonization_with_nice_proctitle.patch
+mac_os_x_build_fixes.patch
+lightscsh_readme_fix.patch
+tag_untag.patch
