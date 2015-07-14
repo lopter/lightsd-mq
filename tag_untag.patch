@@ -114,7 +114,32 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -224,3 +224,138 @@
+@@ -209,10 +209,20 @@
+         bool comma = false;
+         int tag_id;
+         LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, bulb->state.tags) {
+-            LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
+-            LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
+-            LGTD_CLIENT_WRITE_STRING(client, "\"");
+-            comma = true;
++            if (tag_id & bulb->gw->tag_ids) {
++                LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
++                LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
++                LGTD_CLIENT_WRITE_STRING(client, "\"");
++                comma = true;
++            } else {
++                lgtd_warnx(
++                    "tag_id %d on bulb %.*s (%s) doesn't "
++                    "exist on gw [%s]:%hu (site %s)",
++                    tag_id, (int)sizeof(bulb->state.label), bulb->state.label,
++                    lgtd_addrtoa(bulb->addr), bulb->gw->ip_addr, bulb->gw->port,
++                    lgtd_addrtoa(bulb->gw->site.as_array)
++                );
++            }
+         }
+ 
+         LGTD_CLIENT_WRITE_STRING(
+@@ -224,3 +234,138 @@
  
      lgtd_router_device_list_free(devices);
  }
@@ -281,7 +306,16 @@ diff --git a/core/router.c b/core/router.c
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -124,3 +124,11 @@
+@@ -107,6 +107,8 @@
+         );
+     }
+ 
++    lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
++
+     bulb->last_light_state_at = received_at;
+     memcpy(&bulb->state, state, sizeof(bulb->state));
+ }
+@@ -124,3 +126,13 @@
  
      bulb->state.power = power;
  }
@@ -290,6 +324,8 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +lgtd_lifx_bulb_set_tags(struct lgtd_lifx_bulb *bulb, uint64_t tags)
 +{
 +    assert(bulb);
++
++    lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, tags);
 +
 +    bulb->state.tags = tags;
 +}
@@ -339,7 +375,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
  
      gw->pending_refresh_req = true;
-@@ -369,6 +350,28 @@
+@@ -369,6 +350,60 @@
      event_add(gw->write_ev, NULL);
  }
  
@@ -365,10 +401,42 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +    return true; // FIXME, have real return values on the send paths...
 +}
 +
++void
++lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
++                                       uint64_t bulb_tags,
++                                       uint64_t pkt_tags)
++{
++    uint64_t changes = bulb_tags ^ pkt_tags;
++    uint64_t added_tags = changes & pkt_tags;
++    uint64_t removed_tags = changes & bulb_tags;
++    int tag_id;
++
++    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, added_tags) {
++        assert(gw->tag_refcounts[tag_id] < UINT8_MAX);
++        gw->tag_refcounts[tag_id]++;
++    }
++
++    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, removed_tags) {
++        assert(gw->tag_refcounts[tag_id] > 0);
++        if (--gw->tag_refcounts[tag_id] == 0) {
++            lgtd_info(
++                "deleting unused tag [%s] (%d) from gw [%s]:%hu (site %s)",
++                gw->tags[tag_id]->label, tag_id,
++                gw->ip_addr, gw->port, gw->site.as_array
++            );
++            struct lgtd_lifx_packet_tag_labels pkt;
++            pkt.tags = ~(gw->tag_ids & ~tag_id);
++            lgtd_lifx_gateway_send_to_site(
++                gw, LGTD_LIFX_SET_TAG_LABELS, &pkt, sizeof(pkt)
++            );
++        }
++    }
++}
++
  void
  lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
                                       const struct lgtd_lifx_packet_header *hdr,
-@@ -484,16 +487,44 @@
+@@ -484,16 +519,44 @@
  }
  
  int
@@ -415,7 +483,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (!(gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))) {
          struct lgtd_lifx_tag *tag;
          tag = lgtd_lifx_tagging_incref(tag_label, gw, tag_id);
-@@ -530,6 +561,7 @@
+@@ -530,6 +593,7 @@
              gw->ip_addr, gw->port,
              lgtd_addrtoa(gw->site.as_array)
          );
@@ -423,7 +491,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
          lgtd_lifx_tagging_decref(gw->tags[tag_id], gw);
          gw->tag_ids &= ~LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
          gw->tags[tag_id] = NULL;
-@@ -558,3 +590,38 @@
+@@ -558,3 +622,38 @@
          }
      }
  }
@@ -474,7 +542,15 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
  
  // You can't send more than one lifx packet per UDP datagram.
  enum { LGTD_LIFX_GATEWAY_PACKET_RING_SIZE = 16 };
-@@ -92,7 +92,13 @@
+@@ -51,6 +51,7 @@
+     }                               site;
+     uint64_t                        tag_ids;
+     struct lgtd_lifx_tag            *tags[LGTD_LIFX_GATEWAY_MAX_TAGS];
++    uint8_t                         tag_refcounts[LGTD_LIFX_GATEWAY_MAX_TAGS];
+     evutil_socket_t                 socket;
+     // Those three timers let us measure the latency of the gateway. If we
+     // aren't the only client on the network then this won't be accurate since
+@@ -92,7 +93,15 @@
                                        enum lgtd_lifx_packet_type,
                                        const void *,
                                        int);
@@ -484,11 +560,13 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 +                                    const void *,
 +                                    int);
  
++void lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *, uint64_t, uint64_t);
++
 +int lgtd_lifx_gateway_get_tag_id(const struct lgtd_lifx_gateway *, const struct lgtd_lifx_tag *);
  int lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *, int, const char *);
  void lgtd_lifx_gateway_deallocate_tag_id(struct lgtd_lifx_gateway *, int);
  
-@@ -108,3 +114,6 @@
+@@ -108,3 +117,6 @@
  void lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *,
                                           const struct lgtd_lifx_packet_header *,
                                           const struct lgtd_lifx_packet_tag_labels *);
@@ -838,7 +916,7 @@ diff --git a/tests/core/router/test_router_send_to_broadcast.c b/tests/core/rout
 diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 --- a/tests/core/tests_shims.c
 +++ b/tests/core/tests_shims.c
-@@ -70,14 +70,50 @@
+@@ -70,14 +70,60 @@
      (void)pkt;
  }
  
@@ -897,6 +975,16 @@ diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 +    (void)pkt;
 +    (void)pkt_size;
 +    return false;
++}
++
++void
++lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
++                                       uint64_t bulb_tags,
++                                       uint64_t pkt_tags)
++{
++    (void)gw;
++    (void)bulb_tags;
++    (void)pkt_tags;
 +}
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
