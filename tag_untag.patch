@@ -122,7 +122,7 @@ diff --git a/core/proto.c b/core/proto.c
 -            LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
 -            LGTD_CLIENT_WRITE_STRING(client, "\"");
 -            comma = true;
-+            if (tag_id & bulb->gw->tag_ids) {
++            if (LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id) & bulb->gw->tag_ids) {
 +                LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
 +                LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
 +                LGTD_CLIENT_WRITE_STRING(client, "\"");
@@ -375,7 +375,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
  
      gw->pending_refresh_req = true;
-@@ -369,6 +350,60 @@
+@@ -369,6 +350,68 @@
      event_add(gw->write_ev, NULL);
  }
  
@@ -412,8 +412,15 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +    int tag_id;
 +
 +    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, added_tags) {
-+        assert(gw->tag_refcounts[tag_id] < UINT8_MAX);
-+        gw->tag_refcounts[tag_id]++;
++        if (gw->tag_refcounts[tag_id] != UINT8_MAX) {
++            gw->tag_refcounts[tag_id]++;
++        } else {
++            lgtd_warnx(
++                "reached refcount limit (%hu) for tag [%s] (%d) on gw [%s]:%hu",
++                UINT8_MAX, gw->tags[tag_id] ? gw->tags[tag_id]->label : NULL,
++                tag_id, gw->ip_addr, gw->port
++            );
++        }
 +    }
 +
 +    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, removed_tags) {
@@ -421,11 +428,12 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +        if (--gw->tag_refcounts[tag_id] == 0) {
 +            lgtd_info(
 +                "deleting unused tag [%s] (%d) from gw [%s]:%hu (site %s)",
-+                gw->tags[tag_id]->label, tag_id,
++                gw->tags[tag_id] ? gw->tags[tag_id]->label : NULL, tag_id,
 +                gw->ip_addr, gw->port, gw->site.as_array
 +            );
-+            struct lgtd_lifx_packet_tag_labels pkt;
-+            pkt.tags = ~(gw->tag_ids & ~tag_id);
++            struct lgtd_lifx_packet_tag_labels pkt = {
++                .tags = ~(gw->tag_ids & ~tag_id)
++            };
 +            lgtd_lifx_gateway_send_to_site(
 +                gw, LGTD_LIFX_SET_TAG_LABELS, &pkt, sizeof(pkt)
 +            );
@@ -436,7 +444,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  void
  lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
                                       const struct lgtd_lifx_packet_header *hdr,
-@@ -484,16 +519,44 @@
+@@ -484,16 +527,44 @@
  }
  
  int
@@ -483,15 +491,19 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (!(gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))) {
          struct lgtd_lifx_tag *tag;
          tag = lgtd_lifx_tagging_incref(tag_label, gw, tag_id);
-@@ -530,6 +593,7 @@
-             gw->ip_addr, gw->port,
-             lgtd_addrtoa(gw->site.as_array)
-         );
-+        if (gw->tags[tag_id]) 
-         lgtd_lifx_tagging_decref(gw->tags[tag_id], gw);
-         gw->tag_ids &= ~LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
-         gw->tags[tag_id] = NULL;
-@@ -558,3 +622,38 @@
+@@ -544,9 +615,9 @@
+     assert(gw && hdr && pkt);
+ 
+     lgtd_debug(
+-        "SET_TAG_LABELS <-- [%s]:%hu - %s label=%s, tags=%jx",
++        "SET_TAG_LABELS <-- [%s]:%hu - %s label=%.*s, tags=%jx",
+         gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr),
+-        pkt->label, (uintmax_t)pkt->tags
++        LGTD_LIFX_LABEL_SIZE, pkt->label, (uintmax_t)pkt->tags
+     );
+ 
+     int tag_id;
+@@ -558,3 +629,38 @@
          }
      }
  }
@@ -517,12 +529,12 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +
 +    int tag_id;
 +    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, pkt->tags) {
-+        if (!(gw->tag_ids & tag_id)) {
++        if (!(gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))) {
 +            lgtd_warnx(
 +                "trying to set unknown tag_id %d (%#jx) "
-+                "on bulb %s (%s), gw [%s]:%hu (site %s)",
++                "on bulb %s (%.*s), gw [%s]:%hu (site %s)",
 +                tag_id, LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id),
-+                lgtd_addrtoa(b->addr), b->state.label,
++                lgtd_addrtoa(b->addr), LGTD_LIFX_LABEL_SIZE, b->state.label,
 +                gw->ip_addr, gw->port, lgtd_addrtoa(gw->site.as_array)
 +            );
 +        }
@@ -633,7 +645,21 @@ diff --git a/lifx/tagging.c b/lifx/tagging.c
              }
              errno = ENOMEM;
              return NULL;
-@@ -132,8 +155,7 @@
+@@ -100,9 +123,10 @@
+         if (dealloc_tag) {
+             lgtd_info("discovered tag [%s]", tag_label);
+         }
+-        lgtd_debug(
+-            "tag [%s] added to gw [%s]:%hu (site %s)",
+-            tag_label, gw->ip_addr, gw->port, lgtd_addrtoa(gw->site.as_array)
++        lgtd_info(
++            "tag [%s] added to gw [%s]:%hu (site %s) with tag_id %d",
++            tag_label, gw->ip_addr, gw->port,
++            lgtd_addrtoa(gw->site.as_array), tag_id
+         );
+         site->gw = gw;
+         site->tag_id = tag_id;
+@@ -132,8 +156,7 @@
          free(site);
      }
      if (LIST_EMPTY(&tag->sites)) {
@@ -772,7 +798,13 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
          }
      };
  
-@@ -362,6 +387,14 @@
+@@ -357,11 +382,19 @@
+     pkt->brightness = htole16(pkt->brightness);
+     pkt->kelvin = htole16(pkt->kelvin);
+     pkt->period = htole32(pkt->period);
+-    pkt->cycles = lifx_wire_htolefloat(pkt->cycles);
++    pkt->cycles = lgtd_lifx_wire_htolefloat(pkt->cycles);
+     pkt->skew_ratio = htole16(pkt->skew_ratio);
  }
  
  void
@@ -810,6 +842,23 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 --- a/lifx/wire_proto.h
 +++ b/lifx/wire_proto.h
+@@ -26,14 +26,14 @@
+ typedef float    floatle_t;
+ 
+ static inline floatle_t
+-lifx_wire_htolefloat(float f)
++lgtd_lifx_wire_htolefloat(float f)
+ {
+     *(uint32_t *)&f = htole32(*(uint32_t *)&f);
+     return f;
+ }
+ 
+ static inline floatle_t
+-lifx_wire_lefloattoh(float f)
++lgtd_lifx_wire_lefloattoh(float f)
+ {
+     *(uint32_t *)&f = le32toh(*(uint32_t *)&f);
+     return f;
 @@ -238,7 +238,7 @@
  };
  
@@ -869,6 +918,30 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
      ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
+--- a/tests/core/proto/test_proto_set_waveform.c
++++ b/tests/core/proto/test_proto_set_waveform.c
+@@ -35,7 +35,7 @@
+     int brightness = le16toh(waveform->brightness);
+     int kelvin = le16toh(waveform->kelvin);
+     int period = le32toh(waveform->period);
+-    float cycles = lifx_wire_lefloattoh(waveform->cycles);
++    float cycles = lgtd_lifx_wire_lefloattoh(waveform->cycles);
+     int skew_ratio = le16toh(waveform->skew_ratio);
+ 
+     if (waveform_type != LGTD_LIFX_WAVEFORM_SAW) {
+diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_waveform_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+@@ -35,7 +35,7 @@
+     int brightness = le16toh(waveform->brightness);
+     int kelvin = le16toh(waveform->kelvin);
+     int period = le32toh(waveform->period);
+-    float cycles = lifx_wire_lefloattoh(waveform->cycles);
++    float cycles = lgtd_lifx_wire_lefloattoh(waveform->cycles);
+     int skew_ratio = le16toh(waveform->skew_ratio);
+ 
+     if (waveform_type != LGTD_LIFX_WAVEFORM_SAW) {
 diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
 --- a/tests/core/proto/tests_proto_utils.h
 +++ b/tests/core/proto/tests_proto_utils.h
