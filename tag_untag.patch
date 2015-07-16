@@ -1,11 +1,11 @@
 # HG changeset patch
-# Parent  a7322016398fcd00dbe298f2e549ad3733acbe2a
+# Parent  fd01633d91affc9bd818122ed7b64e87a1c07c8a
 Add the ability to tag (group) or untag (ungroup) bulbs
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
-@@ -950,6 +950,90 @@
+@@ -977,6 +977,90 @@
      lgtd_proto_target_list_clear(&targets);
  }
  
@@ -96,7 +96,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  void
  lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, int parsed)
  {
-@@ -974,6 +1058,14 @@
+@@ -1001,6 +1085,14 @@
          LGTD_JSONRPC_METHOD(
              "get_light_state", 1, // t
              lgtd_jsonrpc_check_and_call_get_light_state

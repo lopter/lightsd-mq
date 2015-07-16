@@ -1,0 +1,128 @@
+# HG changeset patch
+# Parent  2c56def2ca2d8ca61ac82eba9f4632377d20cc6f
+Fix incorrect values returned in get_light_state
+
+Derp, I still can't do basic maths.
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -231,16 +231,42 @@
+     assert(size > 1);
+     assert(start < stop);
+ 
++    if (size < 2) {
++        if (size) {
++            *out = '\0';
++        }
++        return;
++    }
++
+     int range;
+     range = stop * LGTD_JSONRPC_FLOAT_PREC - start * LGTD_JSONRPC_FLOAT_PREC;
+     int value = (uint64_t)encoded * (uint64_t)range / UINT16_MAX;
+ 
++    if (!value) {
++        out[0] = '0';
++        out[1] = '\0';
++        return;
++    }
++
+     int multiplier = 1;
+     while (value / (multiplier * 10)) {
+         multiplier *= 10;
+     }
+ 
+     int i = 0;
++
++    if (LGTD_JSONRPC_FLOAT_PREC / 10 > multiplier) {
++        out[i++] = '0';
++        if (i != size) {
++            out[i++] = '.';
++        }
++        for (int divider = 10;
++             LGTD_JSONRPC_FLOAT_PREC / divider > multiplier && i != size;
++             divider *= 10) {
++            out[i++] = '0';
++        }
++    }
++
+     do {
+         if (multiplier == LGTD_JSONRPC_FLOAT_PREC / 10) {
+             if (i == 0) {
+@@ -257,6 +283,7 @@
+         multiplier /= 10;
+     } while ((value || multiplier >= LGTD_JSONRPC_FLOAT_PREC)
+               && multiplier && i != size);
++
+     out[LGTD_MIN(i, size - 1)] = '\0';
+ 
+     assert(i <= size);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c b/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
+--- a/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
++++ b/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
+@@ -1,3 +1,5 @@
++#define NDEBUG 1
++
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
+@@ -17,6 +19,17 @@
+         );
+     }
+ 
++    lgtd_jsonrpc_uint16_range_to_float_string(
++        UINT16_MAX / 2 + UINT16_MAX / 3, 0, 1, buf, bufsz
++    );
++    if (strcmp(buf, "0.833325")) {
++        lgtd_errx(
++            1,
++            "UINT16_MAX / 2 + UINT16_MAX / 3 converted to %.*s (expected %s)",
++            bufsz, buf, "0.499992"
++        );
++    }
++
+     lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX / 2, 0, 1, buf, bufsz);
+     if (strcmp(buf, "0.499992")) {
+         lgtd_errx(
+@@ -25,6 +38,22 @@
+         );
+     }
+ 
++    lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX / 10, 0, 1, buf, bufsz);
++    if (strcmp(buf, "0.099992")) {
++        lgtd_errx(
++            1, "UINT16_MAX / 10 converted to %.*s (expected %s)",
++            bufsz, buf, "0.499992"
++        );
++    }
++
++    lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX / 100, 0, 1, buf, bufsz);
++    if (strcmp(buf, "0.009994")) {
++        lgtd_errx(
++            1, "UINT16_MAX / 100 converted to %.*s (expected %s)",
++            bufsz, buf, "0.499992"
++        );
++    }
++
+     lgtd_jsonrpc_uint16_range_to_float_string(0, 0, 1, buf, bufsz);
+     if (strcmp(buf, "0")) {
+         lgtd_errx(
+@@ -52,5 +81,17 @@
+         );
+     }
+ 
++    bufsz = 1;
++    lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX / 2, 0, 1, buf, bufsz);
++    if (buf[0]) {
++        lgtd_errx(1, "buffer of one should be '\\0'");
++    }
++
++    buf[0] = 'A';
++    lgtd_jsonrpc_uint16_range_to_float_string(UINT16_MAX / 2, 0, 1, buf, 0);
++    if (buf[0] != 'A') {
++        lgtd_errx(1, "buffer of zero shouldn't be written to");
++    }
++
+     return 0;
+ }

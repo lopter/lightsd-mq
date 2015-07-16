@@ -1,4 +1,5 @@
-add_daemonization_with_nice_proctitle.patch
+fix_jsonrpc_uint16_range_to_float_string.patch
+readme_fixes.patch
 mac_os_x_build_fixes.patch
-lightscsh_readme_fix.patch
+add_daemonization_with_nice_proctitle.patch
 tag_untag.patch
