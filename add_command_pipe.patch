@@ -1,0 +1,100 @@
+# HG changeset patch
+# Parent  441d5dac62f699b8a08e87ac06af19e0db999d8a
+Add a command pipe to easily do actions from a shell
+
+NOTE: the command pipe is write only, responses aren't returned.
+
+diff --git a/core/client.h b/core/client.h
+--- a/core/client.h
++++ b/core/client.h
+@@ -42,8 +42,10 @@
+ };
+ LIST_HEAD(lgtd_client_list, lgtd_client);
+ 
+-#define LGTD_CLIENT_WRITE_STRING(client, s) do {        \
+-    bufferevent_write((client)->io, s, strlen((s)));    \
++#define LGTD_CLIENT_WRITE_STRING(client, s) do {            \
++    if ((client)->io) {                                     \
++        bufferevent_write((client)->io, s, strlen((s)));    \
++    }                                                       \
+ } while(0)
+ 
+ struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr_storage *);
+diff --git a/core/pipe.c b/core/pipe.c
+new file mode 100644
+--- /dev/null
++++ b/core/pipe.c
+@@ -0,0 +1,40 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#include <sys/queue.h>
++#include <assert.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdlib.h>
++
++#include "pipe.h"
++#include "lightsd.h"
++
++static struct lgtd_command_pipe_list lgtd_command_pipes =
++    SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
++
++bool
++lgtd_command_pipe_open(const char *path)
++{
++    (void)path;
++    return true;
++}
++
++void
++lgtd_command_pipe_close_all(void)
++{
++}
+diff --git a/core/pipe.h b/core/pipe.h
+new file mode 100644
+--- /dev/null
++++ b/core/pipe.h
+@@ -0,0 +1,28 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#pragma once
++
++struct lgtd_command_pipe {
++    SLIST_ENTRY(lgtd_command_pipe)  link;
++    const char                      *path;
++    int                             fd;
++};
++SLIST_HEAD(lgtd_command_pipe_list, lgtd_command_pipe);
++
++bool lgtd_command_pipe_open(const char *);
++void lgtd_command_pipe_close_all(void);
