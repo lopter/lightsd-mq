@@ -1,13 +1,30 @@
 # HG changeset patch
-# Parent  441d5dac62f699b8a08e87ac06af19e0db999d8a
+# Parent  a144bae90d2755a742d1a8b3eaccb0bb8374cd56
 Add a command pipe to easily do actions from a shell
 
 NOTE: the command pipe is write only, responses aren't returned.
 
+diff --git a/core/client.c b/core/client.c
+--- a/core/client.c
++++ b/core/client.c
+@@ -195,3 +195,13 @@
+ 
+     return client;
+ }
++
++void
++lgtd_client_open_from_pipe(struct lgtd_client *pipe_client)
++{
++    assert(pipe_client);
++
++    memset(pipe_client, 0, sizeof(*pipe_client));
++
++    jsmn_init(&client->jsmn_ctx);
++}
 diff --git a/core/client.h b/core/client.h
 --- a/core/client.h
 +++ b/core/client.h
-@@ -42,8 +42,10 @@
+@@ -42,11 +42,14 @@
  };
  LIST_HEAD(lgtd_client_list, lgtd_client);
  
@@ -20,11 +37,15 @@ diff --git a/core/client.h b/core/client.h
  } while(0)
  
  struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr_storage *);
++void lgtd_client_open_from_pipe(struct lgtd_client *);
+ void lgtd_client_close_all(void);
+ 
+ void lgtd_client_send_response(struct lgtd_client *, const char *);
 diff --git a/core/pipe.c b/core/pipe.c
 new file mode 100644
 --- /dev/null
 +++ b/core/pipe.c
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,78 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -43,10 +64,15 @@ new file mode 100644
 +// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +#include <sys/queue.h>
++#include <syt/types.h>
++#include <sys/stat.h>
 +#include <assert.h>
 +#include <stdarg.h>
 +#include <stdbool.h>
 +#include <stdlib.h>
++
++#include <event2/buffer.h>
++#include <event2/event.h>
 +
 +#include "pipe.h"
 +#include "lightsd.h"
@@ -54,11 +80,44 @@ new file mode 100644
 +static struct lgtd_command_pipe_list lgtd_command_pipes =
 +    SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
 +
++static void
++lgtd_command_pipe_read_callback(evutil_socket_t socket, short events, void *ctx)
++{
++
++}
++
 +bool
 +lgtd_command_pipe_open(const char *path)
 +{
-+    (void)path;
++    struct lgtd_command_pipe *pipe = calloc(1, sizeof(*pipe));
++    if (!pipe) {
++        lgtd_warn("can't open command pipe %s", path);
++        return false;
++    }
++
++    pipe->path = path;
++
++    // XXX: S_IWUSR|S_IWGRP ?
++    pipe->fd = mkfifo(path, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP); 
++
++    pipe->read_ev = event_new(
++        lgtd_ev_base,
++        pipe->fd,
++        EV_READ,
++        lgtd_command_pipe_read_callback,
++        pipe
++    );
++    if (!pipe->read_ev) {
++        goto error_read_event_new;
++    }
++
++
++
 +    return true;
++
++error_read_event_new:
++
++    event_free(pipe->read_ev);
 +}
 +
 +void
@@ -69,7 +128,7 @@ diff --git a/core/pipe.h b/core/pipe.h
 new file mode 100644
 --- /dev/null
 +++ b/core/pipe.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,31 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -93,6 +152,9 @@ new file mode 100644
 +    SLIST_ENTRY(lgtd_command_pipe)  link;
 +    const char                      *path;
 +    int                             fd;
++    struct event                    *read_ev;
++    struct event_buuffer            *read_buf;
++    struct client                   client;
 +};
 +SLIST_HEAD(lgtd_command_pipe_list, lgtd_command_pipe);
 +
