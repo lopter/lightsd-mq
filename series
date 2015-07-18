@@ -1,4 +1,4 @@
 add_daemonization_with_nice_proctitle.patch
 tag_untag.patch
-add_command_pipe.patch
 ignore_duplicated_listening_addresses.patch
+add_command_pipe.patch

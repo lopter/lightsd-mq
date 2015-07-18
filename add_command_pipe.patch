@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  a144bae90d2755a742d1a8b3eaccb0bb8374cd56
+# Parent  0ded0e4a2bc8e4eb6d24e3f7f86ee6adf8b4c7e1
 Add a command pipe to easily do actions from a shell
 
 NOTE: the command pipe is write only, responses aren't returned.
@@ -26,7 +26,37 @@ diff --git a/core/client.c b/core/client.c
  
  #include <event2/buffer.h>
  #include <event2/bufferevent.h>
-@@ -195,3 +196,13 @@
+@@ -138,6 +139,29 @@
+ }
+ 
+ void
++lgtd_client_write_string(struct lgtd_client *client, const char *msg)
++{
++    assert(client);
++    assert(msg);
++
++    if (client->io) {
++        bufferevent_write(client->io, msg, strlen(msg));
++    }
++}
++
++void
++lgtd_client_write_buf(struct lgtd_client *client, const char *buf, int bufsz)
++{
++    assert(client);
++    assert(buf);
++    assert(bufsz >= 0);
++
++    if (bufsz > 0 && client->io) {
++        bufferevent_write(client->io, buf, bufsz);
++    }
++}
++
++void
+ lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+     lgtd_jsonrpc_send_response(client, msg);
+@@ -195,3 +219,13 @@
  
      return client;
  }
@@ -43,23 +73,110 @@ diff --git a/core/client.c b/core/client.c
 diff --git a/core/client.h b/core/client.h
 --- a/core/client.h
 +++ b/core/client.h
-@@ -42,11 +42,14 @@
+@@ -42,13 +42,12 @@
  };
  LIST_HEAD(lgtd_client_list, lgtd_client);
  
 -#define LGTD_CLIENT_WRITE_STRING(client, s) do {        \
 -    bufferevent_write((client)->io, s, strlen((s)));    \
-+#define LGTD_CLIENT_WRITE_STRING(client, s) do {            \
-+    if ((client)->io) {                                     \
-+        bufferevent_write((client)->io, s, strlen((s)));    \
-+    }                                                       \
- } while(0)
- 
+-} while(0)
+-
  struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr_storage *);
 +void lgtd_client_open_from_pipe(struct lgtd_client *);
  void lgtd_client_close_all(void);
  
++void lgtd_client_write_string(struct lgtd_client *, const char *);
++void lgtd_client_write_buf(struct lgtd_client *, const char *, int);
  void lgtd_client_send_response(struct lgtd_client *, const char *);
+ void lgtd_client_start_send_response(struct lgtd_client *);
+ void lgtd_client_end_send_response(struct lgtd_client *);
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -129,7 +129,7 @@
+     return c == '-' || (c >= '0' && c <= '9');
+ }
+ 
+-static bool __attribute__((unused))
++static bool
+ lgtd_jsonrpc_type_bool(const jsmntok_t *t, const char *json)
+ {
+     if (t->type != JSMN_PRIMITIVE) {
+@@ -480,7 +480,7 @@
+ lgtd_jsonrpc_write_id(struct lgtd_client *client)
+ {
+     if (!client->current_request->id) {
+-        LGTD_CLIENT_WRITE_STRING(client, "null");
++        lgtd_client_write_string(client, "null");
+         return;
+     }
+ 
+@@ -492,7 +492,7 @@
+         start = client->current_request->id->start;
+         stop = client->current_request->id->end;
+     }
+-    bufferevent_write(client->io, &client->json[start], stop - start);
++    lgtd_client_write_buf(client, &client->json[start], stop - start);
+ }
+ 
+ void
+@@ -503,15 +503,15 @@
+     assert(client);
+     assert(message);
+ 
+-    LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
++    lgtd_client_write_string(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
+     lgtd_jsonrpc_write_id(client);
+-    LGTD_CLIENT_WRITE_STRING(client, ", \"error\": {\"code\": ");
++    lgtd_client_write_string(client, ", \"error\": {\"code\": ");
+     char str_code[8] = { 0 };
+     snprintf(str_code, sizeof(str_code), "%d", code);
+-    LGTD_CLIENT_WRITE_STRING(client, str_code);
+-    LGTD_CLIENT_WRITE_STRING(client, ", \"message\": \"");
+-    LGTD_CLIENT_WRITE_STRING(client, message);
+-    LGTD_CLIENT_WRITE_STRING(client, "\"}}");
++    lgtd_client_write_string(client, str_code);
++    lgtd_client_write_string(client, ", \"message\": \"");
++    lgtd_client_write_string(client, message);
++    lgtd_client_write_string(client, "\"}}");
+ }
+ 
+ void
+@@ -521,11 +521,11 @@
+     assert(client);
+     assert(result);
+ 
+-    LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
++    lgtd_client_write_string(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
+     lgtd_jsonrpc_write_id(client);
+-    LGTD_CLIENT_WRITE_STRING(client, ", \"result\": ");
+-    LGTD_CLIENT_WRITE_STRING(client, result);
+-    LGTD_CLIENT_WRITE_STRING(client, "}");
++    lgtd_client_write_string(client, ", \"result\": ");
++    lgtd_client_write_string(client, result);
++    lgtd_client_write_string(client, "}");
+ }
+ 
+ void
+@@ -533,15 +533,15 @@
+ {
+     assert(client);
+ 
+-    LGTD_CLIENT_WRITE_STRING(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
++    lgtd_client_write_string(client, "{\"jsonrpc\": \"2.0\", \"id\": ");
+     lgtd_jsonrpc_write_id(client);
+-    LGTD_CLIENT_WRITE_STRING(client, ", \"result\": ");
++    lgtd_client_write_string(client, ", \"result\": ");
+ }
+ 
+ void
+ lgtd_jsonrpc_end_send_response(struct lgtd_client *client)
+ {
+-    LGTD_CLIENT_WRITE_STRING(client, "}");
++    lgtd_client_write_string(client, "}");
+ }
+ 
+ static bool
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -142,7 +259,7 @@ diff --git a/core/pipe.c b/core/pipe.c
 new file mode 100644
 --- /dev/null
 +++ b/core/pipe.c
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,233 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -214,8 +331,6 @@ new file mode 100644
 +
 +    struct lgtd_command_pipe *pipe = ctx;
 +
-+    lgtd_info("--> lgtd_command_pipe_read_callback");
-+
 +    bool drain = false;
 +    int read = 0;
 +    for (int nbytes = evbuffer_read(pipe->read_buf, pipe->fd, -1);
@@ -237,7 +352,8 @@ new file mode 100644
 +
 +        if (!drain) {
 +            read += nbytes;
-+
++        next_request:
++            (void)0;
 +            const char *buf = (char *)evbuffer_pullup(pipe->read_buf, -1);
 +            ssize_t bufsz = evbuffer_get_length(pipe->read_buf);
 +            jsmnerr_t rv = jsmn_parse(
@@ -255,6 +371,10 @@ new file mode 100644
 +                drain = true;
 +                break;
 +            case JSMN_ERROR_PART:
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wswitch"
++            case 0:
++#pragma GCC diagnostic pop
 +                if (bufsz >= LGTD_CLIENT_MAX_REQUEST_BUF_SIZE) {
 +                    lgtd_warnx("pipe %s: request too big", pipe->path);
 +                    drain = true;
@@ -267,9 +387,12 @@ new file mode 100644
 +
 +                pipe->client.json = NULL;
 +                jsmn_init(&pipe->client.jsmn_ctx);
-+                int request_size = pipe->client.jsmn_tokens[ntokens].end;
++                int request_size = pipe->client.jsmn_tokens[0].end;
 +                evbuffer_drain(pipe->read_buf, request_size);
 +                read -= request_size;
++                if (read) {
++                    goto next_request;
++                }
 +                break;
 +            }
 +        } else {
@@ -278,7 +401,12 @@ new file mode 100644
 +        }
 +    }
 +
-+    evbuffer_drain(pipe->read_buf, read);
++    if (read) {
++        lgtd_debug(
++            "pipe %s: discarding %d bytes of unusable data", pipe->path, read
++        );
++        evbuffer_drain(pipe->read_buf, read);
++    }
 +    jsmn_init(&pipe->client.jsmn_ctx);
 +}
 +
@@ -308,7 +436,7 @@ new file mode 100644
 +        goto error;
 +    }
 +
-+    pipe->fd = open(path, O_RDONLY);
++    pipe->fd = open(path, O_RDONLY|O_NONBLOCK);
 +    if (pipe->fd == -1) {
 +        goto error;
 +    }
@@ -401,3 +529,80 @@ new file mode 100644
 +
 +bool lgtd_command_pipe_open(const char *);
 +void lgtd_command_pipe_close_all(void);
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -178,7 +178,7 @@
+     )
+ 
+     lgtd_client_start_send_response(client);
+-    LGTD_CLIENT_WRITE_STRING(client, "[");
++    lgtd_client_write_string(client, "[");
+     struct lgtd_router_device *device;
+     SLIST_FOREACH(device, devices, link) {
+         struct lgtd_lifx_bulb *bulb = device->device;
+@@ -204,15 +204,15 @@
+             );
+             continue;
+         }
+-        LGTD_CLIENT_WRITE_STRING(client, buf);
++        lgtd_client_write_string(client, buf);
+ 
+         bool comma = false;
+         int tag_id;
+         LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, bulb->state.tags) {
+             if (LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id) & bulb->gw->tag_ids) {
+-                LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
+-                LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
+-                LGTD_CLIENT_WRITE_STRING(client, "\"");
++                lgtd_client_write_string(client, comma ? ",\"" : "\"");
++                lgtd_client_write_string(client, bulb->gw->tags[tag_id]->label);
++                lgtd_client_write_string(client, "\"");
+                 comma = true;
+             } else {
+                 lgtd_warnx(
+@@ -225,11 +225,11 @@
+             }
+         }
+ 
+-        LGTD_CLIENT_WRITE_STRING(
++        lgtd_client_write_string(
+             client, SLIST_NEXT(device, link) ?  "]}," : "]}"
+         );
+     }
+-    LGTD_CLIENT_WRITE_STRING(client, "]");
++    lgtd_client_write_string(client, "]");
+     lgtd_client_end_send_response(client);
+ 
+     lgtd_router_device_list_free(devices);
+diff --git a/tests/core/mock_client_buf.h b/tests/core/mock_client_buf.h
+--- a/tests/core/mock_client_buf.h
++++ b/tests/core/mock_client_buf.h
+@@ -21,3 +21,15 @@
+     client_write_buf_idx += to_write;
+     return 0;
+ }
++
++void
++lgtd_client_write_string(struct lgtd_client *client, const char *msg)
++{
++    bufferevent_write(client->io, msg, strlen(msg));
++}
++
++void
++lgtd_client_write_buf(struct lgtd_client *client, const char *buf, int bufsz)
++{
++    bufferevent_write(client->io, buf, bufsz);
++}
+diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
+--- a/tests/core/proto/tests_proto_utils.h
++++ b/tests/core/proto/tests_proto_utils.h
+@@ -16,7 +16,7 @@
+ void
+ lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+-    LGTD_CLIENT_WRITE_STRING(client, msg);
++    lgtd_client_write_string(client, msg);
+ }
+ #endif
+ 
