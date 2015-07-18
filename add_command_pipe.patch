@@ -4,10 +4,29 @@ Add a command pipe to easily do actions from a shell
 
 NOTE: the command pipe is write only, responses aren't returned.
 
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -20,6 +20,7 @@
+     listen.c
+     lightsd.c
+     log.c
++    pipe.c
+     proto.c
+     router.c
+     stats.c
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
 +++ b/core/client.c
-@@ -195,3 +195,13 @@
+@@ -23,6 +23,7 @@
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <stdint.h>
++#include <string.h>
+ 
+ #include <event2/buffer.h>
+ #include <event2/bufferevent.h>
+@@ -195,3 +196,13 @@
  
      return client;
  }
@@ -19,7 +38,7 @@ diff --git a/core/client.c b/core/client.c
 +
 +    memset(pipe_client, 0, sizeof(*pipe_client));
 +
-+    jsmn_init(&client->jsmn_ctx);
++    jsmn_init(&pipe_client->jsmn_ctx);
 +}
 diff --git a/core/client.h b/core/client.h
 --- a/core/client.h
@@ -41,11 +60,89 @@ diff --git a/core/client.h b/core/client.h
  void lgtd_client_close_all(void);
  
  void lgtd_client_send_response(struct lgtd_client *, const char *);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -52,6 +52,7 @@
+ #include "jsmn.h"
+ #include "jsonrpc.h"
+ #include "client.h"
++#include "pipe.h"
+ #include "listen.h"
+ #include "lightsd.h"
+ 
+@@ -69,6 +70,7 @@
+ lgtd_cleanup(void)
+ {
+     lgtd_listen_close_all();
++    lgtd_command_pipe_close_all();
+     lgtd_client_close_all();
+     lgtd_lifx_timer_close();
+     lgtd_lifx_broadcast_close();
+@@ -135,10 +137,17 @@
+ lgtd_usage(const char *progname)
+ {
+     printf(
+-        "Usage: %s -l addr:port [-l ...] [-f] [-t] [-h] [-V] "
+-        "[-v debug|info|warning|error]\n",
++        "Usage: %s ...\n\n"
++        "  [-l,--listen addr:port [-l ...]]\n"
++        "  [-c,--comand-pipe /command/fifo -[c ...]]\n"
++        "  [-f,--foreground]\n"
++        "  [-t,--no-timestamps]\n"
++        "  [-h,--help]\n"
++        "  [-V,--version]\n"
++        "  [-v,--verbosity debug|info|warning|error]\n",
+         progname
+     );
++    lgtd_cleanup();
+     exit(0);
+ }
+ 
+@@ -198,6 +207,7 @@
+ 
+     static const struct option long_opts[] = {
+         {"listen",          required_argument, NULL, 'l'},
++        {"command-pipe",    required_argument, NULL, 'c'},
+         {"foreground",      no_argument,       NULL, 'f'},
+         {"no-timestamps",   no_argument,       NULL, 't'},
+         {"help",            no_argument,       NULL, 'h'},
+@@ -205,7 +215,7 @@
+         {"version",         no_argument,       NULL, 'V'},
+         {NULL,              0,                 NULL, 0}
+     };
+-    const char short_opts[] = "l:fthv:V";
++    const char short_opts[] = "l:c:fthv:V";
+ 
+     for (int rv = getopt_long(argc, argv, short_opts, long_opts, NULL);
+          rv != -1;
+@@ -218,8 +228,7 @@
+                 lgtd_usage(argv[0]);
+             }
+             strncat(binds, optarg, LGTD_MIN(
+-                sizeof(binds) - strlen(binds) - 1,
+-                strlen(optarg)
++                sizeof(binds) - strlen(binds) - 1, strlen(optarg)
+             ));
+             strncat(binds, ", ", LGTD_MIN(
+                 sizeof(binds) - strlen(binds) - 1, 2
+@@ -230,6 +239,11 @@
+             }
+             *sep = ':';
+             break;
++        case 'c':
++            if (!lgtd_command_pipe_open(optarg)) {
++                exit(1);
++            }
++            break;
+         case 'f':
+             lgtd_opts.foreground = true;
+             break;
 diff --git a/core/pipe.c b/core/pipe.c
 new file mode 100644
 --- /dev/null
 +++ b/core/pipe.c
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,222 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -64,16 +161,24 @@ new file mode 100644
 +// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +#include <sys/queue.h>
-+#include <syt/types.h>
++#include <sys/types.h>
 +#include <sys/stat.h>
 +#include <assert.h>
++#include <err.h>
++#include <errno.h>
++#include <fcntl.h>
 +#include <stdarg.h>
 +#include <stdbool.h>
 +#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
 +
 +#include <event2/buffer.h>
 +#include <event2/event.h>
 +
++#include "jsmn.h"
++#include "jsonrpc.h"
++#include "client.h"
 +#include "pipe.h"
 +#include "lightsd.h"
 +
@@ -81,48 +186,184 @@ new file mode 100644
 +    SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
 +
 +static void
++lgtd_command_pipe_close(struct lgtd_command_pipe *pipe)
++{
++    assert(pipe);
++
++    event_del(pipe->read_ev);
++    if (pipe->fd != -1) {
++        close(pipe->fd);
++    }
++    unlink(pipe->path);
++    SLIST_REMOVE(&lgtd_command_pipes, pipe, lgtd_command_pipe, link);
++    evbuffer_free(pipe->read_buf);
++    event_free(pipe->read_ev);
++
++    lgtd_info("closed command pipe %s", pipe->path);
++    free(pipe);
++}
++
++static void
 +lgtd_command_pipe_read_callback(evutil_socket_t socket, short events, void *ctx)
 +{
++    assert(ctx);
++    assert(socket != -1);
 +
++    (void)socket;
++    (void)events;
++
++    struct lgtd_command_pipe *pipe = ctx;
++
++    lgtd_info("--> lgtd_command_pipe_read_callback");
++
++    bool drain = false;
++    int read = 0;
++    for (int nbytes = evbuffer_read(pipe->read_buf, pipe->fd, -1);
++         nbytes;
++         nbytes = evbuffer_read(pipe->read_buf, pipe->fd, -1)) {
++        if (nbytes == -1) {
++            if (errno == EINTR) {
++                continue;
++            }
++            if (errno != EAGAIN) {
++                lgtd_warn("read error on command pipe %s", pipe->path);
++                const char *path = pipe->path;
++                lgtd_command_pipe_close(pipe);
++                lgtd_command_pipe_open(path);
++                return;
++            }
++            continue;
++        }
++
++        if (!drain) {
++            read += nbytes;
++
++            const char *buf = (char *)evbuffer_pullup(pipe->read_buf, -1);
++            ssize_t bufsz = evbuffer_get_length(pipe->read_buf);
++            jsmnerr_t rv = jsmn_parse(
++                &pipe->client.jsmn_ctx,
++                buf,
++                bufsz,
++                pipe->client.jsmn_tokens,
++                LGTD_ARRAY_SIZE(pipe->client.jsmn_tokens)
++            );
++            switch (rv) {
++            case JSMN_ERROR_NOMEM:
++            case JSMN_ERROR_INVAL:
++                lgtd_warnx("pipe %s: request too big or invalid", pipe->path);
++                // ignore what's left
++                drain = true;
++                break;
++            case JSMN_ERROR_PART:
++                if (bufsz >= LGTD_CLIENT_MAX_REQUEST_BUF_SIZE) {
++                    lgtd_warnx("pipe %s: request too big", pipe->path);
++                    drain = true;
++                }
++                break;
++            default:
++                pipe->client.json = buf;
++                int ntokens = rv;
++                lgtd_jsonrpc_dispatch_request(&pipe->client, ntokens);
++
++                pipe->client.json = NULL;
++                jsmn_init(&pipe->client.jsmn_ctx);
++                int request_size = pipe->client.jsmn_tokens[ntokens].end;
++                evbuffer_drain(pipe->read_buf, request_size);
++                read -= request_size;
++                break;
++            }
++        } else {
++            evbuffer_drain(pipe->read_buf, read + nbytes);
++            read = 0;
++        }
++    }
++
++    evbuffer_drain(pipe->read_buf, read);
++    jsmn_init(&pipe->client.jsmn_ctx);
 +}
 +
 +bool
 +lgtd_command_pipe_open(const char *path)
 +{
-+    struct lgtd_command_pipe *pipe = calloc(1, sizeof(*pipe));
++    assert(path);
++
++    struct lgtd_command_pipe *pipe;
++    SLIST_FOREACH(pipe, &lgtd_command_pipes, link) {
++        if (!strcmp(pipe->path, path)) {
++            return true;
++        }
++    }
++
++    pipe = calloc(1, sizeof(*pipe));
 +    if (!pipe) {
 +        lgtd_warn("can't open command pipe %s", path);
 +        return false;
 +    }
 +
 +    pipe->path = path;
++    pipe->fd = -1;
 +
-+    // XXX: S_IWUSR|S_IWGRP ?
-+    pipe->fd = mkfifo(path, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP); 
++    mode_t mode = S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
++    if (mkfifo(path, mode) && errno != EEXIST) {
++        goto error;
++    }
++
++    pipe->fd = open(path, O_RDONLY);
++    if (pipe->fd == -1) {
++        goto error;
++    }
++
++    if (evutil_make_socket_nonblocking(pipe->fd) == -1) {
++        goto error;
++    }
 +
 +    pipe->read_ev = event_new(
 +        lgtd_ev_base,
 +        pipe->fd,
-+        EV_READ,
++        EV_READ|EV_PERSIST,
 +        lgtd_command_pipe_read_callback,
 +        pipe
 +    );
 +    if (!pipe->read_ev) {
-+        goto error_read_event_new;
++        goto error;
 +    }
 +
++    pipe->read_buf = evbuffer_new();
++    if (!pipe->read_buf) {
++        goto error;
++    }
 +
++    if (event_add(pipe->read_ev, NULL)) {
++        goto error;
++    }
++
++    lgtd_info("command pipe ready at %s", pipe->path);
++
++    SLIST_INSERT_HEAD(&lgtd_command_pipes, pipe, link);
 +
 +    return true;
 +
-+error_read_event_new:
-+
-+    event_free(pipe->read_ev);
++error:
++    lgtd_warn("can't open command pipe %s", path);
++    if (pipe->read_buf) {
++        evbuffer_free(pipe->read_buf);
++    }
++    if (pipe->read_ev) {
++        event_free(pipe->read_ev);
++    }
++    if (pipe->fd != -1) {
++        close(pipe->fd);
++    }
++    free(pipe);
++    return false;
 +}
 +
 +void
 +lgtd_command_pipe_close_all(void)
 +{
++    while (!SLIST_EMPTY(&lgtd_command_pipes)) {
++        lgtd_command_pipe_close(SLIST_FIRST(&lgtd_command_pipes));
++    }
 +}
 diff --git a/core/pipe.h b/core/pipe.h
 new file mode 100644
@@ -153,8 +394,8 @@ new file mode 100644
 +    const char                      *path;
 +    int                             fd;
 +    struct event                    *read_ev;
-+    struct event_buuffer            *read_buf;
-+    struct client                   client;
++    struct evbuffer                 *read_buf;
++    struct lgtd_client              client;
 +};
 +SLIST_HEAD(lgtd_command_pipe_list, lgtd_command_pipe);
 +
