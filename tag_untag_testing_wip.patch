@@ -604,3 +604,37 @@ diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
  void
  lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
                                         uint64_t bulb_tags,
+diff --git a/tests/core/tests_shims.h b/tests/core/tests_shims.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/tests_shims.h
+@@ -0,0 +1,29 @@
++#pragma once
++
++#ifndef MOCKED_LIFX_GATEWAY_SEND_TO_SITE
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt,
++                               int pkt_size)
++{
++    (void)gw;
++    (void)pkt_type;
++    (void)pkt;
++    (void)pkt_size;
++    return false;
++}
++#endif
++
++#ifndef MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
++int
++lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
++                                  int tag_id,
++                                  const char *tag_label)
++{
++    (void)gw;
++    (void)tag_id;
++    (void)tag_label;
++    return -1;
++}
++#endif
