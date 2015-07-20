@@ -1,0 +1,30 @@
+# HG changeset patch
+# Parent  fd1b697fb0c8dd39053b9cdf1bb8b40f78c28436
+Display the usage when no arguments are passed in and fix -V
+
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -217,6 +217,10 @@
+     };
+     const char short_opts[] = "l:c:fthv:V";
+ 
++    if (argc == 1) {
++        lgtd_usage(argv[0]);
++    }
++
+     for (int rv = getopt_long(argc, argv, short_opts, long_opts, NULL);
+          rv != -1;
+          rv = getopt_long(argc, argv, short_opts, long_opts, NULL)) {
+diff --git a/core/version.h.in b/core/version.h.in
+--- a/core/version.h.in
++++ b/core/version.h.in
+@@ -29,4 +29,7 @@
+ 
+ #pragma once
+ 
+-const char LGTD_VERSION[] = "@LGTD_VERSION@";
++const char LGTD_VERSION[] = (
++    "@LIGHTSD_VERSION@"
++    "\n\nCopyright (c) 2014, 2015, Louis Opter <kalessin@kalessin.fr>"
++);

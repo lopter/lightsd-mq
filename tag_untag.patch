@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  d9cf460f9f1c472067fcbafb1a62b28d4842b709
+# Parent  40af4d3ae6619e5faeef92beecc2e0d876eaf91b
 Add the ability to tag (group) or untag (ungroup) bulbs
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -151,7 +151,7 @@ diff --git a/core/proto.c b/core/proto.c
          }
  
          LGTD_CLIENT_WRITE_STRING(
-@@ -224,3 +234,138 @@
+@@ -224,3 +234,145 @@
  
      lgtd_router_device_list_free(devices);
  }
@@ -184,7 +184,7 @@ diff --git a/core/proto.c b/core/proto.c
 +    struct lgtd_lifx_site *site;
 +
 +    // Loop over the devices and do allocations first, this makes error
-+    // handling easier (since you can't rollback enqueued packets) and builb
++    // handling easier (since you can't rollback enqueued packets) and build
 +    // the list of affected gateways so we can do SET_TAG_LABELS:
 +    SLIST_FOREACH(device, devices, link) {
 +        struct lgtd_lifx_gateway *gw = device->device->gw;
@@ -200,12 +200,14 @@ diff --git a/core/proto.c b/core/proto.c
 +    // SET_TAG_LABELS, this is idempotent, do it everytime so we can recover
 +    // from any bad state:
 +    LIST_FOREACH(site, &tag->sites, link) {
-+        int tag_id = lgtd_lifx_gateway_get_tag_id(site->gw, tag);
++        int tag_id = site->tag_id;
++        assert(tag_id > -1 && tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
 +        struct lgtd_lifx_packet_tag_labels pkt = { .tags = 0 };
 +        pkt.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
 +        strncpy(pkt.label, tag_label, sizeof(pkt.label) - 1);
++        lgtd_lifx_wire_encode_tag_labels(&pkt);
 +        bool enqueued = lgtd_lifx_gateway_send_to_site(
-+            site->gw, LGTD_LIFX_SET_TAG_LABELS, &pkt, sizeof(pkt)
++            site->gw, LGTD_LIFX_SET_TAG_LABELS, &pkt
 +        );
 +        if (!enqueued) {
 +            goto error_site_alloc;
@@ -221,9 +223,13 @@ diff --git a/core/proto.c b/core/proto.c
 +        struct lgtd_lifx_bulb *bulb = device->device;
 +        int tag_id = lgtd_lifx_gateway_get_tag_id(bulb->gw, tag);
 +        assert(tag_id > -1 && tag_id < LGTD_LIFX_GATEWAY_MAX_TAGS);
-+        struct lgtd_lifx_packet_tags pkt;
-+        pkt.tags = bulb->state.tags | LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
-+        lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_TAGS, &pkt);
++        int tag_value = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
++        if (!(bulb->state.tags & tag_value)) {
++            struct lgtd_lifx_packet_tags pkt;
++            pkt.tags = bulb->state.tags | tag_value;
++            lgtd_lifx_wire_encode_tags(&pkt);
++            lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_TAGS, &pkt);
++        }
 +    }
 +
 +    SEND_RESULT(client, true);
@@ -281,6 +287,7 @@ diff --git a/core/proto.c b/core/proto.c
 +            if (bulb->state.tags & tag_value) {
 +                struct lgtd_lifx_packet_tags pkt;
 +                pkt.tags = bulb->state.tags & ~tag_value;
++                lgtd_lifx_wire_encode_tags(&pkt);
 +                lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_TAGS, &pkt);
 +            }
 +        }
@@ -302,7 +309,16 @@ diff --git a/core/proto.h b/core/proto.h
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
-@@ -372,8 +372,8 @@
+@@ -61,6 +61,8 @@
+         );
+         assert(pkt_infos);
+ 
++        pkt_infos->encode(pkt);
++
+         lgtd_lifx_gateway_enqueue_packet(
+             gw, &hdr, pkt_type, pkt, pkt_infos->size
+         );
+@@ -372,8 +374,8 @@
  void
  lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
  {
@@ -318,7 +334,15 @@ diff --git a/core/router.c b/core/router.c
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -107,6 +107,8 @@
+@@ -81,7 +81,6 @@
+         LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs_powered_on, -1);
+     }
+     RB_REMOVE(lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table, bulb);
+-    SLIST_REMOVE(&bulb->gw->bulbs, bulb, lgtd_lifx_bulb, link_by_gw);
+     lgtd_info(
+         "closed bulb \"%.*s\" (%s) on [%s]:%hu",
+         LGTD_LIFX_LABEL_SIZE,
+@@ -107,6 +106,8 @@
          );
      }
  
@@ -327,7 +351,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      bulb->last_light_state_at = received_at;
      memcpy(&bulb->state, state, sizeof(bulb->state));
  }
-@@ -124,3 +126,13 @@
+@@ -124,3 +125,13 @@
  
      bulb->state.power = power;
  }
@@ -352,13 +376,131 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -155,30 +155,11 @@
+@@ -70,9 +70,9 @@
+             lgtd_lifx_tagging_decref(gw->tags[i], gw);
+         }
+     }
+-    struct lgtd_lifx_bulb *bulb, *next_bulb;
+-    SLIST_FOREACH_SAFE(bulb, &gw->bulbs, link_by_gw, next_bulb) {
+-        lgtd_lifx_bulb_close(bulb);
++    while (!SLIST_EMPTY(&gw->bulbs)) {
++        struct lgtd_lifx_bulb *bulb = SLIST_FIRST(&gw->bulbs);
++        lgtd_lifx_gateway_remove_and_close_bulb(gw, bulb);
+     }
+ 
+     lgtd_info(
+@@ -82,6 +82,23 @@
+     free(gw);
+ }
+ 
++void
++lgtd_lifx_gateway_remove_and_close_bulb(struct lgtd_lifx_gateway *gw,
++                                        struct lgtd_lifx_bulb *bulb)
++{
++    assert(gw);
++    assert(bulb);
++
++    int tag_id;
++    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, bulb->state.tags) {
++        assert(gw->tag_refcounts[tag_id] > 0);
++        gw->tag_refcounts[tag_id]--;
++    }
++    SLIST_REMOVE(&gw->bulbs, bulb, lgtd_lifx_bulb, link_by_gw);
++
++    lgtd_lifx_bulb_close(bulb);
++}
++
+ static void
+ lgtd_lifx_gateway_write_callback(evutil_socket_t socket,
+                                  short events, void *ctx)
+@@ -132,13 +149,6 @@
+             if (type == LGTD_LIFX_GET_TAG_LABELS) {
+                 gw->pending_refresh_req = false;
+             }
+-            if (lgtd_opts.verbosity <= LGTD_DEBUG) {
+-                const struct lgtd_lifx_packet_infos *pkt_infos =
+-                    lgtd_lifx_wire_get_packet_infos(type);
+-                lgtd_debug(
+-                    "%s --> [%s]:%hu", pkt_infos->name, gw->ip_addr, gw->port
+-                );
+-            }
+             gw->pkt_ring[gw->pkt_ring_tail].type = 0;
+             LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(gw->pkt_ring_tail);
+             gw->pkt_ring_full = false;
+@@ -150,36 +160,77 @@
+     }
+ }
+ 
++static bool
++lgtd_lifx_gateway_send_to_site_impl(struct lgtd_lifx_gateway *gw,
++                                    enum lgtd_lifx_packet_type pkt_type,
++                                    const void *pkt,
++                                    const struct lgtd_lifx_packet_infos **pkt_infos)
++{
++    assert(gw);
++    assert(pkt_infos);
++
++    struct lgtd_lifx_packet_header hdr;
++    union lgtd_lifx_target target = { .addr = gw->site.as_array };
++    *pkt_infos = lgtd_lifx_wire_setup_header(
++        &hdr,
++        LGTD_LIFX_TARGET_SITE,
++        target,
++        gw->site.as_array,
++        pkt_type
++    );
++    assert(*pkt_infos);
++
++    lgtd_lifx_gateway_enqueue_packet(gw, &hdr, pkt_type, pkt, (*pkt_infos)->size);
++
++    return true; // FIXME, have real return values on the send paths...
++}
++
++static bool
++lgtd_lifx_gateway_send_to_site_quiet(struct lgtd_lifx_gateway *gw,
++                                     enum lgtd_lifx_packet_type pkt_type,
++                                     const void *pkt)
++{
++
++    const struct lgtd_lifx_packet_infos *pkt_infos;
++    bool rv = lgtd_lifx_gateway_send_to_site_impl(
++        gw, pkt_type, pkt, &pkt_infos
++    );
++
++    lgtd_debug(
++        "sending %s to site %s",
++        pkt_infos->name, lgtd_addrtoa(gw->site.as_array)
++    );
++
++    return rv; // FIXME, have real return values on the send paths...
++}
++
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt)
++{
++    const struct lgtd_lifx_packet_infos *pkt_infos;
++    bool rv = lgtd_lifx_gateway_send_to_site_impl(
++        gw, pkt_type, pkt, &pkt_infos
++    );
++
++    lgtd_info(
++        "sending %s to site %s",
++        pkt_infos->name, lgtd_addrtoa(gw->site.as_array)
++    );
++
++    return rv; // FIXME, have real return values on the send paths...
++}
++
+ static void
+ lgtd_lifx_gateway_send_get_all_light_state(struct lgtd_lifx_gateway *gw)
  {
      assert(gw);
  
 -    struct lgtd_lifx_packet_header hdr;
 -    union lgtd_lifx_target target = { .addr = gw->site.as_array };
-+    lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_GET_LIGHT_STATE, NULL, 0);
++    lgtd_lifx_gateway_send_to_site_quiet(gw, LGTD_LIFX_GET_LIGHT_STATE, NULL);
  
 -    lgtd_lifx_wire_setup_header(
 -        &hdr,
@@ -381,39 +523,16 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 -    );
 -    lgtd_lifx_gateway_enqueue_packet(
 -        gw, &hdr, LGTD_LIFX_GET_TAG_LABELS, &pkt, sizeof(pkt)
+-    );
 +    struct lgtd_lifx_packet_tags pkt = { .tags = LGTD_LIFX_ALL_TAGS };
-+    lgtd_lifx_gateway_send_to_site(
-+        gw, LGTD_LIFX_GET_TAG_LABELS, &pkt, sizeof(pkt)
-     );
++    lgtd_lifx_gateway_send_to_site_quiet(gw, LGTD_LIFX_GET_TAG_LABELS, &pkt);
  
      gw->pending_refresh_req = true;
-@@ -369,6 +350,68 @@
-     event_add(gw->write_ev, NULL);
+ }
+@@ -370,19 +421,55 @@
  }
  
-+bool
-+lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
-+                               enum lgtd_lifx_packet_type pkt_type,
-+                               const void *pkt,
-+                               int pkt_size)
-+{
-+    assert(gw);
-+
-+    struct lgtd_lifx_packet_header hdr;
-+    union lgtd_lifx_target target = { .addr = gw->site.as_array };
-+    lgtd_lifx_wire_setup_header(
-+        &hdr,
-+        LGTD_LIFX_TARGET_SITE,
-+        target,
-+        gw->site.as_array,
-+        pkt_type
-+    );
-+    lgtd_lifx_gateway_enqueue_packet(gw, &hdr, pkt_type, pkt, pkt_size);
-+    
-+    return true; // FIXME, have real return values on the send paths...
-+}
-+
-+void
+ void
 +lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
 +                                       uint64_t bulb_tags,
 +                                       uint64_t pkt_tags)
@@ -441,22 +560,38 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +            lgtd_info(
 +                "deleting unused tag [%s] (%d) from gw [%s]:%hu (site %s)",
 +                gw->tags[tag_id] ? gw->tags[tag_id]->label : NULL, tag_id,
-+                gw->ip_addr, gw->port, gw->site.as_array
++                gw->ip_addr, gw->port, lgtd_addrtoa(gw->site.as_array)
 +            );
 +            struct lgtd_lifx_packet_tag_labels pkt = {
-+                .tags = ~(gw->tag_ids & ~tag_id)
++                .tags = ~(gw->tag_ids & ~LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))
 +            };
-+            lgtd_lifx_gateway_send_to_site(
-+                gw, LGTD_LIFX_SET_TAG_LABELS, &pkt, sizeof(pkt)
-+            );
++            lgtd_lifx_wire_encode_tag_labels(&pkt);
++            lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_SET_TAG_LABELS, &pkt);
 +        }
 +    }
 +}
 +
- void
++void
  lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
                                       const struct lgtd_lifx_packet_header *hdr,
-@@ -484,16 +527,44 @@
+                                      const struct lgtd_lifx_packet_pan_gateway *pkt)
+ {
+-    (void)pkt;
+-
+     assert(gw && hdr && pkt);
+ 
+     lgtd_debug(
+-        "SET_PAN_GATEWAY <-- [%s]:%hu - %s site=%s",
+-        gw->ip_addr, gw->port,
+-        lgtd_addrtoa(hdr->target.device_addr),
+-        lgtd_addrtoa(hdr->site)
++        "SET_PAN_GATEWAY <-- [%s]:%hu - %s site=%s, service_type=%d",
++        gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr),
++        lgtd_addrtoa(hdr->site), pkt->service_type
+     );
+ }
+ 
+@@ -484,16 +571,44 @@
  }
  
  int
@@ -503,7 +638,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (!(gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))) {
          struct lgtd_lifx_tag *tag;
          tag = lgtd_lifx_tagging_incref(tag_label, gw, tag_id);
-@@ -544,9 +615,9 @@
+@@ -544,9 +659,9 @@
      assert(gw && hdr && pkt);
  
      lgtd_debug(
@@ -515,7 +650,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
  
      int tag_id;
-@@ -558,3 +629,38 @@
+@@ -558,3 +673,38 @@
          }
      }
  }
@@ -574,15 +709,22 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
      evutil_socket_t                 socket;
      // Those three timers let us measure the latency of the gateway. If we
      // aren't the only client on the network then this won't be accurate since
-@@ -92,7 +93,15 @@
+@@ -84,6 +85,7 @@
+ 
+ void lgtd_lifx_gateway_close(struct lgtd_lifx_gateway *);
+ void lgtd_lifx_gateway_close_all(void);
++void lgtd_lifx_gateway_remove_and_close_bulb(struct lgtd_lifx_gateway *, struct lgtd_lifx_bulb *);
+ 
+ void lgtd_lifx_gateway_force_refresh(struct lgtd_lifx_gateway *);
+ 
+@@ -92,7 +94,14 @@
                                        enum lgtd_lifx_packet_type,
                                        const void *,
                                        int);
 +// This could be on router but it's LIFX specific so I'd rather keep it here:
 +bool lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *,
 +                                    enum lgtd_lifx_packet_type,
-+                                    const void *,
-+                                    int);
++                                    const void *);
  
 +void lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *, uint64_t, uint64_t);
 +
@@ -691,11 +833,27 @@ diff --git a/lifx/tagging.h b/lifx/tagging.h
 +struct lgtd_lifx_tag *lgtd_lifx_tagging_allocate_tag(const char *);
 +
 +void lgtd_lifx_tagging_deallocate_tag(struct lgtd_lifx_tag *);
+diff --git a/lifx/timer.c b/lifx/timer.c
+--- a/lifx/timer.c
++++ b/lifx/timer.c
+@@ -95,7 +95,7 @@
+                 "closing bulb \"%.*s\" that hasn't been updated for %dms",
+                 LGTD_LIFX_LABEL_SIZE, bulb->state.label, light_state_lag
+             );
+-            lgtd_lifx_bulb_close(bulb);
++            lgtd_lifx_gateway_remove_and_close_bulb(bulb->gw, bulb);
+             start_discovery = true;
+             continue;
+         }
 diff --git a/lifx/timer.h b/lifx/timer.h
 --- a/lifx/timer.h
 +++ b/lifx/timer.h
-@@ -20,8 +20,8 @@
- enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 200 };
+@@ -17,11 +17,11 @@
+ 
+ #pragma once
+ 
+-enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 200 };
++enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500 };
  enum { LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
  enum { LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
 -enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 2000 };
@@ -888,6 +1046,28 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 +void lgtd_lifx_wire_decode_tags(struct lgtd_lifx_packet_tags *);
 +void lgtd_lifx_wire_encode_tag_labels(struct lgtd_lifx_packet_tag_labels *);
  void lgtd_lifx_wire_decode_tag_labels(struct lgtd_lifx_packet_tag_labels *);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ 
+ #define LGTD_TESTING_SET_LIGHT_FROM_HSBK
+ #include "test_jsonrpc_utils.h"
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ 
+ #define LGTD_TESTING_SET_LIGHT_FROM_HSBK
+ #include "test_jsonrpc_utils.h"
 diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
 new file mode 100644
 --- /dev/null
@@ -1185,7 +1365,15 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
 diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
 --- a/tests/core/proto/test_proto_get_light_state.c
 +++ b/tests/core/proto/test_proto_get_light_state.c
-@@ -29,6 +29,9 @@
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_ROUTER_TARGETS_TO_DEVICES
+@@ -29,17 +30,20 @@
      static struct lgtd_router_device_list devices =
          SLIST_HEAD_INITIALIZER(&devices);
  
@@ -1194,8 +1382,12 @@ diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/te
 +    };
      static struct lgtd_lifx_bulb bulb_1 = {
          .addr = { 1, 2, 3, 4, 5 },
-         .state = {
-@@ -39,7 +42,8 @@
+-        .state = {
+-            .hue = 0xaaaa,
++        .state = { .hue = 0xaaaa,
+             .saturation = 0xffff,
+             .brightness = 0xbbbb,
+             .kelvin = 3600,
              .label = "wave",
              .power = LGTD_LIFX_POWER_ON,
              .tags = 0
@@ -1205,10 +1397,67 @@ diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/te
      };
      static struct lgtd_router_device device_1 = { .device = &bulb_1 };
      SLIST_INSERT_HEAD(&devices, &device_1, link);
+@@ -76,7 +80,7 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_proto_get_light_state(&client, targets);
+diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_ROUTER_TARGETS_TO_DEVICES
+@@ -35,7 +36,7 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_proto_get_light_state(&client, targets);
+diff --git a/tests/core/proto/test_proto_get_light_state_null_device_list.c b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_null_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_ROUTER_TARGETS_TO_DEVICES
+@@ -45,7 +46,7 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_proto_get_light_state(&client, targets);
 diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_proto_power_off.c
 --- a/tests/core/proto/test_proto_power_off.c
 +++ b/tests/core/proto/test_proto_power_off.c
-@@ -38,7 +38,7 @@
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
+@@ -38,7 +39,7 @@
  lgtd_client_send_response(struct lgtd_client *client, const char *msg)
  {
      if (!client) {
@@ -1217,10 +1466,109 @@ diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_pro
      }
  
      if (strcmp(msg, "true")) {
+@@ -52,7 +53,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_off(&client, targets);
+ 
+diff --git a/tests/core/proto/test_proto_power_off_routing_error.c b/tests/core/proto/test_proto_power_off_routing_error.c
+--- a/tests/core/proto/test_proto_power_off_routing_error.c
++++ b/tests/core/proto/test_proto_power_off_routing_error.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
+@@ -52,7 +53,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_off(&client, targets);
+ 
+diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
+--- a/tests/core/proto/test_proto_power_on.c
++++ b/tests/core/proto/test_proto_power_on.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
+@@ -52,7 +53,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_on(&client, targets);
+ 
+diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/proto/test_proto_power_on_routing_error.c
+--- a/tests/core/proto/test_proto_power_on_routing_error.c
++++ b/tests/core/proto/test_proto_power_on_routing_error.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
+@@ -52,7 +53,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_on(&client, targets);
+ 
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/proto/test_proto_set_light_from_hsbk.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
 diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
 --- a/tests/core/proto/test_proto_set_waveform.c
 +++ b/tests/core/proto/test_proto_set_waveform.c
-@@ -35,7 +35,7 @@
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
+@@ -35,7 +36,7 @@
      int brightness = le16toh(waveform->brightness);
      int kelvin = le16toh(waveform->kelvin);
      int period = le32toh(waveform->period);
@@ -1232,7 +1580,15 @@ diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_
 diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
 --- a/tests/core/proto/test_proto_set_waveform_on_routing_error.c
 +++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
-@@ -35,7 +35,7 @@
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "tests_shims.h"
+ #include "tests_utils.h"
+ 
+ #define MOCKED_CLIENT_SEND_RESPONSE
+@@ -35,7 +36,7 @@
      int brightness = le16toh(waveform->brightness);
      int kelvin = le16toh(waveform->kelvin);
      int period = le32toh(waveform->period);
@@ -1245,10 +1601,13 @@ diff --git a/tests/core/proto/test_proto_tag_create.c b/tests/core/proto/test_pr
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/proto/test_proto_tag_create.c
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,252 @@
 +#include "proto.c"
 +
 +#include "mock_client_buf.h"
++#define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
++#define MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
++#include "tests_shims.h"
 +#include "tests_utils.h"
 +
 +#define MOCKED_ROUTER_TARGETS_TO_DEVICES
@@ -1256,32 +1615,12 @@ new file mode 100644
 +#define MOCKED_ROUTER_DEVICE_LIST_FREE
 +#include "tests_proto_utils.h"
 +
++#define FAKE_TARGET_LIST (void *)0x2a
++
 +static struct lgtd_router_device_list devices = 
 +    SLIST_HEAD_INITIALIZER(&devices);
-+
-+static bool device_list_free_called = false;
-+
-+void
-+lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
-+{
-+    if (!devices) {
-+        lgtd_errx(1, "the device list must be passed");
-+    }
-+
-+    device_list_free_called = true;
-+}
-+
-+static struct lgtd_lifx_tag *tag_vapor = NULL;
-+
-+struct lgtd_router_device_list *
-+lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *targets)
-+{
-+    if (targets != (void *)0x2a) {
-+        lgtd_errx(1, "unexpected targets list");
-+    }
-+
-+    return &devices;
-+}
++static struct lgtd_router_device_list device_1_only =
++    SLIST_HEAD_INITIALIZER(&device_1_only);
 +
 +static bool send_to_device_called = false;
 +
@@ -1312,15 +1651,119 @@ new file mode 100644
 +        errx(1, "missing SET_TAGS payload");
 +    }
 +
-+    struct lgtd_lifx_packet_tags *pkt_tags = pkt;
-+    if (pkt_tags->tags != 0x1) {
++    const struct lgtd_lifx_packet_tags *pkt_tags = pkt;
++    uint64_t tags = le64toh(pkt_tags->tags);
++    if (tags != 0x1) {
 +        errx(
 +            1, "invalid SET_TAGS payload=%#jx (expected %#x)",
-+            (uintmax_t)pkt_tags->tags, 0x2
++            (uintmax_t)tags, 0x1
 +        );
 +    }
 +
 +    send_to_device_called = true;
++}
++
++static bool gateway_send_to_site_called = false;
++
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt)
++{
++    if (!gw) {
++        errx(1, "missing gateway");
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_TAG_LABELS) {
++        errx(
++            1, "got packet type %#x (expected %#x)",
++            pkt_type, LGTD_LIFX_SET_TAG_LABELS
++        );
++    }
++
++    const struct lgtd_lifx_packet_tag_labels *pkt_tag_labels = pkt;
++    uint64_t tags = le64toh(pkt_tag_labels->tags);
++    if (tags != 0x1) {
++        errx(1, "got tags %#jx (expected %#x)", (uintmax_t)tags, 0x1);
++    }
++
++    if (strcmp(pkt_tag_labels->label, "dub")) {
++        errx(1, "got label %s (expected dub)", pkt_tag_labels->label);
++    }
++
++    gateway_send_to_site_called = true;
++
++    return true;
++}
++
++static bool gateway_allocate_tag_id_called = false;
++
++int
++lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
++                                  int tag_id,
++                                  const char *tag_label)
++{
++    if (gateway_allocate_tag_id_called) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "should have been called once only"
++        );
++    }
++
++    if (tag_id != -1) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "tag_id %d (expected -1)", tag_id
++        );
++    }
++
++    if (!gw) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "must be called with gateway"
++        );
++    }
++
++    if (!tag_label) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "must be called with a tag_label"
++        );
++    }
++
++    tag_id = 0;
++
++    struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(tag_label);
++    if (!tag) {
++        errx(1, "tag %s wasn't found", tag_label);
++    }
++    lgtd_tests_add_tag_to_gw(tag, gw, tag_id);
++
++    gateway_allocate_tag_id_called = true;
++
++    return tag_id;
++}
++
++static bool device_list_free_called = false;
++
++void
++lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
++{
++    if (!devices) {
++        lgtd_errx(1, "the device list must be passed");
++    }
++
++    device_list_free_called = true;
++}
++
++struct lgtd_router_device_list *
++lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *targets)
++{
++    if (targets != FAKE_TARGET_LIST) {
++        lgtd_errx(1, "unexpected targets list");
++    }
++
++    return &device_1_only;
 +}
 +
 +static void
@@ -1344,6 +1787,7 @@ new file mode 100644
 +    };
 +    static struct lgtd_router_device device_1 = { .device = &bulb_1 };
 +    SLIST_INSERT_HEAD(&devices, &device_1, link);
++    SLIST_INSERT_HEAD(&device_1_only, &device_1, link);
 +
 +    struct lgtd_lifx_tag *gw_2_tag_1 = lgtd_tests_insert_mock_tag("vapor");
 +    struct lgtd_lifx_tag *gw_2_tag_2 = lgtd_tests_insert_mock_tag("d^-^b");
@@ -1375,15 +1819,13 @@ new file mode 100644
 +int
 +main(void)
 +{
-+    struct lgtd_client client;
-+    memset(&client, 0, sizeof(client));
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
 +
 +    setup_devices();
 +
-+    lgtd_proto_tag(&client, targets, "dub");
++    lgtd_proto_tag(&client, FAKE_TARGET_LIST, "dub");
 +
 +    const char expected[] = "true";
-+
 +    if (client_write_buf_idx != sizeof(expected) - 1) {
 +        lgtd_errx(
 +            1,
@@ -1393,7 +1835,6 @@ new file mode 100644
 +            client_write_buf_idx, client_write_buf, expected
 +        );
 +    }
-+
 +    if (memcmp(expected, client_write_buf, sizeof(expected) - 1)) {
 +        lgtd_errx(
 +            1, "got %.*s instead of %s",
@@ -1401,19 +1842,518 @@ new file mode 100644
 +        );
 +    }
 +
++    if (!gateway_send_to_site_called) {
++        lgtd_errx(1, "SET_TAG_LABELS wasn't sent");
++    }
 +    if (!device_list_free_called) {
 +        lgtd_errx(1, "the list of devices hasn't been freed");
 +    }
 +    if (!send_to_device_called) {
-+        lgtd_errx(1, "nothing was send to any device");
++        lgtd_errx(1, "SET_TAGS wasn't send to any device");
 +    }
 +
 +    return 0;
 +}
 diff --git a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
 new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+@@ -0,0 +1,208 @@
++#include "proto.c"
++
++#include "mock_client_buf.h"
++#define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
++#define MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
++#include "tests_shims.h"
++#include "tests_utils.h"
++
++#define MOCKED_CLIENT_SEND_ERROR
++#define MOCKED_ROUTER_TARGETS_TO_DEVICES
++#define MOCKED_ROUTER_SEND_TO_DEVICE
++#define MOCKED_ROUTER_DEVICE_LIST_FREE
++#include "tests_proto_utils.h"
++
++#define FAKE_TARGET_LIST (void *)0x2a
++
++static struct lgtd_router_device_list devices =
++    SLIST_HEAD_INITIALIZER(&devices);
++static struct lgtd_router_device_list device_1_only =
++    SLIST_HEAD_INITIALIZER(&device_1_only);
++
++static bool client_send_error_called = false;
++
++void
++lgtd_client_send_error(struct lgtd_client *client,
++                       enum lgtd_client_error_code error,
++                       const char *msg)
++{
++    if (!client) {
++        errx(1, "client_send_error called without a client");
++    }
++
++    if (!error) {
++        errx(1, "client_send_error called without an error code");
++    }
++
++    if (!msg) {
++        errx(1, "client_send_error called without an error message");
++    }
++
++    client_send_error_called = true;
++}
++
++static bool send_to_device_called = false;
++
++void
++lgtd_router_send_to_device(struct lgtd_lifx_bulb *bulb,
++                           enum lgtd_lifx_packet_type pkt_type,
++                           void *pkt)
++{
++    (void)bulb;
++    (void)pkt_type;
++    (void)pkt;
++
++    send_to_device_called = true;
++}
++
++static bool gateway_send_to_site_called = false;
++
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt)
++{
++    (void)gw;
++    (void)pkt_type;
++    (void)pkt;
++
++    gateway_send_to_site_called = true;
++
++    return true;
++}
++
++static bool gateway_allocate_tag_id_called = false;
++
++int
++lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
++                                  int tag_id,
++                                  const char *tag_label)
++{
++    if (gateway_allocate_tag_id_called) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "should have been called once only"
++        );
++    }
++
++    if (tag_id != -1) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "tag_id %d (expected -1)", tag_id
++        );
++    }
++
++    if (!gw) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "must be called with gateway"
++        );
++    }
++
++    if (!tag_label) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "must be called with a tag_label"
++        );
++    }
++
++    return -1;  // no more tag id available
++}
++
++static bool device_list_free_called = false;
++
++void
++lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
++{
++    if (!devices) {
++        lgtd_errx(1, "the device list must be passed");
++    }
++
++    device_list_free_called = true;
++}
++
++struct lgtd_router_device_list *
++lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *targets)
++{
++    if (targets != FAKE_TARGET_LIST) {
++        lgtd_errx(1, "unexpected targets list");
++    }
++
++    return &device_1_only;
++}
++
++static void
++setup_devices(void)
++{
++    static struct lgtd_lifx_gateway gw_bulb_1 = {
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs)
++    };
++    static struct lgtd_lifx_bulb bulb_1 = {
++        .addr = { 1, 2, 3, 4, 5 },
++        .state = {
++            .hue = 0xaaaa,
++            .saturation = 0xffff,
++            .brightness = 0xbbbb,
++            .kelvin = 3600,
++            .label = "wave",
++            .power = LGTD_LIFX_POWER_ON,
++            .tags = 0
++        },
++        .gw = &gw_bulb_1
++    };
++    static struct lgtd_router_device device_1 = { .device = &bulb_1 };
++    SLIST_INSERT_HEAD(&devices, &device_1, link);
++    SLIST_INSERT_HEAD(&device_1_only, &device_1, link);
++
++    struct lgtd_lifx_tag *gw_2_tag_1 = lgtd_tests_insert_mock_tag("vapor");
++    struct lgtd_lifx_tag *gw_2_tag_2 = lgtd_tests_insert_mock_tag("d^-^b");
++    struct lgtd_lifx_tag *gw_2_tag_3 = lgtd_tests_insert_mock_tag("wave~");
++    static struct lgtd_lifx_gateway gw_bulb_2 = {
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_2.bulbs),
++        .tag_ids = 0x7
++    };
++    lgtd_tests_add_tag_to_gw(gw_2_tag_1, &gw_bulb_2, 0);
++    lgtd_tests_add_tag_to_gw(gw_2_tag_2, &gw_bulb_2, 1);
++    lgtd_tests_add_tag_to_gw(gw_2_tag_3, &gw_bulb_2, 2);
++    static struct lgtd_lifx_bulb bulb_2 = {
++        .addr = { 5, 4, 3, 2, 1 },
++        .state = {
++            .hue = 0x0000,
++            .saturation = 0x0000,
++            .brightness = 0xffff,
++            .kelvin = 4000,
++            .label = "",
++            .power = LGTD_LIFX_POWER_OFF,
++            .tags = 0x3
++        },
++        .gw = &gw_bulb_2
++    };
++    static struct lgtd_router_device device_2 = { .device = &bulb_2 };
++    SLIST_INSERT_HEAD(&devices, &device_2, link);
++}
++
++int
++main(void)
++{
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++
++    setup_devices();
++
++    lgtd_proto_tag(&client, FAKE_TARGET_LIST, "dub");
++
++
++    if (gateway_send_to_site_called) {
++        lgtd_errx(1, "SET_TAG_LABELS shouldn't have been sent");
++    }
++    if (!device_list_free_called) {
++        lgtd_errx(1, "the list of devices hasn't been freed");
++    }
++    if (send_to_device_called) {
++        lgtd_errx(1, "SET_TAGS shouldn't have been to any device");
++    }
++    if (!client_send_error_called) {
++        lgtd_errx(1, "client_send_error should have been called");
++    }
++
++    return 0;
++}
 diff --git a/tests/core/proto/test_proto_tag_update.c b/tests/core/proto/test_proto_tag_update.c
 new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_tag_update.c
+@@ -0,0 +1,282 @@
++#include "proto.c"
++
++#include "mock_client_buf.h"
++#define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
++#define MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
++#include "tests_shims.h"
++#include "tests_utils.h"
++
++#define MOCKED_ROUTER_TARGETS_TO_DEVICES
++#define MOCKED_ROUTER_SEND_TO_DEVICE
++#define MOCKED_ROUTER_DEVICE_LIST_FREE
++#include "tests_proto_utils.h"
++
++#define FAKE_TARGET_LIST (void *)0x2a
++
++static struct lgtd_router_device_list devices =
++    SLIST_HEAD_INITIALIZER(&devices);
++
++static bool send_to_device_called = false;
++
++void
++lgtd_router_send_to_device(struct lgtd_lifx_bulb *bulb,
++                           enum lgtd_lifx_packet_type pkt_type,
++                           void *pkt)
++{
++    if (send_to_device_called) {
++        errx(1, "lgtd_router_send_to_device should have been called once only");
++    }
++
++    if (!bulb) {
++        errx(1, "lgtd_router_send_to_device must be called with a bulb");
++    }
++
++    uint8_t expected_addr[LGTD_LIFX_ADDR_LENGTH] = { 5, 4, 3, 2, 1 };
++    if (memcmp(bulb->addr, expected_addr, LGTD_LIFX_ADDR_LENGTH)) {
++        errx(
++            1, "got bulb with addr %s (expected %s)",
++            lgtd_addrtoa(bulb->addr), lgtd_addrtoa(expected_addr)
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_TAGS) {
++        errx(
++            1, "got packet type %d (expected %d)", pkt_type, LGTD_LIFX_SET_TAGS
++        );
++    }
++
++    if (!pkt) {
++        errx(1, "missing SET_TAGS payload");
++    }
++
++    const struct lgtd_lifx_packet_tags *pkt_tags = pkt;
++    uint64_t tags = le64toh(pkt_tags->tags);
++
++    if (tags != 0x7) {
++        errx(
++            1, "invalid SET_TAGS payload=%#jx (expected %#x)",
++            (uintmax_t)tags, 0x7
++        );
++    }
++
++    send_to_device_called = true;
++}
++
++static bool gateway_send_to_site_called_for_gw_1 = false;
++static bool gateway_send_to_site_called_for_gw_2 = false;
++
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt)
++{
++    if (!gw) {
++        errx(1, "missing gateway");
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_TAG_LABELS) {
++        errx(
++            1, "got packet type %#x (expected %#x)",
++            pkt_type, LGTD_LIFX_SET_TAG_LABELS
++        );
++    }
++
++    const struct lgtd_lifx_packet_tag_labels *pkt_tag_labels = pkt;
++    uint64_t tags = le64toh(pkt_tag_labels->tags);
++
++    if (strcmp(pkt_tag_labels->label, "dub")) {
++        errx(1, "got label %s (expected dub)", pkt_tag_labels->label);
++    }
++
++    if (gw->site.as_integer == 42) {
++        if (tags != 0x1) {
++            errx(1, "got tags %#jx (expected %#x)", (uintmax_t)tags, 0x1);
++        }
++        if (gateway_send_to_site_called_for_gw_1) {
++            errx(1, "LGTD_LIFX_SET_TAG_LABELS already called for gw 1");
++        }
++        gateway_send_to_site_called_for_gw_1 = true;
++    } else if (gw->site.as_integer == 44) {
++        if (tags != 0x4) {
++            errx(1, "got tags %#jx (expected %#x)", (uintmax_t)tags, 0x4);
++        }
++        if (gateway_send_to_site_called_for_gw_2) {
++            errx(1, "LGTD_LIFX_SET_TAG_LABELS already called for gw 2");
++        }
++        gateway_send_to_site_called_for_gw_2 = true;
++    } else {
++        errx(1, "LGTD_LIFX_SET_TAG_LABELS received an invalid gateway");
++    }
++
++    return true;
++}
++
++static bool gateway_allocate_tag_id_called = false;
++
++int
++lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
++                                  int tag_id,
++                                  const char *tag_label)
++{
++    if (gateway_allocate_tag_id_called) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "should have been called once only"
++        );
++    }
++
++    if (tag_id != -1) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "tag_id %d (expected -1)", tag_id
++        );
++    }
++
++    if (!gw) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "must be called with gateway"
++        );
++    }
++
++    if (!tag_label) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id "
++            "must be called with a tag_label"
++        );
++    }
++
++    if (gw->site.as_integer != 44) {
++        errx(
++            1, "lgtd_lifx_gateway_allocate_tag_id got the wrong gateway "
++            "%#jx (expected %d)", (uintmax_t)gw->site.as_integer, 44
++        );
++    }
++
++    tag_id = 2;
++
++    struct lgtd_lifx_tag *tag = lgtd_lifx_tagging_find_tag(tag_label);
++    if (!tag) {
++        errx(1, "tag %s wasn't found", tag_label);
++    }
++    lgtd_tests_add_tag_to_gw(tag, gw, tag_id);
++
++    gateway_allocate_tag_id_called = true;
++
++    return tag_id;
++}
++
++static bool device_list_free_called = false;
++
++void
++lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
++{
++    if (!devices) {
++        lgtd_errx(1, "the device list must be passed");
++    }
++
++    device_list_free_called = true;
++}
++
++struct lgtd_router_device_list *
++lgtd_router_targets_to_devices(const struct lgtd_proto_target_list *targets)
++{
++    if (targets != FAKE_TARGET_LIST) {
++        lgtd_errx(1, "unexpected targets list");
++    }
++
++    return &devices;
++}
++
++static void
++setup_devices(void)
++{
++    static struct lgtd_lifx_gateway gw_bulb_1 = {
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs),
++        .site = { .as_integer = 42 }
++    };
++    static struct lgtd_lifx_bulb bulb_1 = {
++        .addr = { 1, 2, 3, 4, 5 },
++        .state = {
++            .hue = 0xaaaa,
++            .saturation = 0xffff,
++            .brightness = 0xbbbb,
++            .kelvin = 3600,
++            .label = "wave",
++            .power = LGTD_LIFX_POWER_ON,
++            .tags = 1
++        },
++        .gw = &gw_bulb_1
++    };
++    static struct lgtd_router_device device_1 = { .device = &bulb_1 };
++    SLIST_INSERT_HEAD(&devices, &device_1, link);
++    struct lgtd_lifx_tag *gw_1_tag_1 = lgtd_tests_insert_mock_tag("dub");
++    lgtd_tests_add_tag_to_gw(gw_1_tag_1, &gw_bulb_1, 0);
++
++    struct lgtd_lifx_tag *gw_2_tag_1 = lgtd_tests_insert_mock_tag("vapor");
++    struct lgtd_lifx_tag *gw_2_tag_2 = lgtd_tests_insert_mock_tag("d^-^b");
++    static struct lgtd_lifx_gateway gw_bulb_2 = {
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_2.bulbs),
++        .site = { .as_integer = 44 },
++        .tag_ids = 0x3
++    };
++    lgtd_tests_add_tag_to_gw(gw_2_tag_1, &gw_bulb_2, 0);
++    lgtd_tests_add_tag_to_gw(gw_2_tag_2, &gw_bulb_2, 1);
++    static struct lgtd_lifx_bulb bulb_2 = {
++        .addr = { 5, 4, 3, 2, 1 },
++        .state = {
++            .hue = 0x0000,
++            .saturation = 0x0000,
++            .brightness = 0xffff,
++            .kelvin = 4000,
++            .label = "",
++            .power = LGTD_LIFX_POWER_OFF,
++            .tags = 0x3
++        },
++        .gw = &gw_bulb_2
++    };
++    static struct lgtd_router_device device_2 = { .device = &bulb_2 };
++    SLIST_INSERT_HEAD(&devices, &device_2, link);
++}
++
++int
++main(void)
++{
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++
++    setup_devices();
++
++    lgtd_proto_tag(&client, FAKE_TARGET_LIST, "dub");
++
++    const char expected[] = "true";
++    if (client_write_buf_idx != sizeof(expected) - 1) {
++        lgtd_errx(
++            1,
++            "%d bytes written, expected %lu "
++            "(got %.*s instead of %s)",
++            client_write_buf_idx, sizeof(expected) - 1UL,
++            client_write_buf_idx, client_write_buf, expected
++        );
++    }
++    if (memcmp(expected, client_write_buf, sizeof(expected) - 1)) {
++        lgtd_errx(
++            1, "got %.*s instead of %s",
++            client_write_buf_idx, client_write_buf, expected
++        );
++    }
++
++    if (!gateway_send_to_site_called_for_gw_1) {
++        lgtd_errx(1, "SET_TAG_LABELS wasn't sent to gw 1");
++    }
++    if (!gateway_send_to_site_called_for_gw_2) {
++        lgtd_errx(1, "SET_TAG_LABELS wasn't sent to gw 2");
++    }
++    if (!device_list_free_called) {
++        lgtd_errx(1, "the list of devices hasn't been freed");
++    }
++    if (!send_to_device_called) {
++        lgtd_errx(1, "SET_TAGS wasn't send to any device");
++    }
++
++    return 0;
++}
 diff --git a/tests/core/proto/test_proto_untag.c b/tests/core/proto/test_proto_untag.c
 new file mode 100644
 --- /dev/null
@@ -1422,6 +2362,7 @@ new file mode 100644
 +#include "proto.c"
 +
 +#include "mock_client_buf.h"
++#include "tests_shims.h"
 +#include "tests_utils.h"
 +
 +#define MOCKED_ROUTER_TARGETS_TO_DEVICES
@@ -1551,8 +2492,7 @@ new file mode 100644
 +int
 +main(void)
 +{
-+    struct lgtd_client client;
-+    memset(&client, 0, sizeof(client));
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
 +
 +    struct lgtd_proto_target_list *targets = (void *)0x2a;
 +
@@ -1596,6 +2536,7 @@ new file mode 100644
 +#include "proto.c"
 +
 +#include "mock_client_buf.h"
++#include "tests_shims.h"
 +#include "tests_utils.h"
 +
 +#define MOCKED_ROUTER_TARGETS_TO_DEVICES
@@ -1644,8 +2585,7 @@ new file mode 100644
 +int
 +main(void)
 +{
-+    struct lgtd_client client;
-+    memset(&client, 0, sizeof(client));
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
 +
 +    struct lgtd_proto_target_list *targets;
 +    targets = lgtd_tests_build_target_list("*", NULL);
@@ -1685,7 +2625,15 @@ new file mode 100644
 diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
 --- a/tests/core/proto/tests_proto_utils.h
 +++ b/tests/core/proto/tests_proto_utils.h
-@@ -32,6 +32,18 @@
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#define FAKE_BUFFEREVENT (void *)0xfeed
++
+ void
+ lgtd_client_start_send_response(struct lgtd_client *client)
+ {
+@@ -32,6 +34,18 @@
  }
  #endif
  
@@ -1729,7 +2677,7 @@ diff --git a/tests/core/router/test_router_send_to_broadcast.c b/tests/core/rout
 diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 --- a/tests/core/tests_shims.c
 +++ b/tests/core/tests_shims.c
-@@ -70,14 +70,65 @@
+@@ -70,14 +70,42 @@
      (void)pkt;
  }
  
@@ -1746,17 +2694,6 @@ diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 +    (void)gw;
 +    (void)hdr;
 +    (void)pkt;
-+}
-+
-+int
-+lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
-+                                  int tag_id,
-+                                  const char *tag_label)
-+{
-+    (void)gw;
-+    (void)tag_id;
-+    (void)tag_label;
-+    return -1;
 +}
 +
 +void
@@ -1781,18 +2718,6 @@ diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 +    return -1;
  }
 +
-+bool lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
-+                                    enum lgtd_lifx_packet_type pkt_type,
-+                                    const void *pkt,
-+                                    int pkt_size)
-+{
-+    (void)gw;
-+    (void)pkt_type;
-+    (void)pkt;
-+    (void)pkt_size;
-+    return false;
-+}
-+
 +void
 +lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
 +                                       uint64_t bulb_tags,
@@ -1802,6 +2727,38 @@ diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 +    (void)bulb_tags;
 +    (void)pkt_tags;
 +}
+diff --git a/tests/core/tests_shims.h b/tests/core/tests_shims.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/tests_shims.h
+@@ -0,0 +1,27 @@
++#pragma once
++
++#ifndef MOCKED_LIFX_GATEWAY_SEND_TO_SITE
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt)
++{
++    (void)gw;
++    (void)pkt_type;
++    (void)pkt;
++    return false;
++}
++#endif
++
++#ifndef MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
++int
++lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
++                                  int tag_id,
++                                  const char *tag_label)
++{
++    (void)gw;
++    (void)tag_id;
++    (void)tag_label;
++    return -1;
++}
++#endif
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
@@ -1815,15 +2772,26 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
  struct lgtd_lifx_gateway *
  lgtd_tests_insert_mock_gateway(int id)
  {
+@@ -108,7 +105,10 @@
+     struct lgtd_lifx_site *site = calloc(1, sizeof(*site));
+     site->gw = gw;
+     site->tag_id = tag_id;
++    LIST_INSERT_HEAD(&tag->sites, site, link);
++
+     gw->tags[tag_id] = tag;
+-    LIST_INSERT_HEAD(&tag->sites, site, link);
++    gw->tag_ids |= LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
++
+     return site;
+ }
 diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id.c b/tests/lifx/gateway/test_gateway_allocate_tag_id.c
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/gateway/test_gateway_allocate_tag_id.c
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,102 @@
++#include "gateway.c"
 +
 +#include <string.h>
-+
-+#include "gateway.c"
 +
 +#define MOCKED_LIFX_TAGGING_INCREF
 +#include "test_gateway_utils.h"
@@ -2013,6 +2981,117 @@ new file mode 100644
 +    }
 +    if (tagging_incref_called) {
 +        errx(1, "lgtd_lifx_tagging_incref should not have been called");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/test_gateway_update_tag_refcounts.c b/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
+@@ -0,0 +1,106 @@
++#include "gateway.c"
++
++#include "test_gateway_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_infos_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    lgtd_lifx_gateway_update_tag_refcounts(&gw, 0, 0);
++    for (int i = 0; i != LGTD_LIFX_GATEWAY_MAX_TAGS; i++) {
++        if (gw.tag_refcounts[i]) {
++            errx(
++                1, "gw.tag_refcounts[%d] was %d, (expected 0)",
++                i, gw.tag_refcounts[i]
++            );
++        }
++    }
++
++    for (int n = 1; n != 3; n++) {
++        lgtd_lifx_gateway_update_tag_refcounts(&gw, 0, 1);
++        if (gw.tag_refcounts[0] != n) {
++            errx(
++                1, "gw.tag_refcounts[0] was %d (expected %d)",
++                gw.tag_refcounts[0], n
++            );
++        }
++        for (int i = 1; i != LGTD_LIFX_GATEWAY_MAX_TAGS; i++) {
++            if (gw.tag_refcounts[i]) {
++                errx(
++                    1, "gw.tag_refcounts[%d] was %d (expected 0)",
++                    i, gw.tag_refcounts[i]
++                );
++            }
++        }
++    }
++
++    lgtd_lifx_gateway_update_tag_refcounts(&gw, 0, 2);
++    gw.tag_ids = 0x2;
++
++    for (int n = 1; n >= 0; n--) {
++        lgtd_lifx_gateway_update_tag_refcounts(&gw, 1, 0);
++        if (gw.tag_refcounts[0] != n) {
++            errx(
++                1, "gw.tag_refcounts[0] was %d (expected %d)",
++                gw.tag_refcounts[0], n - 1
++            );
++        }
++        if (gw.tag_refcounts[1] != 1) {
++            errx(
++                1, "gw.tag_refcounts[1] was %d (expected 1)",
++                gw.tag_refcounts[1]
++            );
++        }
++        for (int i = 2; i != LGTD_LIFX_GATEWAY_MAX_TAGS; i++) {
++            if (gw.tag_refcounts[i]) {
++                errx(
++                    1, "gw.tag_refcounts[%d] was %d (expected 0)",
++                    i, gw.tag_refcounts[i]
++                );
++            }
++        }
++    }
++    if (gw.pkt_ring[0].type != LGTD_LIFX_SET_TAG_LABELS) {
++        errx(1, "SET_TAG_LABELS should have been enqueued on the gateway");
++    }
++
++    struct lgtd_lifx_packet_tag_labels *pkt =
++        (void *)&gw_write_buf[sizeof(struct lgtd_lifx_packet_header)];
++    uint64_t tags = le64toh(pkt->tags);
++    if (tags != ~2ULL) {
++        errx(
++            1, "tags on LGTD_LIFX_SET_TAG_LABELS was %#jx (expected %#jx)",
++            (uintmax_t)tags, (uintmax_t)~2ULL
++        );
++    }
++    const char blank_label[LGTD_LIFX_LABEL_SIZE] = { 0 };
++    if (memcmp(pkt->label, blank_label, LGTD_LIFX_LABEL_SIZE)) {
++        errx(
++            1, "label on LGTD_LIFX_SET_TAG_LABELS should be "
++            "all zero but got %.*s", LGTD_LIFX_LABEL_SIZE, pkt->label
++        );
++    }
++
++    for (int n = 0; n != UINT8_MAX; n++) {
++        lgtd_lifx_gateway_update_tag_refcounts(&gw, 0, 4);
++    }
++    if (gw.tag_refcounts[2] != UINT8_MAX) {
++        errx(
++            1, "gw.tag_refcounts[2] was %d (expected %d)",
++            gw.tag_refcounts[2], UINT8_MAX
++        );
++    }
++    lgtd_lifx_gateway_update_tag_refcounts(&gw, 0, 4);
++    if (gw.tag_refcounts[2] != UINT8_MAX) {
++        errx(
++            1, "gw.tag_refcounts[2] was %d (expected %d)",
++            gw.tag_refcounts[2], UINT8_MAX
++        );
 +    }
 +
 +    return 0;
