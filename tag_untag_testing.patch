@@ -1,6 +1,59 @@
 # HG changeset patch
-# Parent  e1c9800ece5cb3b9d8ed9265f7c1b07e2b66a746
+# Parent  0212ce4961c923eba962c246c4d2d5de75bd6fb3
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
++CMAKE_MINIMUM_REQUIRED(VERSION 2.8.11)  # first version TARGET_INCLUDE_DIRECTORIES
+ 
+ PROJECT(LIGHTSD C)
+ 
+@@ -58,10 +58,11 @@
+ ENDIF ()
+ 
+ INCLUDE_DIRECTORIES(
+-    ${LIGHTSD_SOURCE_DIR}/compat/generic
+     ${LIGHTSD_BINARY_DIR}/compat
++    ${LIGHTSD_BINARY_DIR}/compat/generic
+ )
+ 
++ADD_SUBDIRECTORY(compat)
+ ADD_SUBDIRECTORY(core)
+ ADD_SUBDIRECTORY(lifx)
+ ADD_SUBDIRECTORY(tests)
+diff --git a/CMakeScripts/AddTestFromSources.cmake b/CMakeScripts/AddTestFromSources.cmake
+--- a/CMakeScripts/AddTestFromSources.cmake
++++ b/CMakeScripts/AddTestFromSources.cmake
+@@ -1,11 +1,11 @@
+-FUNCTION(ADD_TEST_FROM_C_SOURCES TEST_SOURCE TEST_LIB)
++FUNCTION(ADD_TEST_FROM_C_SOURCES TEST_SOURCE)
+     STRING(LENGTH ${TEST_SOURCE} TEST_NAME_LEN)
+     STRING(LENGTH "test_" PREFIX_LEN)
+     MATH(EXPR TEST_NAME_LEN "${TEST_NAME_LEN} - 2 - ${PREFIX_LEN}")
+     STRING(SUBSTRING ${ARGV0} ${PREFIX_LEN} ${TEST_NAME_LEN} TEST_NAME)
+-    ADD_EXECUTABLE(${TEST_NAME} ${TEST_SOURCE} ${ARGN})
+-    IF (TEST_LIB)
+-        TARGET_LINK_LIBRARIES(${TEST_NAME} ${TEST_LIB})
++    ADD_EXECUTABLE(${TEST_NAME} ${TEST_SOURCE})
++    IF (ARGN)
++        TARGET_LINK_LIBRARIES(${TEST_NAME} ${ARGN})
+     ENDIF ()
+     ADD_TEST(test_${TEST_NAME} ${TEST_NAME})
+ ENDFUNCTION()
+diff --git a/compat/CMakeLists.txt b/compat/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/compat/CMakeLists.txt
+@@ -0,0 +1,1 @@
++ADD_SUBDIRECTORY(generic)
+diff --git a/compat/generic/CMakeLists.txt b/compat/generic/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/compat/generic/CMakeLists.txt
+@@ -0,0 +1,1 @@
++FILE(COPY sys DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
@@ -9,9 +62,9 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      assert(bulb->gw);
  
 +#ifndef NDEBUG
-+    // FIXME: Yeah, so an unit test would be better because it can be easily
-+    // automated, but this looks so much easier to do and this code path is
-+    // often exercised:
++    // FIXME: Yeah, so an unit test lgtd_lifx_gateway_remove_and_close_bulb
++    // would be better because it can be automated, but this looks so much
++    // easier to do and this code path is often exercised:
 +    int tag_id;
 +    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, bulb->state.tags) {
 +        int n = 0;
@@ -21,13 +74,69 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +                n++;
 +            }
 +        }
-+        assert(bulb->gw->tag_refcounts[i] == n - 1);
++        assert(bulb->gw->tag_refcounts[tag_id] == n - 1);
 +    }
 +#endif
 +
      LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs, -1);
      if (bulb->state.power == LGTD_LIFX_POWER_ON) {
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs_powered_on, -1);
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1,1 +1,14 @@
++FUNCTION(ADD_CORE_LIBRARY LIBNAME)
++    ADD_LIBRARY(${LIBNAME} ${ARGN})
++    TARGET_LINK_LIBRARIES(${LIBNAME} ${TIME_MONOTONIC_LIBRARY})
++    TARGET_INCLUDE_DIRECTORIES(
++        ${LIBNAME} PUBLIC
++        ${LIGHTSD_SOURCE_DIR}/core/
++        ${LIGHTSD_BINARY_DIR}/core/
++    )
++    IF (HAVE_LIBBSD)
++        TARGET_LINK_LIBRARIES(${LIBNAME} ${LIBBSD_LIBRARY})
++    ENDIF (HAVE_LIBBSD)
++ENDFUNCTION()
++
+ ADD_ALL_SUBDIRECTORIES()
+diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
+--- a/tests/core/CMakeLists.txt
++++ b/tests/core/CMakeLists.txt
+@@ -2,9 +2,11 @@
+     ${LIGHTSD_SOURCE_DIR}
+     ${LIGHTSD_SOURCE_DIR}/core/
+     ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_SOURCE_DIR}/../lifx
+     ${LIGHTSD_BINARY_DIR}
+     ${LIGHTSD_BINARY_DIR}/core/
+     ${CMAKE_CURRENT_BINARY_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}/../lifx
+ )
+ 
+ ADD_ALL_SUBDIRECTORIES()
+diff --git a/tests/core/jsonrpc/CMakeLists.txt b/tests/core/jsonrpc/CMakeLists.txt
+--- a/tests/core/jsonrpc/CMakeLists.txt
++++ b/tests/core/jsonrpc/CMakeLists.txt
+@@ -3,7 +3,7 @@
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
+-ADD_LIBRARY(
++ADD_CORE_LIBRARY(
+     test_core_jsonrpc STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+@@ -13,10 +13,6 @@
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+-TARGET_LINK_LIBRARIES(test_core_jsonrpc ${TIME_MONOTONIC_LIBRARY})
+-IF (HAVE_LIBBSD)
+-    TARGET_LINK_LIBRARIES(test_core_jsonrpc ${LIBBSD_LIBRARY})
+-ENDIF (HAVE_LIBBSD)
+ 
+ FUNCTION(ADD_JSONRPC_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_jsonrpc)
 diff --git a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
 --- a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
 +++ b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
@@ -360,142 +469,29 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c b/te
  #include "test_jsonrpc_utils.h"
  
  int
-diff --git a/tests/core/mock_gateway.h b/tests/core/mock_gateway.h
-new file mode 100644
---- /dev/null
-+++ b/tests/core/mock_gateway.h
-@@ -0,0 +1,131 @@
-+#pragma once
-+
-+#include "time_monotonic.h"
-+#include "lifx/bulb.h"
-+#include "lifx/gateway.h"
-+
-+struct lgtd_lifx_tag;
-+struct lgtd_lifx_gateway;
-+
-+#ifndef MOCKED_LIFX_GATEWAY_SEND_TO_SITE
-+bool
-+lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
-+                               enum lgtd_lifx_packet_type pkt_type,
-+                               const void *pkt)
-+{
-+    (void)gw;
-+    (void)pkt_type;
-+    (void)pkt;
-+    return false;
-+}
-+#endif
-+
-+#ifndef MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
-+int
-+lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
-+                                  int tag_id,
-+                                  const char *tag_label)
-+{
-+    (void)gw;
-+    (void)tag_id;
-+    (void)tag_label;
-+    return -1;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_PAN_GATEWAY
-+void
-+lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
-+                                     const struct lgtd_lifx_packet_header *hdr,
-+                                     const struct lgtd_lifx_packet_pan_gateway *pkt)
-+{
-+    (void)gw;
-+    (void)hdr;
-+    (void)pkt;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_LIGHT_STATUS
-+void
-+lgtd_lifx_gateway_handle_light_status(struct lgtd_lifx_gateway *gw,
-+                                      const struct lgtd_lifx_packet_header *hdr,
-+                                      const struct lgtd_lifx_packet_light_status *pkt)
-+{
-+    (void)gw;
-+    (void)hdr;
-+    (void)pkt;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_POWER_STATE
-+void
-+lgtd_lifx_gateway_handle_power_state(struct lgtd_lifx_gateway *gw,
-+                                     const struct lgtd_lifx_packet_header *hdr,
-+                                     const struct lgtd_lifx_packet_power_state *pkt)
-+{
-+    (void)gw;
-+    (void)hdr;
-+    (void)pkt;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_TAG_LABELS
-+void
-+lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
-+                                    const struct lgtd_lifx_packet_header *hdr,
-+                                    const struct lgtd_lifx_packet_tag_labels *pkt)
-+{
-+    (void)gw;
-+    (void)hdr;
-+    (void)pkt;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_TAGS
-+void
-+lgtd_lifx_gateway_handle_tags(struct lgtd_lifx_gateway *gw,
-+                              const struct lgtd_lifx_packet_header *hdr,
-+                              const struct lgtd_lifx_packet_tags *pkt)
-+{
-+    (void)gw;
-+    (void)hdr;
-+    (void)pkt;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_DEALLOCATE_TAG_ID
-+void
-+lgtd_lifx_gateway_deallocate_tag_id(struct lgtd_lifx_gateway *gw, int tag_id)
-+{
-+    (void)gw;
-+    (void)tag_id;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_GET_TAG_ID
-+int
-+lgtd_lifx_gateway_get_tag_id(const struct lgtd_lifx_gateway *gw,
-+                             const struct lgtd_lifx_tag *tag)
-+{
-+    int tag_id;
-+    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, gw->tag_ids) {
-+        if (gw->tags[tag_id] == tag) {
-+            return tag_id;
-+        }
-+    }
-+
-+    return -1;
-+}
-+#endif
-+
-+#ifndef LGTD_LIFX_GATEWAY_UPDATE_TAG_REFCOUNTS
-+void
-+lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
-+                                       uint64_t bulb_tags,
-+                                       uint64_t pkt_tags)
-+{
-+    (void)gw;
-+    (void)bulb_tags;
-+    (void)pkt_tags;
-+}
-+#endif
+diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
+--- a/tests/core/proto/CMakeLists.txt
++++ b/tests/core/proto/CMakeLists.txt
+@@ -3,7 +3,7 @@
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
+-ADD_LIBRARY(
++ADD_CORE_LIBRARY(
+     test_core_proto STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/jsonrpc.c
+@@ -15,10 +15,6 @@
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+-TARGET_LINK_LIBRARIES(test_core_proto ${TIME_MONOTONIC_LIBRARY})
+-IF (HAVE_LIBBSD)
+-    TARGET_LINK_LIBRARIES(test_core_proto ${LIBBSD_LIBRARY})
+-ENDIF (HAVE_LIBBSD)
+ 
+ FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
 diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
 --- a/tests/core/proto/test_proto_get_light_state.c
 +++ b/tests/core/proto/test_proto_get_light_state.c
@@ -688,6 +684,32 @@ diff --git a/tests/core/proto/test_proto_untag_tag_does_not_exist.c b/tests/core
  #include "tests_utils.h"
  
  #define MOCKED_ROUTER_TARGETS_TO_DEVICES
+diff --git a/tests/core/router/CMakeLists.txt b/tests/core/router/CMakeLists.txt
+--- a/tests/core/router/CMakeLists.txt
++++ b/tests/core/router/CMakeLists.txt
+@@ -3,7 +3,7 @@
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
+-ADD_LIBRARY(
++ADD_CORE_LIBRARY(
+     test_core_router STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/proto.c
+@@ -16,12 +16,7 @@
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+ 
+-TARGET_LINK_LIBRARIES(
+-    test_core_router ${EVENT2_CORE_LIBRARY} ${TIME_MONOTONIC_LIBRARY}
+-)
+-IF (HAVE_LIBBSD)
+-    TARGET_LINK_LIBRARIES(test_core_router ${LIBBSD_LIBRARY})
+-ENDIF (HAVE_LIBBSD)
++TARGET_LINK_LIBRARIES(test_core_router ${EVENT2_CORE_LIBRARY})
+ 
+ FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_router)
 diff --git a/tests/core/router/tests_router_utils.h b/tests/core/router/tests_router_utils.h
 --- a/tests/core/router/tests_router_utils.h
 +++ b/tests/core/router/tests_router_utils.h
@@ -819,33 +841,35 @@ diff --git a/tests/lifx/bulb/CMakeLists.txt b/tests/lifx/bulb/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/bulb/CMakeLists.txt
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,29 @@
 +INCLUDE_DIRECTORIES(
 +    ${CMAKE_CURRENT_SOURCE_DIR}
 +    ${CMAKE_CURRENT_BINARY_DIR}
 +)
 +
-+ADD_LIBRARY(
-+    test_lifx_bulb STATIC
++ADD_CORE_LIBRARY(
++    test_lifx_bulb_core STATIC
 +    ${LIGHTSD_SOURCE_DIR}/core/log.c
 +    ${LIGHTSD_SOURCE_DIR}/core/router.c
 +    ${LIGHTSD_SOURCE_DIR}/core/stats.c
-+    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
-+    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
 +    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
 +)
-+TARGET_LINK_LIBRARIES(test_lifx_bulb ${TIME_MONOTONIC_LIBRARY})
-+IF (HAVE_LIBBSD)
-+    TARGET_LINK_LIBRARIES(test_lifx_bulb ${LIBBSD_LIBRARY})
-+ENDIF (HAVE_LIBBSD)
 +
-+FUNCTION(ADD_GATEWAY_TEST TEST_SOURCE)
-+    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_bulb)
++ADD_LIBRARY(
++    test_lifx_bulb STATIC
++    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
++)
++
++FUNCTION(ADD_BULB_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(
++        ${TEST_SOURCE} test_lifx_bulb_core test_lifx_bulb
++    )
 +ENDFUNCTION()
 +
 +FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
 +FOREACH(TEST ${TESTS})
-+    ADD_GATEWAY_TEST(${TEST})
++    ADD_BULB_TEST(${TEST})
 +ENDFOREACH()
 diff --git a/tests/lifx/bulb/test_bulb_close.c b/tests/lifx/bulb/test_bulb_close.c
 new file mode 100644
@@ -857,3 +881,249 @@ diff --git a/tests/lifx/bulb/test_bulb_set_power_state.c b/tests/lifx/bulb/test_
 new file mode 100644
 diff --git a/tests/lifx/bulb/test_bulb_set_tags.c b/tests/lifx/bulb/test_bulb_set_tags.c
 new file mode 100644
+--- /dev/null
++++ b/tests/lifx/bulb/test_bulb_set_tags.c
+@@ -0,0 +1,43 @@
++#include "bulb.c"
++
++#define MOCKED_LGTD_LIFX_GATEWAY_UPDATE_TAG_REFCOUNTS
++#include "mock_gateway.h"
++
++static bool update_tag_refcouts_called = false;
++
++void
++lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
++                                       uint64_t bulb_tags,
++                                       uint64_t pkt_tags)
++{
++    if (gw != (void *)0xdeaf) {
++        errx(1, "got wrong gw %p (expected 0xdeaf)", gw);
++    }
++
++    if (bulb_tags != 0x2a) {
++        errx(1, "got bulb_tags %#jx (expected 0x2a)", (uintmax_t)bulb_tags);
++    }
++
++    if (pkt_tags != 0xfeed) {
++        errx(1, "got pkt_tags %#jx (expected 0xfeed)", (uintmax_t)pkt_tags);
++    }
++
++    update_tag_refcouts_called = true;
++}
++
++int
++main(void)
++{
++    struct lgtd_lifx_bulb bulb = {
++        .state = { .tags = 0x2a },
++        .gw = (void *)0xdeaf
++    };
++
++    lgtd_lifx_bulb_set_tags(&bulb, 0xfeed);
++
++    if (!update_tag_refcouts_called) {
++        errx(1, "lgtd_lifx_gateway_update_tag_refcounts wasn't called");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.txt
+--- a/tests/lifx/gateway/CMakeLists.txt
++++ b/tests/lifx/gateway/CMakeLists.txt
+@@ -3,25 +3,27 @@
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
+-ADD_LIBRARY(
+-    test_lifx_gateway STATIC
++ADD_CORE_LIBRARY(
++    test_lifx_gateway_core STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/proto.c
+     ${LIGHTSD_SOURCE_DIR}/core/router.c
+     ${LIGHTSD_SOURCE_DIR}/core/stats.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++)
++
++ADD_LIBRARY(
++    test_lifx_gateway STATIC
+     ${LIGHTSD_SOURCE_DIR}/lifx/broadcast.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+-    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+ )
+-TARGET_LINK_LIBRARIES(test_lifx_gateway ${TIME_MONOTONIC_LIBRARY})
+-IF (HAVE_LIBBSD)
+-    TARGET_LINK_LIBRARIES(test_lifx_gateway ${LIBBSD_LIBRARY})
+-ENDIF (HAVE_LIBBSD)
+ 
+ FUNCTION(ADD_GATEWAY_TEST TEST_SOURCE)
+-    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_gateway)
++    ADD_TEST_FROM_C_SOURCES(
++        ${TEST_SOURCE} test_lifx_gateway_core test_lifx_gateway
++    )
+ ENDFUNCTION()
+ 
+ FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
+diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/mock_gateway.h
+@@ -0,0 +1,131 @@
++#pragma once
++
++#include "core/time_monotonic.h"
++#include "lifx/bulb.h"
++#include "lifx/gateway.h"
++
++struct lgtd_lifx_tag;
++struct lgtd_lifx_gateway;
++
++#ifndef MOCKED_LIFX_GATEWAY_SEND_TO_SITE
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt)
++{
++    (void)gw;
++    (void)pkt_type;
++    (void)pkt;
++    return false;
++}
++#endif
++
++#ifndef MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
++int
++lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
++                                  int tag_id,
++                                  const char *tag_label)
++{
++    (void)gw;
++    (void)tag_id;
++    (void)tag_label;
++    return -1;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_PAN_GATEWAY
++void
++lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
++                                     const struct lgtd_lifx_packet_header *hdr,
++                                     const struct lgtd_lifx_packet_pan_gateway *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_LIGHT_STATUS
++void
++lgtd_lifx_gateway_handle_light_status(struct lgtd_lifx_gateway *gw,
++                                      const struct lgtd_lifx_packet_header *hdr,
++                                      const struct lgtd_lifx_packet_light_status *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_POWER_STATE
++void
++lgtd_lifx_gateway_handle_power_state(struct lgtd_lifx_gateway *gw,
++                                     const struct lgtd_lifx_packet_header *hdr,
++                                     const struct lgtd_lifx_packet_power_state *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_TAG_LABELS
++void
++lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
++                                    const struct lgtd_lifx_packet_header *hdr,
++                                    const struct lgtd_lifx_packet_tag_labels *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_TAGS
++void
++lgtd_lifx_gateway_handle_tags(struct lgtd_lifx_gateway *gw,
++                              const struct lgtd_lifx_packet_header *hdr,
++                              const struct lgtd_lifx_packet_tags *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_DEALLOCATE_TAG_ID
++void
++lgtd_lifx_gateway_deallocate_tag_id(struct lgtd_lifx_gateway *gw, int tag_id)
++{
++    (void)gw;
++    (void)tag_id;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_GET_TAG_ID
++int
++lgtd_lifx_gateway_get_tag_id(const struct lgtd_lifx_gateway *gw,
++                             const struct lgtd_lifx_tag *tag)
++{
++    int tag_id;
++    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, gw->tag_ids) {
++        if (gw->tags[tag_id] == tag) {
++            return tag_id;
++        }
++    }
++
++    return -1;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_UPDATE_TAG_REFCOUNTS
++void
++lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
++                                       uint64_t bulb_tags,
++                                       uint64_t pkt_tags)
++{
++    (void)gw;
++    (void)bulb_tags;
++    (void)pkt_tags;
++}
++#endif
+diff --git a/tests/lifx/wire_proto/CMakeLists.txt b/tests/lifx/wire_proto/CMakeLists.txt
+--- a/tests/lifx/wire_proto/CMakeLists.txt
++++ b/tests/lifx/wire_proto/CMakeLists.txt
+@@ -3,18 +3,15 @@
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
+-ADD_LIBRARY(
+-    test_lifx_wire_proto STATIC
++ADD_CORE_LIBRARY(
++    test_lifx_wire_proto_core STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/stats.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+ )
+-IF (HAVE_LIBBSD)
+-    TARGET_LINK_LIBRARIES(test_lifx_wire_proto ${LIBBSD_LIBRARY})
+-ENDIF (HAVE_LIBBSD)
+ 
+ FUNCTION(ADD_WIRE_PROTO_TEST TEST_SOURCE)
+-    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_wire_proto)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_wire_proto_core)
+ ENDFUNCTION()
+ 
+ FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
