@@ -815,3 +815,45 @@ deleted file mode 100644
 -    return -1;
 -}
 -#endif
+diff --git a/tests/lifx/bulb/CMakeLists.txt b/tests/lifx/bulb/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/bulb/CMakeLists.txt
+@@ -0,0 +1,27 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++ADD_LIBRARY(
++    test_lifx_bulb STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/core/router.c
++    ${LIGHTSD_SOURCE_DIR}/core/stats.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++)
++TARGET_LINK_LIBRARIES(test_lifx_bulb ${TIME_MONOTONIC_LIBRARY})
++IF (HAVE_LIBBSD)
++    TARGET_LINK_LIBRARIES(test_lifx_bulb ${LIBBSD_LIBRARY})
++ENDIF (HAVE_LIBBSD)
++
++FUNCTION(ADD_GATEWAY_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_bulb)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_GATEWAY_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/lifx/bulb/test_bulb_close.c b/tests/lifx/bulb/test_bulb_close.c
+new file mode 100644
+diff --git a/tests/lifx/bulb/test_bulb_open.c b/tests/lifx/bulb/test_bulb_open.c
+new file mode 100644
+diff --git a/tests/lifx/bulb/test_bulb_set_light_state b/tests/lifx/bulb/test_bulb_set_light_state
+new file mode 100644
+diff --git a/tests/lifx/bulb/test_bulb_set_power_state.c b/tests/lifx/bulb/test_bulb_set_power_state.c
+new file mode 100644
+diff --git a/tests/lifx/bulb/test_bulb_set_tags.c b/tests/lifx/bulb/test_bulb_set_tags.c
+new file mode 100644
