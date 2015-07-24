@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  0212ce4961c923eba962c246c4d2d5de75bd6fb3
+# Parent  e6ce6a7734c436a200cf02c491fceff3420e98de
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -875,15 +875,91 @@ diff --git a/tests/lifx/bulb/test_bulb_close.c b/tests/lifx/bulb/test_bulb_close
 new file mode 100644
 diff --git a/tests/lifx/bulb/test_bulb_open.c b/tests/lifx/bulb/test_bulb_open.c
 new file mode 100644
-diff --git a/tests/lifx/bulb/test_bulb_set_light_state b/tests/lifx/bulb/test_bulb_set_light_state
+diff --git a/tests/lifx/bulb/test_bulb_set_light_state.c b/tests/lifx/bulb/test_bulb_set_light_state.c
 new file mode 100644
+--- /dev/null
++++ b/tests/lifx/bulb/test_bulb_set_light_state.c
+@@ -0,0 +1,73 @@
++#include "bulb.c"
++
++#define MOCKED_LGTD_LIFX_GATEWAY_UPDATE_TAG_REFCOUNTS
++#include "mock_gateway.h"
++
++static bool update_tag_refcouts_called = false;
++
++void
++lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
++                                       uint64_t bulb_tags,
++                                       uint64_t pkt_tags)
++{
++    if (gw != (void *)0xdeaf) {
++        errx(1, "got wrong gw %p (expected 0xdeaf)", gw);
++    }
++
++    if (bulb_tags != 0x2a) {
++        errx(1, "got bulb_tags %#jx (expected 0x2a)", (uintmax_t)bulb_tags);
++    }
++
++    if (pkt_tags != 0xfeed) {
++        errx(1, "got pkt_tags %#jx (expected 0xfeed)", (uintmax_t)pkt_tags);
++    }
++
++    update_tag_refcouts_called = true;
++}
++
++int
++main(void)
++{
++    struct lgtd_lifx_bulb bulb = {
++        .state = {
++            .hue = 54321,
++            .brightness = UINT16_MAX,
++            .kelvin = 12345,
++            .dim = 808,
++            .power = 0,
++            .label = "lair",
++            .tags = 0x2a
++        },
++        .gw = (void *)0xdeaf
++    };
++
++    struct lgtd_lifx_light_state new_state = {
++        .hue = 22222,
++        .brightness = UINT16_MAX / 2,
++        .kelvin = 54321,
++        .dim = 303,
++        .power = 0,
++        .label = "caverne",
++        .tags = 0xfeed
++    };
++
++    lgtd_lifx_bulb_set_light_state(&bulb, &new_state, 2015);
++
++    if (memcmp(&bulb.state, &new_state, sizeof(new_state))) {
++        errx(1, "new light state incorrectly set");
++    }
++
++    if (bulb.last_light_state_at != 2015) {
++        errx(
++            1, "got bulb.last_light_state = %jx (expected 2015)",
++            (uintmax_t)bulb.last_light_state_at
++        );
++    }
++
++    if (!update_tag_refcouts_called) {
++        errx(1, "lgtd_lifx_gateway_update_tag_refcounts wasn't called");
++    }
++
++    return 0;
++}
++
 diff --git a/tests/lifx/bulb/test_bulb_set_power_state.c b/tests/lifx/bulb/test_bulb_set_power_state.c
 new file mode 100644
 diff --git a/tests/lifx/bulb/test_bulb_set_tags.c b/tests/lifx/bulb/test_bulb_set_tags.c
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/bulb/test_bulb_set_tags.c
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,50 @@
 +#include "bulb.c"
 +
 +#define MOCKED_LGTD_LIFX_GATEWAY_UPDATE_TAG_REFCOUNTS
@@ -920,6 +996,13 @@ new file mode 100644
 +    };
 +
 +    lgtd_lifx_bulb_set_tags(&bulb, 0xfeed);
++
++    if (bulb.state.tags != 0xfeed) {
++        errx(
++            1, "got bulb.state.tags = %#jx (expected 0xfeed)",
++            (uintmax_t)bulb.state.tags
++        );
++    }
 +
 +    if (!update_tag_refcouts_called) {
 +        errx(1, "lgtd_lifx_gateway_update_tag_refcounts wasn't called");
