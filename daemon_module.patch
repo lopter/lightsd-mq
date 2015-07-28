@@ -1,0 +1,369 @@
+# HG changeset patch
+# Parent  8a07956fa7acc29f77e279992ffc31813172ece4
+
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -15,6 +15,7 @@
+ ADD_EXECUTABLE(
+     lightsd
+     client.c
++    daemon.c
+     jsmn.c
+     jsonrpc.c
+     listen.c
+diff --git a/core/daemon.c b/core/daemon.c
+new file mode 100644
+--- /dev/null
++++ b/core/daemon.c
+@@ -0,0 +1,107 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#include <sys/types.h>
++#include <fcntl.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <unistd.h>
++
++#if LGTD_HAVE_LIBBSD
++#include <bsd/bsd.h>
++#endif
++
++#include "listen.h"
++#include "daemon.h"
++#include "lightsd.h"
++
++bool
++lgtd_daemon_unleash(void)
++{
++    if (chdir("/")) {
++        return false;
++    }
++
++    int null = open("/dev/null", O_RDWR);
++    if (null == -1) {
++        return false;
++    }
++
++    const int fds[] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
++    for (int i = 0; i != LGTD_ARRAY_SIZE(fds); ++i) {
++        if (dup2(null, fds[i]) == -1) {
++            close(null);
++            return false;
++        }
++    }
++    close(null);
++
++#define SUMMON()  do {        \
++    switch (fork()) {       \
++        case 0:             \
++            break;          \
++        case -1:            \
++            return false;   \
++        default:            \
++            exit(0);        \
++    }                       \
++} while (0)
++
++    SUMMON(); // \_o< !
++    setsid();
++
++    SUMMON(); // \_o< !!
++
++    return true; // welcome to UNIX!
++}
++
++void
++lgtd_daemon_setup_proctitle(int argc, char *argv[], char *envp[])
++{
++#if LGTD_HAVE_LIBBSD
++    setproctitle_init(argc, argv, envp);
++#else
++    (void)argc;
++    (void)argv;
++    (void)envp;
++#endif
++}
++
++void
++lgtd_daemon_update_proctitle(void)
++{
++    char title[LGTD_DAEMON_TITLE_SIZE] = { 0 };
++    int i = snprintf(title, sizeof(title), "lightsd: ");
++
++#define INC(idx) LGTD_MIN((idx), (int)sizeof(title))
++#define PREFIX() (title[i - 1] == ')' ? "; " : "")
++#define APPEND() (title[i - 1] != '(' ? ", " : "")
++
++    if (!SLIST_EMPTY(&lgtd_listeners)) {
++        i = INC(snprintf(
++            title, sizeof(title) - i, "%slistening_on(", PREFIX()
++        ));
++        struct lgtd_listen *listener;
++        SLIST_FOREACH(listener, &lgtd_listeners, link) {
++            i = INC(snprintf(
++                title, sizeof(title) - i, "%s%s[:%s]",
++                APPEND(), listener->addr, listener->port
++            ));
++        }
++    }
++}
+diff --git a/core/daemon.h b/core/daemon.h
+new file mode 100644
+--- /dev/null
++++ b/core/daemon.h
+@@ -0,0 +1,24 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#pragma once
++
++enum { LGTD_DAEMON_TITLE_SIZE = 2048 };
++
++bool lgtd_daemon_unleash(void); // \_o<
++void lgtd_daemon_setup_proctitle(int, char *[], char *[]);
++void lgtd_daemon_update_proctitle(void);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -17,13 +17,11 @@
+ 
+ #include <sys/queue.h>
+ #include <sys/tree.h>
+-#include <sys/types.h>
+ #include <arpa/inet.h>
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
+ #include <errno.h>
+-#include <fcntl.h>
+ #include <getopt.h>
+ #include <signal.h>
+ #include <stdarg.h>
+@@ -33,11 +31,6 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <strings.h>
+-#include <unistd.h>
+-
+-#if LGTD_HAVE_LIBBSD
+-#include <bsd/bsd.h>
+-#endif
+ 
+ #include <event2/event.h>
+ #include <event2/event_struct.h>
+@@ -54,6 +47,7 @@
+ #include "client.h"
+ #include "pipe.h"
+ #include "listen.h"
++#include "daemon.h"
+ #include "lightsd.h"
+ 
+ struct lgtd_opts lgtd_opts = {
+@@ -64,8 +58,6 @@
+ 
+ struct event_base *lgtd_ev_base = NULL;
+ 
+-const char *lgtd_binds;
+-
+ void
+ lgtd_cleanup(void)
+ {
+@@ -151,57 +143,11 @@
+     exit(0);
+ }
+ 
+-static bool
+-lgtd_daemonize(void)
+-{
+-    if (chdir("/")) {
+-        return false;
+-    }
+-
+-    int null = open("/dev/null", O_RDWR);
+-    if (null == -1) {
+-        return false;
+-    }
+-
+-    const int fds[] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
+-    for (int i = 0; i != LGTD_ARRAY_SIZE(fds); ++i) {
+-        if (dup2(null, fds[i]) == -1) {
+-            close(null);
+-            return false;
+-        }
+-    }
+-    close(null);
+-
+-#define FORK()  do {        \
+-    switch (fork()) {       \
+-        case 0:             \
+-            break;          \
+-        case -1:            \
+-            return false;   \
+-        default:            \
+-            exit(0);        \
+-    }                       \
+-} while (0)
+-
+-    FORK();
+-    setsid();
+-
+-    FORK();
+-
+-    return true;
+-}
+-
+ int
+ main(int argc, char *argv[], char *envp[])
+ {
+-    char binds[512] = { 0 };
+-    lgtd_binds = binds;
++    lgtd_daemon_setup_proctitle(argc, argv, envp);
+ 
+-#if LGTD_HAVE_LIBBSD
+-    setproctitle_init(argc, argv, envp);
+-#else
+-    (void)envp;
+-#endif
+     lgtd_configure_libevent();
+     lgtd_configure_signal_handling();
+ 
+@@ -231,12 +177,6 @@
+             if (!sep || !sep[1]) {
+                 lgtd_usage(argv[0]);
+             }
+-            strncat(binds, optarg, LGTD_MIN(
+-                sizeof(binds) - strlen(binds) - 1, strlen(optarg)
+-            ));
+-            strncat(binds, ", ", LGTD_MIN(
+-                sizeof(binds) - strlen(binds) - 1, 2
+-            ));
+             *sep = '\0';
+             if (!lgtd_listen_open(optarg, sep + 1)) {
+                 exit(1);
+@@ -278,12 +218,6 @@
+         }
+     }
+ 
+-    binds[LGTD_MAX(strlen(binds) - 1, 0)] = '\0';
+-    binds[LGTD_MAX(strlen(binds) - 2, 0)] = '\0';
+-    if (binds[sizeof(binds) - 2]) {
+-        memset(binds + sizeof(binds) - 4, '.', 3);
+-    }
+-
+     argc -= optind;
+     argv += optind;
+ 
+@@ -292,7 +226,7 @@
+         lgtd_err(1, "can't setup lightsd");
+     }
+ 
+-    if (!lgtd_opts.foreground && !lgtd_daemonize()) {
++    if (!lgtd_opts.foreground && !lgtd_daemon_unleash()) {
+         lgtd_err(1, "can't fork to the background");
+     }
+ 
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -47,7 +47,6 @@
+     enum lgtd_verbosity verbosity;
+ };
+ 
+-extern const char *lgtd_binds;
+ extern struct lgtd_opts lgtd_opts;
+ extern struct event_base *lgtd_ev_base;
+ 
+@@ -66,6 +65,5 @@
+ void lgtd_info(const char *, ...) __attribute__((format(printf, 1, 2)));
+ void lgtd_debug(const char *, ...) __attribute__((format(printf, 1, 2)));
+ void lgtd_libevent_log(int, const char *);
+-void lgtd_update_proctitle(void);
+ 
+ void lgtd_cleanup(void);
+diff --git a/core/listen.h b/core/listen.h
+--- a/core/listen.h
++++ b/core/listen.h
+@@ -17,6 +17,8 @@
+ 
+ #pragma once
+ 
++struct evconnlistener;
++
+ struct lgtd_listen {
+     SLIST_ENTRY(lgtd_listen)    link;
+     const char                  *addr;
+@@ -25,5 +27,7 @@
+ };
+ SLIST_HEAD(lgtd_listen_list, lgtd_listen);
+ 
++extern struct lgtd_listen_list lgtd_listeners;
++
+ bool lgtd_listen_open(const char *, const char *);
+ void lgtd_listen_close_all(void);
+diff --git a/core/log.c b/core/log.c
+--- a/core/log.c
++++ b/core/log.c
+@@ -180,17 +180,3 @@
+     default:                                       break;
+     }
+ }
+-
+-void
+-lgtd_update_proctitle(void)
+-{
+-#if LGTD_HAVE_PROCTITLE
+-    setproctitle(
+-        "listening_on(%s); lifx_gateways(found=%d); bulbs(found=%d, on=%d)",
+-        lgtd_binds,
+-        LGTD_STATS_GET(gateways),
+-        LGTD_STATS_GET(bulbs),
+-        LGTD_STATS_GET(bulbs_powered_on)
+-    );
+-#endif
+-}
+diff --git a/core/stats.h b/core/stats.h
+--- a/core/stats.h
++++ b/core/stats.h
+@@ -27,7 +27,8 @@
+ int lgtd_stats_get(int);
+ 
+ #define LGTD_STATS_GET(name) lgtd_stats_get(offsetof(struct lgtd_stats, name))
+-#define LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(name, value) do {                        \
+-    lgtd_stats_add(offsetof(struct lgtd_stats, name), (value)); \
+-    lgtd_update_proctitle();                                    \
++
++#define LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(name, value) do {           \
++    lgtd_stats_add(offsetof(struct lgtd_stats, name), (value));         \
++    lgtd_daemon_update_proctitle();                                     \
+ } while (0)
