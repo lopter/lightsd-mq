@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  42ce0d8e8e56199b6f4b9dce0ce1ef5afcb0fb88
+# Parent  5433a8044be60830e49ae536161068a63c40963b
 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
@@ -333,7 +333,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      lgtd_configure_libevent();
      lgtd_configure_signal_handling();
  
-@@ -231,12 +177,6 @@
+@@ -231,17 +177,10 @@
              if (!sep || !sep[1]) {
                  lgtd_usage(argv[0]);
              }
@@ -346,7 +346,12 @@ diff --git a/core/lightsd.c b/core/lightsd.c
              *sep = '\0';
              if (!lgtd_listen_open(optarg, sep + 1)) {
                  exit(1);
-@@ -278,12 +218,6 @@
+             }
+-            *sep = ':';
+             break;
+         case 'c':
+             if (!lgtd_command_pipe_open(optarg)) {
+@@ -278,12 +217,6 @@
          }
      }
  
@@ -359,7 +364,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      argc -= optind;
      argv += optind;
  
-@@ -292,7 +226,7 @@
+@@ -292,7 +225,7 @@
          lgtd_err(1, "can't setup lightsd");
      }
  
@@ -483,3 +488,38 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  #include "core/stats.h"
  #include "core/lightsd.h"
  
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -45,6 +45,7 @@
+ #include "core/proto.h"
+ #include "core/router.h"
+ #include "core/stats.h"
++#include "core/daemon.h"
+ #include "core/lightsd.h"
+ 
+ struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
+diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
+--- a/tests/core/tests_shims.c
++++ b/tests/core/tests_shims.c
+@@ -32,3 +32,8 @@
+ lgtd_cleanup(void)
+ {
+ }
++
++void
++lgtd_daemon_update_proctitle(void)
++{
++}
+diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
+--- a/tests/lifx/tests_shims.c
++++ b/tests/lifx/tests_shims.c
+@@ -37,3 +37,8 @@
+         return ntohs(in6_peer->sin6_port);
+     }
+ }
++
++void
++lgtd_daemon_update_proctitle(void)
++{
++}
