@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  8a07956fa7acc29f77e279992ffc31813172ece4
+# Parent  1fcb29a52e8bf48ca4b5a7e04263644831e075e2
 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
@@ -12,11 +12,41 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
      jsmn.c
      jsonrpc.c
      listen.c
+diff --git a/core/client.c b/core/client.c
+--- a/core/client.c
++++ b/core/client.c
+@@ -34,6 +34,8 @@
+ #include "jsonrpc.h"
+ #include "client.h"
+ #include "proto.h"
++#include "stats.h"
++#include "daemon.h"
+ #include "lightsd.h"
+ 
+ struct lgtd_client_list lgtd_clients = LIST_HEAD_INITIALIZER(&lgtd_clients);
+@@ -44,6 +46,8 @@
+     assert(client);
+     assert(client->io);
+ 
++    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(clients, -1);
++
+     LIST_REMOVE(client, link);
+     bufferevent_free(client->io);
+     free(client);
+@@ -217,6 +221,8 @@
+ 
+     LIST_INSERT_HEAD(&lgtd_clients, client, link);
+ 
++    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(clients, 1);
++
+     return client;
+ }
+ 
 diff --git a/core/daemon.c b/core/daemon.c
 new file mode 100644
 --- /dev/null
 +++ b/core/daemon.c
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,148 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -34,19 +64,35 @@ new file mode 100644
 +// You should have received a copy of the GNU General Public License
 +// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
 +
++#include <sys/queue.h>
++#include <sys/tree.h>
 +#include <sys/types.h>
++#include <endian.h>
 +#include <fcntl.h>
 +#include <stdbool.h>
 +#include <stdint.h>
 +#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
 +#include <unistd.h>
 +
 +#if LGTD_HAVE_LIBBSD
 +#include <bsd/bsd.h>
 +#endif
 +
++#include <event2/util.h>
++
++#include "time_monotonic.h"
++#include "lifx/wire_proto.h"
++#include "lifx/bulb.h"
++#include "lifx/gateway.h"
++#include "jsmn.h"
++#include "jsonrpc.h"
++#include "client.h"
 +#include "listen.h"
 +#include "daemon.h"
++#include "pipe.h"
++#include "stats.h"
 +#include "lightsd.h"
 +
 +bool
@@ -107,22 +153,47 @@ new file mode 100644
 +    char title[LGTD_DAEMON_TITLE_SIZE] = { 0 };
 +    int i = snprintf(title, sizeof(title), "lightsd: ");
 +
-+#define INC(idx) LGTD_MIN((idx), (int)sizeof(title))
-+#define PREFIX() (title[i - 1] == ')' ? "; " : "")
-+#define APPEND() (title[i - 1] != '(' ? ", " : "")
++#define TITLE_APPEND(fmt, ...) do {                                         \
++    int n = snprintf((&title[i]), (sizeof(title) - i), (fmt), __VA_ARGS__); \
++    i = LGTD_MIN(i + n, (int)sizeof(title));                                \
++} while (0)
 +
-+    if (!SLIST_EMPTY(&lgtd_listeners)) {
-+        i = INC(snprintf(
-+            title, sizeof(title) - i, "%slistening_on(", PREFIX()
-+        ));
-+        struct lgtd_listen *listener;
-+        SLIST_FOREACH(listener, &lgtd_listeners, link) {
-+            i = INC(snprintf(
-+                title, sizeof(title) - i, "%s%s[:%s]",
-+                APPEND(), listener->addr, listener->port
-+            ));
-+        }
-+    }
++#define PREFIX(fmt, ...) TITLE_APPEND(                          \
++    "%s" fmt, (title[i - 1] == ')' ? "; " : ""), __VA_ARGS__    \
++)
++
++#define ADD_ITEM(fmt, ...) TITLE_APPEND(                        \
++    "%s" fmt, (title[i - 1] != '(' ? ", " : ""), __VA_ARGS__    \
++)
++#define LOOP(list_type, list, elem_type, prefix, ...) do {    \
++    if (!list_type ## _EMPTY(list)) {                         \
++        PREFIX("%s(", prefix);                                \
++        elem_type *it;                                        \
++        list_type ## _FOREACH(it, list, link) {               \
++            ADD_ITEM(__VA_ARGS__);                            \
++        }                                                     \
++        TITLE_APPEND("%s", ")");                              \
++    }                                                         \
++} while (0)
++
++    LOOP(
++        SLIST, &lgtd_listeners, struct lgtd_listen,
++        "listening_on", "%s:[%s]", it->addr, it->port
++    );
++
++    LOOP(
++        SLIST, &lgtd_command_pipes, struct lgtd_command_pipe,
++        "command_pipes", "%s", it->path
++    );
++
++    PREFIX("lifx_gateways(found=%d)", LGTD_STATS_GET(gateways));
++
++    PREFIX(
++        "bulbs(found=%d, on=%d)",
++        LGTD_STATS_GET(bulbs), LGTD_STATS_GET(bulbs_powered_on)
++    );
++
++    PREFIX("clients(connected=%d)", LGTD_STATS_GET(clients));
 +}
 diff --git a/core/daemon.h b/core/daemon.h
 new file mode 100644
@@ -352,10 +423,40 @@ diff --git a/core/log.c b/core/log.c
 -    );
 -#endif
 -}
+diff --git a/core/pipe.c b/core/pipe.c
+--- a/core/pipe.c
++++ b/core/pipe.c
+@@ -37,7 +37,7 @@
+ #include "pipe.h"
+ #include "lightsd.h"
+ 
+-static struct lgtd_command_pipe_list lgtd_command_pipes =
++struct lgtd_command_pipe_list lgtd_command_pipes =
+     SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
+ 
+ static void
+diff --git a/core/pipe.h b/core/pipe.h
+--- a/core/pipe.h
++++ b/core/pipe.h
+@@ -27,5 +27,7 @@
+ };
+ SLIST_HEAD(lgtd_command_pipe_list, lgtd_command_pipe);
+ 
++extern struct lgtd_command_pipe_list lgtd_command_pipes;
++
+ bool lgtd_command_pipe_open(const char *);
+ void lgtd_command_pipe_close_all(void);
 diff --git a/core/stats.h b/core/stats.h
 --- a/core/stats.h
 +++ b/core/stats.h
-@@ -27,7 +27,8 @@
+@@ -21,13 +21,15 @@
+     int gateways;
+     int bulbs;
+     int bulbs_powered_on;
++    int clients;
+ };
+ 
+ void lgtd_stats_add(int, int);
  int lgtd_stats_get(int);
  
  #define LGTD_STATS_GET(name) lgtd_stats_get(offsetof(struct lgtd_stats, name))
@@ -367,3 +468,14 @@ diff --git a/core/stats.h b/core/stats.h
 +    lgtd_stats_add(offsetof(struct lgtd_stats, name), (value));         \
 +    lgtd_daemon_update_proctitle();                                     \
  } while (0)
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -32,6 +32,7 @@
+ #include "core/time_monotonic.h"
+ #include "bulb.h"
+ #include "gateway.h"
++#include "core/daemon.h"
+ #include "core/stats.h"
+ #include "core/lightsd.h"
+ 
