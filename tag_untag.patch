@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c61333b9502c69273d1ea2eb5aee2ffed2cdc9c7
+# Parent  6c45f4b0e5d2dc90978e3db5b5537898ae7c84b4
 Add the ability to tag (group) or untag (ungroup) bulbs
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -401,7 +401,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +                n++;
 +            }
 +        }
-+        assert(bulb->gw->tag_refcounts[tag_id] == n - 1);
++        assert(bulb->gw->tag_refcounts[tag_id] == n);
 +    }
 +#endif
 +

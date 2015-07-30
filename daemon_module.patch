@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  1fcb29a52e8bf48ca4b5a7e04263644831e075e2
+# Parent  42ce0d8e8e56199b6f4b9dce0ce1ef5afcb0fb88
 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
@@ -46,7 +46,7 @@ diff --git a/core/daemon.c b/core/daemon.c
 new file mode 100644
 --- /dev/null
 +++ b/core/daemon.c
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,152 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -150,8 +150,9 @@ new file mode 100644
 +void
 +lgtd_daemon_update_proctitle(void)
 +{
++#if LGTD_HAVE_PROCTITLE
 +    char title[LGTD_DAEMON_TITLE_SIZE] = { 0 };
-+    int i = snprintf(title, sizeof(title), "lightsd: ");
++    int i = 0;
 +
 +#define TITLE_APPEND(fmt, ...) do {                                         \
 +    int n = snprintf((&title[i]), (sizeof(title) - i), (fmt), __VA_ARGS__); \
@@ -159,11 +160,11 @@ new file mode 100644
 +} while (0)
 +
 +#define PREFIX(fmt, ...) TITLE_APPEND(                          \
-+    "%s" fmt, (title[i - 1] == ')' ? "; " : ""), __VA_ARGS__    \
++    "%s" fmt, (i && title[i - 1] == ')' ? "; " : ""), __VA_ARGS__    \
 +)
 +
 +#define ADD_ITEM(fmt, ...) TITLE_APPEND(                        \
-+    "%s" fmt, (title[i - 1] != '(' ? ", " : ""), __VA_ARGS__    \
++    "%s" fmt, (i && title[i - 1] != '(' ? ", " : ""), __VA_ARGS__    \
 +)
 +#define LOOP(list_type, list, elem_type, prefix, ...) do {    \
 +    if (!list_type ## _EMPTY(list)) {                         \
@@ -194,6 +195,9 @@ new file mode 100644
 +    );
 +
 +    PREFIX("clients(connected=%d)", LGTD_STATS_GET(clients));
++
++    setproctitle("%s", title);
++#endif
 +}
 diff --git a/core/daemon.h b/core/daemon.h
 new file mode 100644
