@@ -1,6 +1,20 @@
 # HG changeset patch
-# Parent  5433a8044be60830e49ae536161068a63c40963b
+# Parent  da1d06eec3d2fa35a9e3f8afc473e25c07224f33
 
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -32,8 +32,8 @@
+ - tag/untag (group/ungroup bulbs together);
+ - toggle (power on if off and vice-versa, coming up).
+ 
+-The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe
+-(coming up) and Unix sockets (coming up).
++The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe and
++Unix sockets (coming up).
+ 
+ lightsd can target single or multiple bulbs at once:
+ 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
@@ -159,12 +173,12 @@ new file mode 100644
 +    i = LGTD_MIN(i + n, (int)sizeof(title));                                \
 +} while (0)
 +
-+#define PREFIX(fmt, ...) TITLE_APPEND(                          \
-+    "%s" fmt, (i && title[i - 1] == ')' ? "; " : ""), __VA_ARGS__    \
++#define PREFIX(fmt, ...) TITLE_APPEND(                              \
++    "%s" fmt, (i && title[i - 1] == ')' ? "; " : ""), __VA_ARGS__   \
 +)
 +
-+#define ADD_ITEM(fmt, ...) TITLE_APPEND(                        \
-+    "%s" fmt, (i && title[i - 1] != '(' ? ", " : ""), __VA_ARGS__    \
++#define ADD_ITEM(fmt, ...) TITLE_APPEND(                            \
++    "%s" fmt, (i && title[i - 1] != '(' ? ", " : ""), __VA_ARGS__   \
 +)
 +#define LOOP(list_type, list, elem_type, prefix, ...) do {    \
 +    if (!list_type ## _EMPTY(list)) {                         \
@@ -499,18 +513,342 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  #include "core/lightsd.h"
  
  struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
-diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
---- a/tests/core/tests_shims.c
-+++ b/tests/core/tests_shims.c
-@@ -32,3 +32,8 @@
- lgtd_cleanup(void)
- {
- }
+diff --git a/tests/core/daemon/CMakeLists.txt b/tests/core/daemon/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/daemon/CMakeLists.txt
+@@ -0,0 +1,21 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
 +
++ADD_CORE_LIBRARY(
++    test_core_daemon STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/daemon.c
++    ${LIGHTSD_SOURCE_DIR}/core/stats.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
++)
++
++FUNCTION(ADD_DAEMON_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_daemon)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_DAEMON_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/core/daemon/mock_listen.h b/tests/core/daemon/mock_listen.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/daemon/mock_listen.h
+@@ -0,0 +1,4 @@
++#pragma once
++
++struct lgtd_listen_list lgtd_listeners =
++    SLIST_HEAD_INITIALIZER(&lgtd_listeners);
+diff --git a/tests/core/daemon/mock_pipe.h b/tests/core/daemon/mock_pipe.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/daemon/mock_pipe.h
+@@ -0,0 +1,4 @@
++#pragma once
++
++struct lgtd_command_pipe_list lgtd_command_pipes =
++    SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
+diff --git a/tests/core/daemon/test_daemon_update_proctitle.c b/tests/core/daemon/test_daemon_update_proctitle.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/daemon/test_daemon_update_proctitle.c
+@@ -0,0 +1,10 @@
++#include "daemon.c"
++
++#include "mock_listen.h"
++#include "mock_pipe.h"
++
++int
++main(void)
++{
++    return 0;
++}
+diff --git a/tests/core/mock_daemon.h b/tests/core/mock_daemon.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/mock_daemon.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++#ifndef MOCKED_DAEMON_UPDATE_PROCTITLE
 +void
 +lgtd_daemon_update_proctitle(void)
 +{
 +}
++#endif
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+--- a/tests/core/proto/test_proto_get_light_state.c
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_get_light_state_null_device_list.c b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_null_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_proto_power_off.c
+--- a/tests/core/proto/test_proto_power_off.c
++++ b/tests/core/proto/test_proto_power_off.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_power_off_routing_error.c b/tests/core/proto/test_proto_power_off_routing_error.c
+--- a/tests/core/proto/test_proto_power_off_routing_error.c
++++ b/tests/core/proto/test_proto_power_off_routing_error.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
+--- a/tests/core/proto/test_proto_power_on.c
++++ b/tests/core/proto/test_proto_power_on.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/proto/test_proto_power_on_routing_error.c
+--- a/tests/core/proto/test_proto_power_on_routing_error.c
++++ b/tests/core/proto/test_proto_power_on_routing_error.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/proto/test_proto_set_light_from_hsbk.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
+--- a/tests/core/proto/test_proto_set_waveform.c
++++ b/tests/core/proto/test_proto_set_waveform.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_waveform_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+@@ -3,6 +3,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_tag_create.c b/tests/core/proto/test_proto_tag_create.c
+--- a/tests/core/proto/test_proto_tag_create.c
++++ b/tests/core/proto/test_proto_tag_create.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+ #define MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
+ #include "mock_gateway.h"
+diff --git a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+--- a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
++++ b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+ #define MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
+ #include "mock_gateway.h"
+diff --git a/tests/core/proto/test_proto_tag_update.c b/tests/core/proto/test_proto_tag_update.c
+--- a/tests/core/proto/test_proto_tag_update.c
++++ b/tests/core/proto/test_proto_tag_update.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+ #define MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
+ #include "mock_gateway.h"
+diff --git a/tests/core/proto/test_proto_untag.c b/tests/core/proto/test_proto_untag.c
+--- a/tests/core/proto/test_proto_untag.c
++++ b/tests/core/proto/test_proto_untag.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/proto/test_proto_untag_tag_does_not_exist.c b/tests/core/proto/test_proto_untag_tag_does_not_exist.c
+--- a/tests/core/proto/test_proto_untag_tag_does_not_exist.c
++++ b/tests/core/proto/test_proto_untag_tag_does_not_exist.c
+@@ -1,6 +1,7 @@
+ #include "proto.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_daemon.h"
+ #include "mock_gateway.h"
+ #include "tests_utils.h"
+ 
+diff --git a/tests/core/router/test_router_send_to_broadcast.c b/tests/core/router/test_router_send_to_broadcast.c
+--- a/tests/core/router/test_router_send_to_broadcast.c
++++ b/tests/core/router/test_router_send_to_broadcast.c
+@@ -1,5 +1,6 @@
+ #include "router.c"
+ 
++#include "mock_daemon.h"
+ #include "tests_utils.h"
+ 
+ #include "tests_router_utils.h"
+diff --git a/tests/core/router/test_router_send_to_device.c b/tests/core/router/test_router_send_to_device.c
+--- a/tests/core/router/test_router_send_to_device.c
++++ b/tests/core/router/test_router_send_to_device.c
+@@ -1,5 +1,6 @@
+ #include "router.c"
+ 
++#include "mock_daemon.h"
+ #include "tests_utils.h"
+ #include "tests_router_utils.h"
+ 
+diff --git a/tests/core/router/test_router_send_to_invalid_targets.c b/tests/core/router/test_router_send_to_invalid_targets.c
+--- a/tests/core/router/test_router_send_to_invalid_targets.c
++++ b/tests/core/router/test_router_send_to_invalid_targets.c
+@@ -1,5 +1,6 @@
+ #include "router.c"
+ 
++#include "mock_daemon.h"
+ #include "tests_utils.h"
+ #include "tests_router_utils.h"
+ 
+diff --git a/tests/core/router/test_router_send_to_label.c b/tests/core/router/test_router_send_to_label.c
+--- a/tests/core/router/test_router_send_to_label.c
++++ b/tests/core/router/test_router_send_to_label.c
+@@ -1,5 +1,6 @@
+ #include "router.c"
+ 
++#include "mock_daemon.h"
+ #include "tests_utils.h"
+ #include "tests_router_utils.h"
+ 
+diff --git a/tests/core/router/test_router_send_to_tag.c b/tests/core/router/test_router_send_to_tag.c
+--- a/tests/core/router/test_router_send_to_tag.c
++++ b/tests/core/router/test_router_send_to_tag.c
+@@ -1,5 +1,6 @@
+ #include "router.c"
+ 
++#include "mock_daemon.h"
+ #include "tests_utils.h"
+ #include "tests_router_utils.h"
+ 
+diff --git a/tests/core/router/test_router_targets_to_devices.c b/tests/core/router/test_router_targets_to_devices.c
+--- a/tests/core/router/test_router_targets_to_devices.c
++++ b/tests/core/router/test_router_targets_to_devices.c
+@@ -1,5 +1,6 @@
+ #include "router.c"
+ 
++#include "mock_daemon.h"
+ #include "tests_utils.h"
+ #include "tests_router_utils.h"
+ 
+diff --git a/tests/core/tests_shims.h b/tests/core/tests_shims.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/tests_shims.h
+@@ -0,0 +1,23 @@
++#pragma once
++
++struct lgtd_opts lgtd_opts = {
++    .foreground = false,
++    .log_timestamps = false,
++    .verbosity = LGTD_DEBUG
++};
++
++struct event_base *lgtd_ev_base = NULL;
++
++const char *lgtd_binds = NULL;
++
++void
++lgtd_cleanup(void)
++{
++}
++
++#ifndef MOCKED_DAEMON_UPDATE_PROCTITLE
++void
++lgtd_daemon_update_proctitle(void)
++{
++}
++#endif
 diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
 --- a/tests/lifx/tests_shims.c
 +++ b/tests/lifx/tests_shims.c

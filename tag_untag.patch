@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  6c45f4b0e5d2dc90978e3db5b5537898ae7c84b4
+# Parent  2f8c26d59f71c5c67b0252b2220df91d13e52321
 Add the ability to tag (group) or untag (ungroup) bulbs
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -52,6 +52,42 @@ diff --git a/CMakeScripts/AddTestFromSources.cmake b/CMakeScripts/AddTestFromSou
      ENDIF ()
      ADD_TEST(test_${TEST_NAME} ${TEST_NAME})
  ENDFUNCTION()
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -29,8 +29,7 @@
+ - set_light_from_hsbk;
+ - set_waveform (change the light according to a function like SAW or SINE);
+ - get_light_state;
+-- tag/untag (group/ungroup bulbs together, coming up: need unit & regression
+-  tests);
++- tag/untag (group/ungroup bulbs together);
+ - toggle (power on if off and vice-versa, coming up).
+ 
+ The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe
+@@ -104,4 +103,22 @@
+ 
+ Use the ``-f`` option to run lightsd in the foreground.
+ 
++Known issues
++------------
++
++The grouping (tagging) code of the LIFX White 800 is bugged: after a tagging
++operation the LIFX White 800 keep saying it has no tags. Reboot the bulb to make
++the tags appears.
++
++Power ON/OFF are the only commands with auto-retry, i.e: lightsd will keep
++sending the command to the bulb until its state changes. This is not implemented
++(yet) for ``set_light_from_hsbk`` and ``set_waveform``.
++
++While lighsd appears to be pretty stable, if you want to run lightsd in the
++background, I recommend doing it in a processor supervisor (e.g: Supervisor_)
++that can restart lightsd in case of crash. Otherwise, please send me your crash
++reports!
++
++.. _Supervisor: http://www.supervisord.org/
++
+ .. vim: set tw=80 spelllang=en spell:
 diff --git a/compat/CMakeLists.txt b/compat/CMakeLists.txt
 new file mode 100644
 --- /dev/null
@@ -384,7 +420,7 @@ diff --git a/core/router.c b/core/router.c
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -76,12 +76,28 @@
+@@ -76,12 +76,29 @@
      assert(bulb);
      assert(bulb->gw);
  
@@ -397,6 +433,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +        int n = 0;
 +        struct lgtd_lifx_bulb *gw_bulb;
 +        SLIST_FOREACH(gw_bulb, &bulb->gw->bulbs, link_by_gw) {
++            assert(gw_bulb != bulb);
 +            if (LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id) & gw_bulb->state.tags) {
 +                n++;
 +            }
@@ -414,7 +451,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      lgtd_info(
          "closed bulb \"%.*s\" (%s) on [%s]:%hu",
          LGTD_LIFX_LABEL_SIZE,
-@@ -107,6 +123,8 @@
+@@ -107,6 +124,8 @@
          );
      }
  
@@ -423,7 +460,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      bulb->last_light_state_at = received_at;
      memcpy(&bulb->state, state, sizeof(bulb->state));
  }
-@@ -124,3 +142,13 @@
+@@ -124,3 +143,13 @@
  
      bulb->state.power = power;
  }
