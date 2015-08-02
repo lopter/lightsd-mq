@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  4e1471c983f9e4e62394e77cb70fbe07328950da
+# Parent  2781c3dbb72d815271a446c90a08da3aef0936d6
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -13,6 +13,41 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      "-DLGTD_BIG_ENDIAN_SYSTEM=${BIG_ENDIAN_SYSTEM}"
      "-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
  
+diff --git a/core/pipe.c b/core/pipe.c
+--- a/core/pipe.c
++++ b/core/pipe.c
+@@ -148,6 +148,14 @@
+     jsmn_init(&pipe->client.jsmn_ctx);
+ }
+ 
++static mode_t
++lgtd_command_pipe_get_umask(void)
++{
++    mode_t mask = umask(0);
++    umask(mask);
++    return mask;
++}
++
+ bool
+ lgtd_command_pipe_open(const char *path)
+ {
+@@ -171,8 +179,14 @@
+     pipe->fd = -1;
+ 
+     mode_t mode = S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
+-    if (mkfifo(path, mode) && errno != EEXIST) {
+-        goto error;
++    if (mkfifo(path, mode)) {
++        if (errno != EEXIST) {
++            goto error;
++        }
++        mode &= ~lgtd_command_pipe_get_umask();
++        if (chmod(path, mode)) {
++            goto error;
++        }
+     }
+ 
+     pipe->fd = open(path, O_RDONLY|O_NONBLOCK);
 diff --git a/tests/core/daemon/CMakeLists.txt b/tests/core/daemon/CMakeLists.txt
 --- a/tests/core/daemon/CMakeLists.txt
 +++ b/tests/core/daemon/CMakeLists.txt
@@ -170,11 +205,133 @@ new file mode 100644
 +FOREACH(TEST ${TESTS})
 +    ADD_PIPE_TEST(${TEST})
 +ENDFOREACH()
+diff --git a/tests/core/pipe/test_pipe_close.c b/tests/core/pipe/test_pipe_close.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/pipe/test_pipe_close.c
+@@ -0,0 +1,117 @@
++#include "pipe.c"
++
++#include <sys/tree.h>
++#include <endian.h>
++#include <limits.h>
++
++#include "lifx/wire_proto.h"
++
++#define MOCKED_EVENT_NEW
++#define MOCKED_EVBUFFER_NEW
++#define MOCKED_EVENT_DEL
++#define MOCKED_EVBUFFER_FREE
++#define MOCKED_EVENT_FREE
++#include "mock_event2.h"
++#include "mock_gateway.h"
++#include "mock_daemon.h"
++
++#include "tests_utils.h"
++#include "tests_pipe_utils.h"
++
++char *tmpdir = NULL;
++
++void
++cleanup_tmpdir(void)
++{
++    lgtd_tests_remove_temp_dir(tmpdir);
++}
++
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    (void)base;
++    (void)fd;
++    (void)events;
++    (void)cb;
++    (void)ctx;
++
++    return (void *)1;
++}
++
++struct evbuffer *
++evbuffer_new(void)
++{
++    return (void *)2;
++}
++
++static int event_del_call_count = 0;
++
++int
++event_del(struct event *ev)
++{
++    (void)ev;
++
++    event_del_call_count++;
++
++    return 0;
++}
++
++static int evbuffer_free_call_count = 0;
++
++void
++evbuffer_free(struct evbuffer *buf)
++{
++    (void)buf;
++
++    evbuffer_free_call_count++;
++}
++
++static int event_free_call_count = 0;
++
++void
++event_free(struct event *ev)
++{
++    (void)ev;
++
++    event_free_call_count++;
++}
++
++int
++main(void)
++{
++    tmpdir = lgtd_tests_make_temp_dir();
++    atexit(cleanup_tmpdir);
++
++    char path[PATH_MAX] = { 0 };
++    snprintf(path, sizeof(path), "%s/lightsd.pipe", tmpdir);
++    if (!lgtd_command_pipe_open(path)) {
++        errx(1, "couldn't open pipe");
++    }
++
++    int pipe_fd = SLIST_FIRST(&lgtd_command_pipes)->fd;
++
++    lgtd_command_pipe_close_all();
++
++    if (event_del_call_count != 1) {
++        errx(1, "event_del_call_count = %d", event_del_call_count);
++    }
++    if (evbuffer_free_call_count != 1) {
++        errx(1, "evbuffer_free_call_count = %d", evbuffer_free_call_count);
++    }
++    if (event_free_call_count != 1) {
++        errx(1, "event_free_call_count = %d", event_free_call_count);
++    }
++    struct stat sb;
++    if (fstat(pipe_fd, &sb) != -1 && errno != EBADF) {
++        errx(1, "the pipe file descriptor wasn't closed correctly");
++    }
++    if (stat(path, &sb) != -1 && errno != ENOENT) {
++        errx(1, "the pipe wasn't removed correctly");
++    }
++
++    return 0;
++}
 diff --git a/tests/core/pipe/test_pipe_open.c b/tests/core/pipe/test_pipe_open.c
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/test_pipe_open.c
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,171 @@
 +#include "pipe.c"
 +
 +#include <sys/tree.h>
@@ -328,11 +485,267 @@ new file mode 100644
 +
 +    mode_t expected_mode;
 +    expected_mode = S_IFIFO|S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
++    expected_mode &= ~lgtd_command_pipe_get_umask();
 +    if (sb.st_mode != expected_mode) {
 +        errx(
-+            1, "unexpected mode %#x (expected %hx)",
++            1, "unexpected mode %o (expected %o)",
 +            sb.st_mode, expected_mode
 +        );
++    }
++
++    // make sure it's idempotent:
++    if (!lgtd_command_pipe_open(path)) {
++        errx(1, "couldn't open pipe");
++    }
++    if (event_new_call_count != 1) {
++        errx(1, "event_new_call_count = %d", event_new_call_count);
++    }
++
++    return 0;
++}
+diff --git a/tests/core/pipe/test_pipe_open_fifo_already_exists.c b/tests/core/pipe/test_pipe_open_fifo_already_exists.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/pipe/test_pipe_open_fifo_already_exists.c
+@@ -0,0 +1,176 @@
++#include "pipe.c"
++
++#include <sys/tree.h>
++#include <endian.h>
++#include <limits.h>
++
++#include "lifx/wire_proto.h"
++
++#define MOCKED_EVUTIL_MAKE_SOCKET_NONBLOCKING
++#define MOCKED_EVENT_NEW
++#define MOCKED_EVBUFFER_NEW
++#define MOCKED_EVENT_ADD
++#include "mock_event2.h"
++#include "mock_gateway.h"
++#include "mock_daemon.h"
++
++#include "tests_utils.h"
++#define MOCKED_CLIENT_OPEN_FROM_PIPE
++#include "tests_pipe_utils.h"
++
++char *tmpdir = NULL;
++
++void
++cleanup_tmpdir(void)
++{
++    lgtd_tests_remove_temp_dir(tmpdir);
++}
++
++static bool make_socket_nonblocking_call_count = 0;
++
++int 
++evutil_make_socket_nonblocking(evutil_socket_t fd)
++{
++    if (fd <= 0) {
++        errx(1, "got invalid fd %d in make_socket_nonblocking", fd);
++    }
++
++    make_socket_nonblocking_call_count++;
++
++    return 0;
++}
++
++static int event_new_call_count = 0;
++
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    if (base != lgtd_ev_base) {
++        errx(
++            1, "unexpected lgtd_ev_base = %p (expected %p)",
++            base, lgtd_ev_base
++        );
++    }
++    if (fd <= 0) {
++        errx(1, "got invalid fd %d in event_new", fd);
++    }
++    if (events != (EV_READ|EV_PERSIST)) {
++        errx(1, "got events %#x (expected %#x)", events, EV_READ|EV_PERSIST);
++    }
++    if (cb != lgtd_command_pipe_read_callback) {
++        errx(1, "the read callback wasn't set correctly");
++    }
++    if (!ctx) {
++        errx(1, "the callback context wasn't set correctly");
++    }
++
++    event_new_call_count++;
++
++    return (void *)1;
++}
++
++static int evbuffer_new_call_count = 0;
++
++struct evbuffer *
++evbuffer_new(void)
++{
++    evbuffer_new_call_count++;
++
++    return (void *)2;
++}
++
++static int event_add_call_count = 0;
++
++int
++event_add(struct event *ev, const struct timeval *timeout)
++{
++    if (ev != (void *)1) {
++        errx(1, "got unexpected event %p (expected %p)", ev, (void*)1);
++    }
++
++    if (timeout) {
++        errx(1, "a timeout shouldn't have been passed");
++    }
++
++    event_add_call_count++;
++
++    return 0;
++}
++
++static int client_open_from_pipe_call_count = 0;
++
++void
++lgtd_client_open_from_pipe(struct lgtd_client *pipe_client)
++{
++    if (!pipe_client) {
++        errx(1, "missing pipe_client");
++    }
++
++    client_open_from_pipe_call_count++;
++}
++
++int
++main(void)
++{
++    tmpdir = lgtd_tests_make_temp_dir();
++    atexit(cleanup_tmpdir);
++
++    char path[PATH_MAX] = { 0 };
++    snprintf(path, sizeof(path), "%s/lightsd.pipe", tmpdir);
++
++    if (mkfifo(path, 0)) {
++        errx(1, "can't open fifo");
++    }
++
++    if (!lgtd_command_pipe_open(path)) {
++        errx(1, "couldn't open pipe");
++    }
++
++    if (make_socket_nonblocking_call_count != 1) {
++        errx(
++            1, "make_socket_nonblocking_call_count = %d",
++            make_socket_nonblocking_call_count
++        );
++    }
++    if (event_new_call_count != 1) {
++        errx(1, "event_new_call_count = %d", event_new_call_count);
++    }
++    if (evbuffer_new_call_count != 1) {
++        errx(1, "evbuffer_new_call_count = %d", evbuffer_new_call_count);
++    }
++    if (event_add_call_count != 1) {
++        errx(1, "event_add_call_count = %d", event_add_call_count);
++    }
++    if (SLIST_EMPTY(&lgtd_command_pipes)) {
++        errx(1, "the list of command pipes shouldn't be empty");
++    }
++
++    struct stat sb;
++    if (stat(path, &sb)) {
++        errx(1, "can't stat pipe %s", path);
++    }
++
++    mode_t expected_mode;
++    expected_mode = S_IFIFO|S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
++    expected_mode &= ~lgtd_command_pipe_get_umask();
++    if (sb.st_mode != expected_mode) {
++        errx(
++            1, "unexpected mode %o (expected %o)",
++            sb.st_mode, expected_mode
++        );
++    }
++
++    // make sure it's idempotent:
++    if (!lgtd_command_pipe_open(path)) {
++        errx(1, "couldn't open pipe");
++    }
++    if (event_new_call_count != 1) {
++        errx(1, "event_new_call_count = %d", event_new_call_count);
++    }
++
++    return 0;
++}
+diff --git a/tests/core/pipe/test_pipe_read_callback.c b/tests/core/pipe/test_pipe_read_callback.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/pipe/test_pipe_read_callback.c
+@@ -0,0 +1,61 @@
++#include "pipe.c"
++
++#include <sys/tree.h>
++#include <endian.h>
++#include <limits.h>
++
++#include "lifx/wire_proto.h"
++
++#define MOCKED_EVENT_NEW
++#define MOCKED_EVBUFFER_NEW
++#include "mock_event2.h"
++#include "mock_gateway.h"
++#include "mock_daemon.h"
++
++#include "tests_utils.h"
++#include "tests_pipe_utils.h"
++
++char *tmpdir = NULL;
++
++void
++cleanup_tmpdir(void)
++{
++    lgtd_tests_remove_temp_dir(tmpdir);
++}
++
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    (void)base;
++    (void)fd;
++    (void)events;
++    (void)cb;
++    (void)ctx;
++
++    return (void *)1;
++}
++
++struct evbuffer *
++evbuffer_new(void)
++{
++    return (void *)2;
++}
++
++int
++main(void)
++{
++    tmpdir = lgtd_tests_make_temp_dir();
++    atexit(cleanup_tmpdir);
++
++    char path[PATH_MAX] = { 0 };
++    snprintf(path, sizeof(path), "%s/lightsd.pipe", tmpdir);
++    if (!lgtd_command_pipe_open(path)) {
++        errx(1, "couldn't open pipe");
 +    }
 +
 +    return 0;

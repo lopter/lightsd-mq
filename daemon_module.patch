@@ -595,7 +595,7 @@ diff --git a/tests/core/daemon/test_daemon_update_proctitle.c b/tests/core/daemo
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/daemon/test_daemon_update_proctitle.c
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,109 @@
 +void mock_setproctitle(const char *fmt, ...)
 +    __attribute__((format(printf, 1, 2)));
 +
@@ -685,11 +685,21 @@ new file mode 100644
 +        "listening_on(foobar.com:[1234]); "
 +        "lifx_gateways(found=1); "
 +        "bulbs(found=2, on=1); "
-+        "clients(connected=1)"
++        "clients(connected=0)"
 +    );
 +    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs_powered_on, 1);
-+    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(clients, 1);
 +    if (setproctitle_call_count != 6) {
++        errx(1, "setproctitle should have been called");
++    }
++
++    expected = (
++        "listening_on(foobar.com:[1234]); "
++        "lifx_gateways(found=1); "
++        "bulbs(found=2, on=1); "
++        "clients(connected=1)"
++    );
++    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(clients, 1);
++    if (setproctitle_call_count != 7) {
 +        errx(1, "setproctitle should have been called");
 +    }
 +
