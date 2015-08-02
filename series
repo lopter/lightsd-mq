@@ -4,3 +4,4 @@ ignore_duplicated_listening_addresses.patch
 add_command_pipe.patch
 fix_usage_and_version.patch
 daemon_module.patch
+testing_command_pipe.patch

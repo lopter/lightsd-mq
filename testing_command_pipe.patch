@@ -1,0 +1,453 @@
+# HG changeset patch
+# Parent  4e1471c983f9e4e62394e77cb70fbe07328950da
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -43,6 +43,8 @@
+     "-D_BSD_SOURCE=1"
+     "-D_DEFAULT_SOURCE=1"
+ 
++    "-D_DARWIN_C_SOURCE=1"
++
+     "-DLGTD_BIG_ENDIAN_SYSTEM=${BIG_ENDIAN_SYSTEM}"
+     "-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
+ 
+diff --git a/tests/core/daemon/CMakeLists.txt b/tests/core/daemon/CMakeLists.txt
+--- a/tests/core/daemon/CMakeLists.txt
++++ b/tests/core/daemon/CMakeLists.txt
+@@ -8,8 +8,8 @@
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/stats.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+-    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+diff --git a/tests/core/mock_event2.h b/tests/core/mock_event2.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/mock_event2.h
+@@ -0,0 +1,109 @@
++#pragma once
++
++#ifndef MOCKED_EVBUFFER_DRAN
++int
++evbuffer_drain(struct evbuffer *buf, size_t len)
++{
++    (void)buf;
++    (void)len;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_NEW
++struct evbuffer *
++evbuffer_new(void)
++{
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_EVENT_FREE
++void
++evbuffer_free(struct evbuffer *buf)
++{
++    (void)buf;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_GET_LENGTH
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    (void)buf;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_PULLUP
++unsigned char *
++evbuffer_pullup(struct evbuffer *buf, ev_ssize_t size)
++{
++    (void)buf;
++    (void)size;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_READ
++int
++evbuffer_read(struct evbuffer *buffer, evutil_socket_t fd, int howmuch)
++{
++    (void)buffer;
++    (void)fd;
++    return howmuch;
++}
++#endif
++
++#ifndef MOCKED_EVENT_ADD
++int
++event_add(struct event *ev, const struct timeval *timeout)
++{
++    (void)ev;
++    (void)timeout;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVENT_DEL
++int
++event_del(struct event *ev)
++{
++    (void)ev;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVENT_FREE
++void
++event_free(struct event *ev)
++{
++    (void)ev;
++}
++#endif
++
++#ifndef MOCKED_EVENT_NEW
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    (void)base;
++    (void)fd;
++    (void)events;
++    (void)cb;
++    (void)ctx;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_EVUTIL_MAKE_SOCKET_NONBLOCKING
++int
++evutil_make_socket_nonblocking(evutil_socket_t fd)
++{
++    (void)fd;
++    return 0;
++}
++#endif
+diff --git a/tests/core/pipe/CMakeLists.txt b/tests/core/pipe/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/pipe/CMakeLists.txt
+@@ -0,0 +1,25 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++ADD_CORE_LIBRARY(
++    test_core_pipe STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
++    ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/core/stats.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
++)
++
++FUNCTION(ADD_PIPE_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_pipe)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_PIPE_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/core/pipe/test_pipe_open.c b/tests/core/pipe/test_pipe_open.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/pipe/test_pipe_open.c
+@@ -0,0 +1,162 @@
++#include "pipe.c"
++
++#include <sys/tree.h>
++#include <endian.h>
++#include <limits.h>
++
++#include "lifx/wire_proto.h"
++
++#define MOCKED_EVUTIL_MAKE_SOCKET_NONBLOCKING
++#define MOCKED_EVENT_NEW
++#define MOCKED_EVBUFFER_NEW
++#define MOCKED_EVENT_ADD
++#include "mock_event2.h"
++#include "mock_gateway.h"
++#include "mock_daemon.h"
++
++#include "tests_utils.h"
++#define MOCKED_CLIENT_OPEN_FROM_PIPE
++#include "tests_pipe_utils.h"
++
++char *tmpdir = NULL;
++
++void
++cleanup_tmpdir(void)
++{
++    lgtd_tests_remove_temp_dir(tmpdir);
++}
++
++static bool make_socket_nonblocking_call_count = 0;
++
++int 
++evutil_make_socket_nonblocking(evutil_socket_t fd)
++{
++    if (fd <= 0) {
++        errx(1, "got invalid fd %d in make_socket_nonblocking", fd);
++    }
++
++    make_socket_nonblocking_call_count++;
++
++    return 0;
++}
++
++static int event_new_call_count = 0;
++
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    if (base != lgtd_ev_base) {
++        errx(
++            1, "unexpected lgtd_ev_base = %p (expected %p)",
++            base, lgtd_ev_base
++        );
++    }
++    if (fd <= 0) {
++        errx(1, "got invalid fd %d in event_new", fd);
++    }
++    if (events != (EV_READ|EV_PERSIST)) {
++        errx(1, "got events %#x (expected %#x)", events, EV_READ|EV_PERSIST);
++    }
++    if (cb != lgtd_command_pipe_read_callback) {
++        errx(1, "the read callback wasn't set correctly");
++    }
++    if (!ctx) {
++        errx(1, "the callback context wasn't set correctly");
++    }
++
++    event_new_call_count++;
++
++    return (void *)1;
++}
++
++static int evbuffer_new_call_count = 0;
++
++struct evbuffer *
++evbuffer_new(void)
++{
++    evbuffer_new_call_count++;
++
++    return (void *)2;
++}
++
++static int event_add_call_count = 0;
++
++int
++event_add(struct event *ev, const struct timeval *timeout)
++{
++    if (ev != (void *)1) {
++        errx(1, "got unexpected event %p (expected %p)", ev, (void*)1);
++    }
++
++    if (timeout) {
++        errx(1, "a timeout shouldn't have been passed");
++    }
++
++    event_add_call_count++;
++
++    return 0;
++}
++
++static int client_open_from_pipe_call_count = 0;
++
++void
++lgtd_client_open_from_pipe(struct lgtd_client *pipe_client)
++{
++    if (!pipe_client) {
++        errx(1, "missing pipe_client");
++    }
++
++    client_open_from_pipe_call_count++;
++}
++
++int
++main(void)
++{
++    tmpdir = lgtd_tests_make_temp_dir();
++    atexit(cleanup_tmpdir);
++
++    char path[PATH_MAX] = { 0 };
++    snprintf(path, sizeof(path), "%s/lightsd.pipe", tmpdir);
++    if (!lgtd_command_pipe_open(path)) {
++        errx(1, "couldn't open pipe");
++    }
++
++    if (make_socket_nonblocking_call_count != 1) {
++        errx(
++            1, "make_socket_nonblocking_call_count = %d",
++            make_socket_nonblocking_call_count
++        );
++    }
++    if (event_new_call_count != 1) {
++        errx(1, "event_new_call_count = %d", event_new_call_count);
++    }
++    if (evbuffer_new_call_count != 1) {
++        errx(1, "evbuffer_new_call_count = %d", evbuffer_new_call_count);
++    }
++    if (event_add_call_count != 1) {
++        errx(1, "event_add_call_count = %d", event_add_call_count);
++    }
++    if (SLIST_EMPTY(&lgtd_command_pipes)) {
++        errx(1, "the list of command pipes shouldn't be empty");
++    }
++
++    struct stat sb;
++    if (stat(path, &sb)) {
++        errx(1, "can't stat pipe %s", path);
++    }
++
++    mode_t expected_mode;
++    expected_mode = S_IFIFO|S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
++    if (sb.st_mode != expected_mode) {
++        errx(
++            1, "unexpected mode %#x (expected %hx)",
++            sb.st_mode, expected_mode
++        );
++    }
++
++    return 0;
++}
+diff --git a/tests/core/pipe/tests_pipe_utils.h b/tests/core/pipe/tests_pipe_utils.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/pipe/tests_pipe_utils.h
+@@ -0,0 +1,19 @@
++#pragma once
++
++#ifndef MOCKED_CLIENT_OPEN_FROM_PIPE
++void
++lgtd_client_open_from_pipe(struct lgtd_client *pipe_client)
++{
++    memset(pipe_client, 0, sizeof(*pipe_client));
++    jsmn_init(&pipe_client->jsmn_ctx);
++}
++#endif
++
++#ifndef MOCKED_JSONRPC_DISPATCH_REQUEST
++void
++lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, int parsed)
++{
++    (void)client;
++    (void)parsed;
++}
++#endif
+diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
+--- a/tests/core/tests_shims.c
++++ b/tests/core/tests_shims.c
+@@ -24,7 +24,7 @@
+     .verbosity = LGTD_DEBUG
+ };
+ 
+-struct event_base *lgtd_ev_base = NULL;
++struct event_base *lgtd_ev_base = (void *)0x1234;
+ 
+ const char *lgtd_binds = NULL;
+ 
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -2,13 +2,18 @@
+ #include <sys/tree.h>
+ #include <sys/socket.h>
+ #include <assert.h>
++#include <dirent.h>
+ #include <endian.h>
++#include <err.h>
++#include <limits.h>
+ #include <netinet/in.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <stdint.h>
++#include <stdio.h>
+ #include <string.h>
++#include <unistd.h>
+ 
+ #include <event2/util.h>
+ 
+@@ -131,3 +136,42 @@
+ 
+     return listener;
+ }
++
++char *
++lgtd_tests_make_temp_dir(void)
++{
++    char buf[PATH_MAX] = { 0 };
++    int n = snprintf(buf, sizeof(buf), "%slightsd.test.XXXXXXXX", P_tmpdir);
++    if (n >= (int)sizeof(buf)) {
++        errx(1, "cannot allocate temporary directory");
++    }
++    return strdup(mkdtemp(buf));
++}
++
++void
++lgtd_tests_remove_temp_dir(char *path)
++{
++    DIR *tmpdir = opendir(path);
++    if (!tmpdir) {
++        return;
++    }
++
++    struct dirent db;
++    struct dirent *entry = &db;
++    while (!readdir_r(tmpdir, entry, &entry) && entry) {
++        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) {
++            continue;
++        }
++        char buf[PATH_MAX] = { 0 };
++        snprintf(buf, sizeof(buf), "%s/%s", path, entry->d_name);
++        unlink(buf);
++    }
++
++    closedir(tmpdir);
++
++    if (rmdir(path)) {
++        warn("couldn't remove tempdir %s", path);
++    }
++
++    free(path);
++}
+diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
+--- a/tests/core/tests_utils.h
++++ b/tests/core/tests_utils.h
+@@ -30,6 +30,9 @@
+     return true;
+ }
+ 
++char *lgtd_tests_make_temp_dir(void);
++void lgtd_tests_remove_temp_dir(char *);
++
+ struct lgtd_lifx_gateway *lgtd_tests_insert_mock_gateway(int);
+ struct lgtd_lifx_bulb *lgtd_tests_insert_mock_bulb(struct lgtd_lifx_gateway *, uint64_t);
+ struct lgtd_proto_target_list *lgtd_tests_build_target_list(const char *, ...);
