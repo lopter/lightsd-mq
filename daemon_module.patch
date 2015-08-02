@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  da1d06eec3d2fa35a9e3f8afc473e25c07224f33
+# Parent  c4724f39ca4bfe9e0356a7e56e38d7201f614d04
 
 diff --git a/README.rst b/README.rst
 --- a/README.rst
@@ -490,6 +490,14 @@ diff --git a/core/pipe.c b/core/pipe.c
      SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
  
  static void
+@@ -166,6 +166,7 @@
+         return false;
+     }
+ 
++    lgtd_client_open_from_pipe(&pipe->client);
+     pipe->path = path;
+     pipe->fd = -1;
+ 
 diff --git a/core/pipe.h b/core/pipe.h
 --- a/core/pipe.h
 +++ b/core/pipe.h
@@ -587,18 +595,22 @@ diff --git a/tests/core/daemon/test_daemon_update_proctitle.c b/tests/core/daemo
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/daemon/test_daemon_update_proctitle.c
-@@ -0,0 +1,92 @@
-+#undef HAVE_LIBBSD
+@@ -0,0 +1,99 @@
++void mock_setproctitle(const char *fmt, ...)
++    __attribute__((format(printf, 1, 2)));
++
++#undef LGTD_HAVE_LIBBSD
++#undef LGTD_HAVE_PROCTITLE
++#define LGTD_HAVE_PROCTITLE 1
 +#define setproctitle mock_setproctitle
 +#include "daemon.c"
++
++#include <err.h>
 +
 +#include "mock_gateway.h"
 +#include "mock_pipe.h"
 +
 +#include "tests_utils.h"
-+
-+void mock_setproctitle(const char *fmt, ...)
-+    __attribute__((format(printf, 1, 2)));
 +
 +const char *expected = "";
 +int setproctitle_call_count = 0;
@@ -643,13 +655,17 @@ new file mode 100644
 +
 +    expected = (
 +        "lifx_gateways(found=1); "
++        "bulbs(found=1, on=0); "
++        "clients(connected=0)"
++    );
++    lgtd_tests_insert_mock_bulb(gw_1, 2);
++    expected = (
++        "lifx_gateways(found=1); "
 +        "bulbs(found=2, on=0); "
 +        "clients(connected=0)"
 +    );
-+    struct lgtd_lifx_bulb *bulb_2 = lgtd_tests_insert_mock_bulb(gw_1, 2);
 +    lgtd_tests_insert_mock_bulb(gw_1, 3);
-+    lgtd_daemon_update_proctitle();
-+    if (setproctitle_call_count != 3) {
++    if (setproctitle_call_count != 4) {
 +        errx(1, "setproctitle should have been called");
 +    }
 +
@@ -661,7 +677,7 @@ new file mode 100644
 +    );
 +    lgtd_tests_insert_mock_listener("foobar.com", "1234");
 +    lgtd_daemon_update_proctitle();
-+    if (setproctitle_call_count != 4) {
++    if (setproctitle_call_count != 5) {
 +        errx(1, "setproctitle should have been called");
 +    }
 +
@@ -671,12 +687,11 @@ new file mode 100644
 +        "bulbs(found=2, on=1); "
 +        "clients(connected=1)"
 +    );
-+    bulb_2->state.power = LGTD_LIFX_POWER_ON;
++    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs_powered_on, 1);
 +    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(clients, 1);
-+    if (setproctitle_call_count != 5) {
++    if (setproctitle_call_count != 6) {
 +        errx(1, "setproctitle should have been called");
 +    }
-+
 +
 +    return 0;
 +}
