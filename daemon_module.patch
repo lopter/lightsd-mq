@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c4724f39ca4bfe9e0356a7e56e38d7201f614d04
+# Parent  d7a2d37c150198e9b0626332d1cc57c538bd5447
 
 diff --git a/README.rst b/README.rst
 --- a/README.rst
@@ -490,7 +490,7 @@ diff --git a/core/pipe.c b/core/pipe.c
      SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
  
  static void
-@@ -166,6 +166,7 @@
+@@ -174,6 +174,7 @@
          return false;
      }
  
@@ -568,8 +568,8 @@ new file mode 100644
 +    ${LIGHTSD_SOURCE_DIR}/core/log.c
 +    ${LIGHTSD_SOURCE_DIR}/core/stats.c
 +    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
-+    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
 +    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
 +    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
 +    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
 +)
@@ -1002,7 +1002,7 @@ new file mode 100644
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
-@@ -19,6 +19,9 @@
+@@ -24,6 +24,9 @@
  #include "core/jsonrpc.h"
  #include "core/client.h"
  #include "core/proto.h"
@@ -1012,7 +1012,7 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
  #include "lifx/bulb.h"
  #include "lifx/gateway.h"
  #include "tests_utils.h"
-@@ -26,6 +29,9 @@
+@@ -31,6 +34,9 @@
  struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
      LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
  
@@ -1022,7 +1022,7 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
  struct lgtd_lifx_gateway *
  lgtd_tests_insert_mock_gateway(int id)
  {
-@@ -36,6 +42,8 @@
+@@ -41,6 +47,8 @@
  
      LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
  
@@ -1031,11 +1031,10 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
      return gw;
  }
  
-@@ -112,3 +120,14 @@
- 
+@@ -118,6 +126,17 @@
      return site;
  }
-+
+ 
 +struct lgtd_listen *
 +lgtd_tests_insert_mock_listener(const char *addr, const char *port)
 +{
@@ -1046,10 +1045,14 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 +
 +    return listener;
 +}
++
+ char *
+ lgtd_tests_make_temp_dir(void)
+ {
 diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
 --- a/tests/core/tests_utils.h
 +++ b/tests/core/tests_utils.h
-@@ -37,3 +37,4 @@
+@@ -40,3 +40,4 @@
  struct lgtd_lifx_site *lgtd_tests_add_tag_to_gw(struct lgtd_lifx_tag *,
                                                  struct lgtd_lifx_gateway *,
                                                  int);
