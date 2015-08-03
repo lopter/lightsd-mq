@@ -1,6 +1,10 @@
-add_daemonization_with_nice_proctitle.patch
-tag_untag.patch
-ignore_duplicated_listening_addresses.patch
+ignore_duplicate_listening_address.patch
 add_command_pipe.patch
+add_daemon_module.patch
 fix_usage_and_version.patch
-daemon_module.patch
+add_tag_and_untag.patch
+update_readme.patch
+fix_set_power_state.patch
+fix_crash_in_get_light_state_when_tag_does_not_exist.patch
+fix_lifx_wire_float_endian_functions_naming.patch
+leftovers.patch

@@ -1,20 +1,31 @@
 # HG changeset patch
-# Parent  710a684b58e97eddc7d7a12d85b17b823d087a82
-Add a command pipe to easily do actions from a shell
-
-NOTE: the command pipe is write only, responses aren't returned.
+# Parent  b346d618c2526ae5de9814cdd8db56fff77b224b
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -43,6 +43,8 @@
+@@ -42,6 +42,8 @@
+     "-D_POSIX_C_SOURCE=200809L"
      "-D_BSD_SOURCE=1"
      "-D_DEFAULT_SOURCE=1"
- 
-+    "-D_DARWIN_C_SOURCE=1"
 +
-     "-DLGTD_BIG_ENDIAN_SYSTEM=${BIG_ENDIAN_SYSTEM}"
-     "-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
++    "-D_DARWIN_C_SOURCE=1"
+ )
+ 
+ IF (CMAKE_BUILD_TYPE MATCHES "DEBUG")
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -33,8 +33,8 @@
+   tests);
+ - toggle (power on if off and vice-versa, coming up).
+ 
+-The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe
+-(coming up) and Unix sockets (coming up).
++The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe and
++Unix sockets (coming up).
+ 
+ lightsd can target single or multiple bulbs at once:
  
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
@@ -26,7 +37,7 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 +    pipe.c
      proto.c
      router.c
-     stats.c
+ )
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
 +++ b/core/client.c
@@ -105,15 +116,6 @@ diff --git a/core/client.h b/core/client.h
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
-@@ -129,7 +129,7 @@
-     return c == '-' || (c >= '0' && c <= '9');
- }
- 
--static bool __attribute__((unused))
-+static bool
- lgtd_jsonrpc_type_bool(const jsmntok_t *t, const char *json)
- {
-     if (t->type != JSMN_PRIMITIVE) {
 @@ -480,7 +480,7 @@
  lgtd_jsonrpc_write_id(struct lgtd_client *client)
  {
@@ -192,7 +194,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
-@@ -52,6 +52,7 @@
+@@ -45,6 +45,7 @@
  #include "jsmn.h"
  #include "jsonrpc.h"
  #include "client.h"
@@ -200,7 +202,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  #include "listen.h"
  #include "lightsd.h"
  
-@@ -69,6 +70,7 @@
+@@ -60,6 +61,7 @@
  lgtd_cleanup(void)
  {
      lgtd_listen_close_all();
@@ -208,15 +210,15 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      lgtd_client_close_all();
      lgtd_lifx_timer_close();
      lgtd_lifx_broadcast_close();
-@@ -135,10 +137,17 @@
+@@ -126,8 +128,14 @@
  lgtd_usage(const char *progname)
  {
      printf(
 -        "Usage: %s -l addr:port [-l ...] [-f] [-t] [-h] [-V] "
 -        "[-v debug|info|warning|error]\n",
 +        "Usage: %s ...\n\n"
-+        "  [-l,--listen addr:port [-l ...]]\n"
-+        "  [-c,--comand-pipe /command/fifo -[c ...]]\n"
++        "  [-l,--listen addr:port [+]]\n"
++        "  [-c,--comand-pipe /command/fifo [+]]\n"
 +        "  [-f,--foreground]\n"
 +        "  [-t,--no-timestamps]\n"
 +        "  [-h,--help]\n"
@@ -224,11 +226,8 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 +        "  [-v,--verbosity debug|info|warning|error]\n",
          progname
      );
-+    lgtd_cleanup();
      exit(0);
- }
- 
-@@ -198,6 +207,7 @@
+@@ -141,6 +149,7 @@
  
      static const struct option long_opts[] = {
          {"listen",          required_argument, NULL, 'l'},
@@ -236,7 +235,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          {"foreground",      no_argument,       NULL, 'f'},
          {"no-timestamps",   no_argument,       NULL, 't'},
          {"help",            no_argument,       NULL, 'h'},
-@@ -205,7 +215,7 @@
+@@ -148,7 +157,7 @@
          {"version",         no_argument,       NULL, 'V'},
          {NULL,              0,                 NULL, 0}
      };
@@ -245,20 +244,11 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  
      for (int rv = getopt_long(argc, argv, short_opts, long_opts, NULL);
           rv != -1;
-@@ -218,8 +228,7 @@
-                 lgtd_usage(argv[0]);
+@@ -164,6 +173,12 @@
+             if (!lgtd_listen_open(optarg, sep + 1)) {
+                 exit(1);
              }
-             strncat(binds, optarg, LGTD_MIN(
--                sizeof(binds) - strlen(binds) - 1,
--                strlen(optarg)
-+                sizeof(binds) - strlen(binds) - 1, strlen(optarg)
-             ));
-             strncat(binds, ", ", LGTD_MIN(
-                 sizeof(binds) - strlen(binds) - 1, 2
-@@ -230,6 +239,11 @@
-             }
-             *sep = ':';
-             break;
++            break;
 +        case 'c':
 +            if (!lgtd_command_pipe_open(optarg)) {
 +                exit(1);
@@ -271,7 +261,7 @@ diff --git a/core/pipe.c b/core/pipe.c
 new file mode 100644
 --- /dev/null
 +++ b/core/pipe.c
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,248 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -311,7 +301,7 @@ new file mode 100644
 +#include "pipe.h"
 +#include "lightsd.h"
 +
-+static struct lgtd_command_pipe_list lgtd_command_pipes =
++struct lgtd_command_pipe_list lgtd_command_pipes =
 +    SLIST_HEAD_INITIALIZER(&lgtd_command_pipes);
 +
 +static void
@@ -448,6 +438,7 @@ new file mode 100644
 +        return false;
 +    }
 +
++    lgtd_client_open_from_pipe(&pipe->client);
 +    pipe->path = path;
 +    pipe->fd = -1;
 +
@@ -523,7 +514,7 @@ diff --git a/core/pipe.h b/core/pipe.h
 new file mode 100644
 --- /dev/null
 +++ b/core/pipe.h
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,33 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -553,6 +544,8 @@ new file mode 100644
 +};
 +SLIST_HEAD(lgtd_command_pipe_list, lgtd_command_pipe);
 +
++extern struct lgtd_command_pipe_list lgtd_command_pipes;
++
 +bool lgtd_command_pipe_open(const char *);
 +void lgtd_command_pipe_close_all(void);
 diff --git a/core/proto.c b/core/proto.c
@@ -567,7 +560,7 @@ diff --git a/core/proto.c b/core/proto.c
      struct lgtd_router_device *device;
      SLIST_FOREACH(device, devices, link) {
          struct lgtd_lifx_bulb *bulb = device->device;
-@@ -204,15 +204,15 @@
+@@ -204,7 +204,7 @@
              );
              continue;
          }
@@ -576,19 +569,8 @@ diff --git a/core/proto.c b/core/proto.c
  
          bool comma = false;
          int tag_id;
-         LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, bulb->state.tags) {
-             if (LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id) & bulb->gw->tag_ids) {
--                LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
--                LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
--                LGTD_CLIENT_WRITE_STRING(client, "\"");
-+                lgtd_client_write_string(client, comma ? ",\"" : "\"");
-+                lgtd_client_write_string(client, bulb->gw->tags[tag_id]->label);
-+                lgtd_client_write_string(client, "\"");
-                 comma = true;
-             } else {
-                 lgtd_warnx(
-@@ -225,11 +225,11 @@
-             }
+@@ -215,11 +215,11 @@
+             comma = true;
          }
  
 -        LGTD_CLIENT_WRITE_STRING(
@@ -620,120 +602,6 @@ diff --git a/tests/core/mock_client_buf.h b/tests/core/mock_client_buf.h
 +{
 +    bufferevent_write(client->io, buf, bufsz);
 +}
-diff --git a/tests/core/mock_event2.h b/tests/core/mock_event2.h
-new file mode 100644
---- /dev/null
-+++ b/tests/core/mock_event2.h
-@@ -0,0 +1,109 @@
-+#pragma once
-+
-+#ifndef MOCKED_EVBUFFER_DRAIN
-+int
-+evbuffer_drain(struct evbuffer *buf, size_t len)
-+{
-+    (void)buf;
-+    (void)len;
-+    return 0;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVBUFFER_NEW
-+struct evbuffer *
-+evbuffer_new(void)
-+{
-+    return NULL;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVENT_FREE
-+void
-+evbuffer_free(struct evbuffer *buf)
-+{
-+    (void)buf;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVBUFFER_GET_LENGTH
-+size_t
-+evbuffer_get_length(const struct evbuffer *buf)
-+{
-+    (void)buf;
-+    return 0;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVBUFFER_PULLUP
-+unsigned char *
-+evbuffer_pullup(struct evbuffer *buf, ev_ssize_t size)
-+{
-+    (void)buf;
-+    (void)size;
-+    return NULL;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVBUFFER_READ
-+int
-+evbuffer_read(struct evbuffer *buffer, evutil_socket_t fd, int howmuch)
-+{
-+    (void)buffer;
-+    (void)fd;
-+    return howmuch;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVENT_ADD
-+int
-+event_add(struct event *ev, const struct timeval *timeout)
-+{
-+    (void)ev;
-+    (void)timeout;
-+    return 0;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVENT_DEL
-+int
-+event_del(struct event *ev)
-+{
-+    (void)ev;
-+    return 0;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVENT_FREE
-+void
-+event_free(struct event *ev)
-+{
-+    (void)ev;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVENT_NEW
-+struct event *
-+event_new(struct event_base *base,
-+          evutil_socket_t fd,
-+          short events,
-+          event_callback_fn cb,
-+          void *ctx)
-+{
-+    (void)base;
-+    (void)fd;
-+    (void)events;
-+    (void)cb;
-+    (void)ctx;
-+    return NULL;
-+}
-+#endif
-+
-+#ifndef MOCKED_EVUTIL_MAKE_SOCKET_NONBLOCKING
-+int
-+evutil_make_socket_nonblocking(evutil_socket_t fd)
-+{
-+    (void)fd;
-+    return 0;
-+}
-+#endif
 diff --git a/tests/core/pipe/CMakeLists.txt b/tests/core/pipe/CMakeLists.txt
 new file mode 100644
 --- /dev/null
@@ -1952,10 +1820,102 @@ new file mode 100644
 +    (void)parsed;
 +}
 +#endif
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+--- a/tests/core/proto/test_proto_get_light_state.c
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -76,7 +76,7 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_proto_get_light_state(&client, targets);
+diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+@@ -35,7 +35,7 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_proto_get_light_state(&client, targets);
+diff --git a/tests/core/proto/test_proto_get_light_state_null_device_list.c b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_null_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+@@ -45,7 +45,7 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_proto_get_light_state(&client, targets);
+diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_proto_power_off.c
+--- a/tests/core/proto/test_proto_power_off.c
++++ b/tests/core/proto/test_proto_power_off.c
+@@ -52,7 +52,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_off(&client, targets);
+ 
+diff --git a/tests/core/proto/test_proto_power_off_routing_error.c b/tests/core/proto/test_proto_power_off_routing_error.c
+--- a/tests/core/proto/test_proto_power_off_routing_error.c
++++ b/tests/core/proto/test_proto_power_off_routing_error.c
+@@ -52,7 +52,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_off(&client, targets);
+ 
+diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
+--- a/tests/core/proto/test_proto_power_on.c
++++ b/tests/core/proto/test_proto_power_on.c
+@@ -52,7 +52,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_on(&client, targets);
+ 
+diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/proto/test_proto_power_on_routing_error.c
+--- a/tests/core/proto/test_proto_power_on_routing_error.c
++++ b/tests/core/proto/test_proto_power_on_routing_error.c
+@@ -52,7 +52,7 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client;
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
+ 
+     lgtd_proto_power_on(&client, targets);
+ 
 diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
 --- a/tests/core/proto/tests_proto_utils.h
 +++ b/tests/core/proto/tests_proto_utils.h
-@@ -18,7 +18,7 @@
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#define FAKE_BUFFEREVENT (void *)0xfeed
++
+ void
+ lgtd_client_start_send_response(struct lgtd_client *client)
+ {
+@@ -16,7 +18,7 @@
  void
  lgtd_client_send_response(struct lgtd_client *client, const char *msg)
  {
@@ -1963,18 +1923,6 @@ diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto
 +    lgtd_client_write_string(client, msg);
  }
  #endif
- 
-diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
---- a/tests/core/tests_shims.c
-+++ b/tests/core/tests_shims.c
-@@ -24,7 +24,7 @@
-     .verbosity = LGTD_DEBUG
- };
- 
--struct event_base *lgtd_ev_base = NULL;
-+struct event_base *lgtd_ev_base = (void *)0x1234;
- 
- const char *lgtd_binds = NULL;
  
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
@@ -1999,7 +1947,7 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
  #include <event2/util.h>
  
 @@ -112,3 +117,42 @@
- 
+     LIST_INSERT_HEAD(&tag->sites, site, link);
      return site;
  }
 +

@@ -1,6 +1,5 @@
 # HG changeset patch
-# Parent  9e1c55d17b4004d7b2841177c8aec6a37391090d
-Ignore duplicated listen addresses
+# Parent  d8e34f128c677442c5c047793207dbc1664b6c2e
 
 diff --git a/core/listen.c b/core/listen.c
 --- a/core/listen.c

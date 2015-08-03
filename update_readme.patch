@@ -1,0 +1,29 @@
+# HG changeset patch
+# Parent  04a46ad71a58fa6486754a8e97da9f06436d5a01
+
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -103,4 +103,22 @@
+ 
+ Use the ``-f`` option to run lightsd in the foreground.
+ 
++Known issues
++------------
++
++The grouping (tagging) code of the LIFX White 800 is bugged: after a tagging
++operation the LIFX White 800 keep saying it has no tags. Reboot the bulb to make
++the tags appears.
++
++Power ON/OFF are the only commands with auto-retry, i.e: lightsd will keep
++sending the command to the bulb until its state changes. This is not implemented
++(yet) for ``set_light_from_hsbk`` and ``set_waveform``.
++
++While lighsd appears to be pretty stable, if you want to run lightsd in the
++background, I recommend doing it in a processor supervisor (e.g: Supervisor_)
++that can restart lightsd in case of crash. Otherwise, please send me your crash
++reports!
++
++.. _Supervisor: http://www.supervisord.org/
++
+ .. vim: set tw=80 spelllang=en spell:

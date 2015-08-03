@@ -1,22 +1,18 @@
 # HG changeset patch
-# Parent  16c122197bf6ffffef579622c276b66b89e197b3
-Display the usage when no arguments are passed in and fix -V
+# Parent  298fe56d98508afd0b2d3098264f4661d5908fe5
 
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
-@@ -138,8 +138,8 @@
- {
-     printf(
-         "Usage: %s ...\n\n"
--        "  [-l,--listen addr:port [-l ...]]\n"
--        "  [-c,--comand-pipe /command/fifo -[c ...]]\n"
-+        "  [-l,--listen addr:port [+]]\n"
-+        "  [-c,--comand-pipe /command/fifo [+]]\n"
-         "  [-f,--foreground]\n"
-         "  [-t,--no-timestamps]\n"
-         "  [-h,--help]\n"
-@@ -217,6 +217,10 @@
+@@ -138,6 +138,7 @@
+         "  [-v,--verbosity debug|info|warning|error]\n",
+         progname
+     );
++    lgtd_cleanup();
+     exit(0);
+ }
+ 
+@@ -159,6 +160,10 @@
      };
      const char short_opts[] = "l:c:fthv:V";
  

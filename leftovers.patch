@@ -1,0 +1,227 @@
+# HG changeset patch
+# Parent  2be7ea678eaadacc07b4e7b04af720409b5d2fca
+
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -32,8 +32,8 @@
+ - tag/untag (group/ungroup bulbs together);
+ - toggle (power on if off and vice-versa, coming up).
+ 
+-The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe and
+-Unix sockets (coming up).
++The JSON-RPC interface works on top of IPv4/v6 Unix sockets (coming up) or over
++a command pipe (named pipe, see mkfifo(1)).
+ 
+ lightsd can target single or multiple bulbs at once:
+ 
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -129,7 +129,7 @@
+     return c == '-' || (c >= '0' && c <= '9');
+ }
+ 
+-static bool __attribute__((unused))
++static bool
+ lgtd_jsonrpc_type_bool(const jsmntok_t *t, const char *json)
+ {
+     if (t->type != JSMN_PRIMITIVE) {
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -17,6 +17,8 @@
+ 
+ #pragma once
+ 
++struct sockaddr_storage;
++
+ #ifndef __attribute__
+ # define __atttribute__(e)
+ #endif
+diff --git a/core/log.c b/core/log.c
+--- a/core/log.c
++++ b/core/log.c
+@@ -17,6 +17,7 @@
+ 
+ #include <sys/tree.h>
+ #include <sys/time.h>
++#include <sys/types.h>
+ #include <arpa/inet.h>
+ #include <assert.h>
+ #include <endian.h>
+@@ -26,6 +27,7 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <time.h>
+ 
+ #if LGTD_HAVE_LIBBSD
+@@ -175,6 +177,6 @@
+     case EVENT_LOG_MSG:     lgtd_info("%s", msg);  break;
+     case EVENT_LOG_WARN:    lgtd_warnx("%s", msg)  break;
+     case EVENT_LOG_ERR:     lgtd_warnx("%s", msg); break;
+-    default:                                        break;
++    default:                                       break;
+     }
+ }
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -61,6 +61,8 @@
+         );
+         assert(pkt_infos);
+ 
++        pkt_infos->encode(pkt);
++
+         lgtd_lifx_gateway_enqueue_packet(
+             gw, &hdr, pkt_type, pkt, pkt_infos->size
+         );
+@@ -372,8 +374,8 @@
+ void
+ lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
+ {
+-    assert(devices);
+-
+-    lgtd_router_clear_device_list(devices);
+-    free(devices);
++    if (devices) {
++        lgtd_router_clear_device_list(devices);
++        free(devices);
++    }
+ }
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -150,13 +150,6 @@
+             if (type == LGTD_LIFX_GET_TAG_LABELS) {
+                 gw->pending_refresh_req = false;
+             }
+-            if (lgtd_opts.verbosity <= LGTD_DEBUG) {
+-                const struct lgtd_lifx_packet_infos *pkt_infos =
+-                    lgtd_lifx_wire_get_packet_infos(type);
+-                lgtd_debug(
+-                    "%s --> [%s]:%hu", pkt_infos->name, gw->ip_addr, gw->port
+-                );
+-            }
+             gw->pkt_ring[gw->pkt_ring_tail].type = 0;
+             LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(gw->pkt_ring_tail);
+             gw->pkt_ring_full = false;
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -21,7 +21,7 @@
+ // according to my own tests, aggressively polling a bulb doesn't raise its
+ // consumption at all (and it's interesting to note that a turned off bulb
+ // still draw about 2W in ZigBee and about 3W in WiFi).
+-enum { LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 200 };
++enum { LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 1000 };
+ 
+ // You can't send more than one lifx packet per UDP datagram.
+ enum { LGTD_LIFX_GATEWAY_PACKET_RING_SIZE = 16 };
+diff --git a/lifx/timer.h b/lifx/timer.h
+--- a/lifx/timer.h
++++ b/lifx/timer.h
+@@ -17,11 +17,11 @@
+ 
+ #pragma once
+ 
+-enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 200 };
++enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500 };
+ enum { LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
+ enum { LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
+-enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 2000 };
+-enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 600 };
++enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 4000 };
++enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000 };
+ 
+ bool lgtd_lifx_timer_setup(void);
+ void lgtd_lifx_timer_close(void);
+diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
+--- a/tests/core/proto/CMakeLists.txt
++++ b/tests/core/proto/CMakeLists.txt
+@@ -16,11 +16,11 @@
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+ 
+-FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
++FUNCTION(ADD_PROTO_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
+ ENDFUNCTION()
+ 
+ FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
+ FOREACH(TEST ${TESTS})
+-    ADD_ROUTER_TEST(${TEST})
++    ADD_PROTO_TEST(${TEST})
+ ENDFOREACH()
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+--- a/tests/core/proto/test_proto_get_light_state.c
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -31,6 +31,9 @@
+     static struct lgtd_router_device_list devices =
+         SLIST_HEAD_INITIALIZER(&devices);
+ 
++    static struct lgtd_lifx_gateway gw_bulb_1 = {
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs)
++    };
+     static struct lgtd_lifx_bulb bulb_1 = {
+         .addr = { 1, 2, 3, 4, 5 },
+         .state = {
+@@ -41,7 +44,8 @@
+             .label = "wave",
+             .power = LGTD_LIFX_POWER_ON,
+             .tags = 0
+-        }
++        },
++        .gw = &gw_bulb_1
+     };
+     static struct lgtd_router_device device_1 = { .device = &bulb_1 };
+     SLIST_INSERT_HEAD(&devices, &device_1, link);
+@@ -105,7 +109,7 @@
+             1,
+             "%d bytes written, expected %lu "
+             "(got %.*s instead of %s)",
+-            client_write_buf_idx, sizeof(expected) - 1,
++            client_write_buf_idx, sizeof(expected) - 1UL,
+             client_write_buf_idx, client_write_buf, expected
+         );
+     }
+diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+@@ -47,7 +47,7 @@
+     if (client_write_buf_idx != sizeof(expected) - 1) {
+         lgtd_errx(
+             1, "%d bytes written, expected %lu",
+-            client_write_buf_idx, sizeof(expected) - 1
++            client_write_buf_idx, sizeof(expected) - 1UL
+         );
+     }
+ 
+diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
+--- a/tests/core/tests_shims.c
++++ b/tests/core/tests_shims.c
+@@ -24,7 +24,9 @@
+     .verbosity = LGTD_DEBUG
+ };
+ 
+-struct event_base *lgtd_ev_base = NULL;
++struct event_base *lgtd_ev_base = (void *)0x1234;
++
++const char *lgtd_binds = NULL;
+ 
+ void
+ lgtd_cleanup(void)
+diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
+--- a/tests/lifx/tests_shims.c
++++ b/tests/lifx/tests_shims.c
+@@ -15,6 +15,8 @@
+ 
+ struct event_base *lgtd_ev_base = NULL;
+ 
++const char *lgtd_binds = NULL;
++
+ void
+ lgtd_cleanup(void)
+ {
