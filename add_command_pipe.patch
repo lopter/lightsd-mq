@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  b346d618c2526ae5de9814cdd8db56fff77b224b
+# Parent  cbb4cfee6f64cba898361881177ca949d2dfa220
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -1955,7 +1955,7 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 +lgtd_tests_make_temp_dir(void)
 +{
 +    char buf[PATH_MAX] = { 0 };
-+    int n = snprintf(buf, sizeof(buf), "%slightsd.test.XXXXXXXX", P_tmpdir);
++    int n = snprintf(buf, sizeof(buf), "%s/lightsd.test.XXXXXXXX", P_tmpdir);
 +    if (n >= (int)sizeof(buf)) {
 +        errx(1, "cannot allocate temporary directory");
 +    }

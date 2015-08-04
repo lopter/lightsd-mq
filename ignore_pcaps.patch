@@ -1,0 +1,11 @@
+# HG changeset patch
+# Parent  d7f8706407ee3520ecd1c964be8df4a2aebd5d12
+
+diff --git a/.hgignore b/.hgignore
+--- a/.hgignore
++++ b/.hgignore
+@@ -1,3 +1,4 @@
+ .*\.sw[a-z]$
+ .*\.py[co]$
+ ^build
++^pcaps
