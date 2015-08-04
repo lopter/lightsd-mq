@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  cbb4cfee6f64cba898361881177ca949d2dfa220
+# Parent  1d85084c9505a4fb4c935200696b5b2ca731cd7c
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -560,7 +560,7 @@ diff --git a/core/proto.c b/core/proto.c
      struct lgtd_router_device *device;
      SLIST_FOREACH(device, devices, link) {
          struct lgtd_lifx_bulb *bulb = device->device;
-@@ -204,7 +204,7 @@
+@@ -204,22 +204,22 @@
              );
              continue;
          }
@@ -569,7 +569,13 @@ diff --git a/core/proto.c b/core/proto.c
  
          bool comma = false;
          int tag_id;
-@@ -215,11 +215,11 @@
+         LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, bulb->state.tags) {
+-            LGTD_CLIENT_WRITE_STRING(client, comma ? ",\"" : "\"");
+-            LGTD_CLIENT_WRITE_STRING(client, bulb->gw->tags[tag_id]->label);
+-            LGTD_CLIENT_WRITE_STRING(client, "\"");
++            lgtd_client_write_string(client, comma ? ",\"" : "\"");
++            lgtd_client_write_string(client, bulb->gw->tags[tag_id]->label);
++            lgtd_client_write_string(client, "\"");
              comma = true;
          }
  
@@ -583,6 +589,32 @@ diff --git a/core/proto.c b/core/proto.c
      lgtd_client_end_send_response(client);
  
      lgtd_router_device_list_free(devices);
+diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
+--- a/tests/core/CMakeLists.txt
++++ b/tests/core/CMakeLists.txt
+@@ -2,9 +2,11 @@
+     ${LIGHTSD_SOURCE_DIR}
+     ${LIGHTSD_SOURCE_DIR}/core/
+     ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_SOURCE_DIR}/../lifx
+     ${LIGHTSD_BINARY_DIR}
+     ${LIGHTSD_BINARY_DIR}/core/
+     ${CMAKE_CURRENT_BINARY_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}/../lifx
+ )
+ 
+ ADD_ALL_SUBDIRECTORIES()
+diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
+--- a/tests/core/jsonrpc/test_jsonrpc_utils.h
++++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include "mock_gateway.h"
++
+ #define TEST_REQUEST_INITIALIZER { NULL, NULL, 0, NULL }
+ 
+ static inline int
 diff --git a/tests/core/mock_client_buf.h b/tests/core/mock_client_buf.h
 --- a/tests/core/mock_client_buf.h
 +++ b/tests/core/mock_client_buf.h
@@ -602,27 +634,142 @@ diff --git a/tests/core/mock_client_buf.h b/tests/core/mock_client_buf.h
 +{
 +    bufferevent_write(client->io, buf, bufsz);
 +}
+diff --git a/tests/core/mock_event2.h b/tests/core/mock_event2.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/mock_event2.h
+@@ -0,0 +1,109 @@
++#pragma once
++
++#ifndef MOCKED_EVBUFFER_DRAIN
++int
++evbuffer_drain(struct evbuffer *buf, size_t len)
++{
++    (void)buf;
++    (void)len;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_NEW
++struct evbuffer *
++evbuffer_new(void)
++{
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_EVENT_FREE
++void
++evbuffer_free(struct evbuffer *buf)
++{
++    (void)buf;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_GET_LENGTH
++size_t
++evbuffer_get_length(const struct evbuffer *buf)
++{
++    (void)buf;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_PULLUP
++unsigned char *
++evbuffer_pullup(struct evbuffer *buf, ev_ssize_t size)
++{
++    (void)buf;
++    (void)size;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_EVBUFFER_READ
++int
++evbuffer_read(struct evbuffer *buffer, evutil_socket_t fd, int howmuch)
++{
++    (void)buffer;
++    (void)fd;
++    return howmuch;
++}
++#endif
++
++#ifndef MOCKED_EVENT_ADD
++int
++event_add(struct event *ev, const struct timeval *timeout)
++{
++    (void)ev;
++    (void)timeout;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVENT_DEL
++int
++event_del(struct event *ev)
++{
++    (void)ev;
++    return 0;
++}
++#endif
++
++#ifndef MOCKED_EVENT_FREE
++void
++event_free(struct event *ev)
++{
++    (void)ev;
++}
++#endif
++
++#ifndef MOCKED_EVENT_NEW
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    (void)base;
++    (void)fd;
++    (void)events;
++    (void)cb;
++    (void)ctx;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_EVUTIL_MAKE_SOCKET_NONBLOCKING
++int
++evutil_make_socket_nonblocking(evutil_socket_t fd)
++{
++    (void)fd;
++    return 0;
++}
++#endif
 diff --git a/tests/core/pipe/CMakeLists.txt b/tests/core/pipe/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/CMakeLists.txt
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,26 @@
 +INCLUDE_DIRECTORIES(
 +    ${CMAKE_CURRENT_SOURCE_DIR}
 +    ${CMAKE_CURRENT_BINARY_DIR}
 +)
 +
-+ADD_CORE_LIBRARY(
++ADD_LIBRARY(
 +    test_core_pipe STATIC
 +    ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
 +    ${LIGHTSD_SOURCE_DIR}/core/log.c
-+    ${LIGHTSD_SOURCE_DIR}/core/stats.c
 +    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
 +    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
 +    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
 +    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
 +    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
 +)
++
++TARGET_LINK_LIBRARIES(test_core_pipe ${TIME_MONOTONIC_LIBRARY})
 +
 +FUNCTION(ADD_PIPE_TEST TEST_SOURCE)
 +    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_pipe)
@@ -636,7 +783,7 @@ diff --git a/tests/core/pipe/test_pipe_close.c b/tests/core/pipe/test_pipe_close
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/test_pipe_close.c
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,116 @@
 +#include "pipe.c"
 +
 +#include <sys/tree.h>
@@ -652,7 +799,6 @@ new file mode 100644
 +#define MOCKED_EVENT_FREE
 +#include "mock_event2.h"
 +#include "mock_gateway.h"
-+#include "mock_daemon.h"
 +
 +#include "tests_utils.h"
 +#include "tests_pipe_utils.h"
@@ -758,7 +904,7 @@ diff --git a/tests/core/pipe/test_pipe_open.c b/tests/core/pipe/test_pipe_open.c
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/test_pipe_open.c
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,170 @@
 +#include "pipe.c"
 +
 +#include <sys/tree.h>
@@ -773,7 +919,6 @@ new file mode 100644
 +#define MOCKED_EVENT_ADD
 +#include "mock_event2.h"
 +#include "mock_gateway.h"
-+#include "mock_daemon.h"
 +
 +#include "tests_utils.h"
 +#define MOCKED_CLIENT_OPEN_FROM_PIPE
@@ -934,7 +1079,7 @@ diff --git a/tests/core/pipe/test_pipe_open_fifo_already_exists.c b/tests/core/p
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/test_pipe_open_fifo_already_exists.c
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,175 @@
 +#include "pipe.c"
 +
 +#include <sys/tree.h>
@@ -949,7 +1094,6 @@ new file mode 100644
 +#define MOCKED_EVENT_ADD
 +#include "mock_event2.h"
 +#include "mock_gateway.h"
-+#include "mock_daemon.h"
 +
 +#include "tests_utils.h"
 +#define MOCKED_CLIENT_OPEN_FROM_PIPE
@@ -1115,7 +1259,7 @@ diff --git a/tests/core/pipe/test_pipe_read_callback.c b/tests/core/pipe/test_pi
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/test_pipe_read_callback.c
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,191 @@
 +#include "pipe.c"
 +
 +#include <sys/tree.h>
@@ -1132,7 +1276,6 @@ new file mode 100644
 +#define MOCKED_EVBUFFER_DRAIN
 +#include "mock_event2.h"
 +#include "mock_gateway.h"
-+#include "mock_daemon.h"
 +
 +#include "tests_utils.h"
 +#define MOCKED_JSONRPC_DISPATCH_REQUEST
@@ -1312,7 +1455,7 @@ diff --git a/tests/core/pipe/test_pipe_read_callback_extra_data.c b/tests/core/p
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/test_pipe_read_callback_extra_data.c
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,218 @@
 +#include "pipe.c"
 +
 +#include <sys/tree.h>
@@ -1329,7 +1472,6 @@ new file mode 100644
 +#define MOCKED_EVBUFFER_DRAIN
 +#include "mock_event2.h"
 +#include "mock_gateway.h"
-+#include "mock_daemon.h"
 +
 +#include "tests_utils.h"
 +#define MOCKED_JSONRPC_DISPATCH_REQUEST
@@ -1536,7 +1678,7 @@ diff --git a/tests/core/pipe/test_pipe_read_callback_multiple_requests.c b/tests
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,258 @@
 +#include "pipe.c"
 +
 +#include <sys/tree.h>
@@ -1553,7 +1695,6 @@ new file mode 100644
 +#define MOCKED_EVBUFFER_DRAIN
 +#include "mock_event2.h"
 +#include "mock_gateway.h"
-+#include "mock_daemon.h"
 +
 +#include "tests_utils.h"
 +#define MOCKED_JSONRPC_DISPATCH_REQUEST
@@ -1820,6 +1961,17 @@ new file mode 100644
 +    (void)parsed;
 +}
 +#endif
+diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
+--- a/tests/core/proto/CMakeLists.txt
++++ b/tests/core/proto/CMakeLists.txt
+@@ -8,6 +8,7 @@
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/jsonrpc.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
 diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
 --- a/tests/core/proto/test_proto_get_light_state.c
 +++ b/tests/core/proto/test_proto_get_light_state.c
@@ -1907,15 +2059,17 @@ diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/p
 diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto_utils.h
 --- a/tests/core/proto/tests_proto_utils.h
 +++ b/tests/core/proto/tests_proto_utils.h
-@@ -1,5 +1,7 @@
+@@ -1,5 +1,9 @@
  #pragma once
  
++#include "mock_gateway.h"
++
 +#define FAKE_BUFFEREVENT (void *)0xfeed
 +
  void
  lgtd_client_start_send_response(struct lgtd_client *client)
  {
-@@ -16,7 +18,7 @@
+@@ -16,7 +20,7 @@
  void
  lgtd_client_send_response(struct lgtd_client *client, const char *msg)
  {
@@ -1924,6 +2078,84 @@ diff --git a/tests/core/proto/tests_proto_utils.h b/tests/core/proto/tests_proto
  }
  #endif
  
+diff --git a/tests/core/router/CMakeLists.txt b/tests/core/router/CMakeLists.txt
+--- a/tests/core/router/CMakeLists.txt
++++ b/tests/core/router/CMakeLists.txt
+@@ -8,6 +8,7 @@
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/proto.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+diff --git a/tests/core/router/tests_router_utils.h b/tests/core/router/tests_router_utils.h
+--- a/tests/core/router/tests_router_utils.h
++++ b/tests/core/router/tests_router_utils.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include "mock_gateway.h"
++
+ int lgtd_tests_gw_pkt_queue_size = 0;
+ struct {
+     struct lgtd_lifx_gateway        *gw;
+diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
+--- a/tests/core/tests_shims.c
++++ b/tests/core/tests_shims.c
+@@ -30,52 +30,3 @@
+ lgtd_cleanup(void)
+ {
+ }
+-
+-
+-void lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
+-                                          const struct lgtd_lifx_packet_header *hdr,
+-                                          const struct lgtd_lifx_packet_pan_gateway *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-void lgtd_lifx_gateway_handle_light_status(struct lgtd_lifx_gateway *gw,
+-                                           const struct lgtd_lifx_packet_header *hdr,
+-                                           const struct lgtd_lifx_packet_light_status *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-void lgtd_lifx_gateway_handle_power_state(struct lgtd_lifx_gateway *gw,
+-                                          const struct lgtd_lifx_packet_header *hdr,
+-                                          const struct lgtd_lifx_packet_power_state *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-void lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
+-                                         const struct lgtd_lifx_packet_header *hdr,
+-                                         const struct lgtd_lifx_packet_tag_labels *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-struct lgtd_lifx_tag *
+-lgtd_lifx_tagging_find_tag(const char *tag_label)
+-{
+-    struct lgtd_lifx_tag *tag = NULL;
+-    LIST_FOREACH(tag, &lgtd_lifx_tags, link) {
+-        if (!strcmp(tag->label, tag_label)) {
+-            break;
+-        }
+-    }
+-    return tag;
+-}
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
@@ -1946,7 +2178,17 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
  
  #include <event2/util.h>
  
-@@ -112,3 +117,42 @@
+@@ -26,9 +31,6 @@
+ struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
+     LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
+ 
+-struct lgtd_lifx_tag_list lgtd_lifx_tags =
+-    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
+-
+ struct lgtd_lifx_gateway *
+ lgtd_tests_insert_mock_gateway(int id)
+ {
+@@ -112,3 +114,42 @@
      LIST_INSERT_HEAD(&tag->sites, site, link);
      return site;
  }
@@ -2002,3 +2244,127 @@ diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
  struct lgtd_lifx_gateway *lgtd_tests_insert_mock_gateway(int);
  struct lgtd_lifx_bulb *lgtd_tests_insert_mock_bulb(struct lgtd_lifx_gateway *, uint64_t);
  struct lgtd_proto_target_list *lgtd_tests_build_target_list(const char *, ...);
+diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/mock_gateway.h
+@@ -0,0 +1,119 @@
++#pragma once
++
++#include "core/time_monotonic.h"
++#include "lifx/bulb.h"
++#include "lifx/gateway.h"
++
++struct lgtd_lifx_tag;
++struct lgtd_lifx_gateway;
++
++#ifndef MOCKED_LIFX_GATEWAY_SEND_TO_SITE
++bool
++lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
++                               enum lgtd_lifx_packet_type pkt_type,
++                               const void *pkt)
++{
++    (void)gw;
++    (void)pkt_type;
++    (void)pkt;
++    return false;
++}
++#endif
++
++#ifndef MOCKED_LIFX_GATEWAY_ALLOCATE_TAG_ID
++int
++lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *gw,
++                                  int tag_id,
++                                  const char *tag_label)
++{
++    (void)gw;
++    (void)tag_id;
++    (void)tag_label;
++    return -1;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_PAN_GATEWAY
++void
++lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
++                                     const struct lgtd_lifx_packet_header *hdr,
++                                     const struct lgtd_lifx_packet_pan_gateway *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_LIGHT_STATUS
++void
++lgtd_lifx_gateway_handle_light_status(struct lgtd_lifx_gateway *gw,
++                                      const struct lgtd_lifx_packet_header *hdr,
++                                      const struct lgtd_lifx_packet_light_status *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_POWER_STATE
++void
++lgtd_lifx_gateway_handle_power_state(struct lgtd_lifx_gateway *gw,
++                                     const struct lgtd_lifx_packet_header *hdr,
++                                     const struct lgtd_lifx_packet_power_state *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_TAG_LABELS
++void
++lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
++                                    const struct lgtd_lifx_packet_header *hdr,
++                                    const struct lgtd_lifx_packet_tag_labels *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_DEALLOCATE_TAG_ID
++void
++lgtd_lifx_gateway_deallocate_tag_id(struct lgtd_lifx_gateway *gw, int tag_id)
++{
++    (void)gw;
++    (void)tag_id;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_GET_TAG_ID
++int
++lgtd_lifx_gateway_get_tag_id(const struct lgtd_lifx_gateway *gw,
++                             const struct lgtd_lifx_tag *tag)
++{
++    int tag_id;
++    LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, gw->tag_ids) {
++        if (gw->tags[tag_id] == tag) {
++            return tag_id;
++        }
++    }
++
++    return -1;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_UPDATE_TAG_REFCOUNTS
++void
++lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *gw,
++                                       uint64_t bulb_tags,
++                                       uint64_t pkt_tags)
++{
++    (void)gw;
++    (void)bulb_tags;
++    (void)pkt_tags;
++}
++#endif

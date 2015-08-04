@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  98585a1c815188fb358356d2dc68c2b06bbf86b6
+# Parent  cbddb13a7d39708480843e537aa02af758d220dd
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -721,21 +721,6 @@ diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 +ENDFUNCTION()
 +
  ADD_ALL_SUBDIRECTORIES()
-diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
---- a/tests/core/CMakeLists.txt
-+++ b/tests/core/CMakeLists.txt
-@@ -2,9 +2,11 @@
-     ${LIGHTSD_SOURCE_DIR}
-     ${LIGHTSD_SOURCE_DIR}/core/
-     ${CMAKE_CURRENT_SOURCE_DIR}
-+    ${CMAKE_CURRENT_SOURCE_DIR}/../lifx
-     ${LIGHTSD_BINARY_DIR}
-     ${LIGHTSD_BINARY_DIR}/core/
-     ${CMAKE_CURRENT_BINARY_DIR}
-+    ${CMAKE_CURRENT_BINARY_DIR}/../lifx
- )
- 
- ADD_ALL_SUBDIRECTORIES()
 diff --git a/tests/core/daemon/CMakeLists.txt b/tests/core/daemon/CMakeLists.txt
 new file mode 100644
 --- /dev/null
@@ -923,10 +908,32 @@ new file mode 100644
 +{
 +}
 +#endif
+diff --git a/tests/core/pipe/CMakeLists.txt b/tests/core/pipe/CMakeLists.txt
+--- a/tests/core/pipe/CMakeLists.txt
++++ b/tests/core/pipe/CMakeLists.txt
+@@ -7,6 +7,7 @@
+     test_core_pipe STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/core/stats.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+diff --git a/tests/core/pipe/tests_pipe_utils.h b/tests/core/pipe/tests_pipe_utils.h
+--- a/tests/core/pipe/tests_pipe_utils.h
++++ b/tests/core/pipe/tests_pipe_utils.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include "mock_daemon.h"
++
+ #ifndef MOCKED_CLIENT_OPEN_FROM_PIPE
+ void
+ lgtd_client_open_from_pipe(struct lgtd_client *pipe_client)
 diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
 --- a/tests/core/proto/CMakeLists.txt
 +++ b/tests/core/proto/CMakeLists.txt
-@@ -3,17 +3,17 @@
+@@ -3,10 +3,11 @@
      ${CMAKE_CURRENT_BINARY_DIR}
  )
  
@@ -937,8 +944,9 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
      ${LIGHTSD_SOURCE_DIR}/core/jsonrpc.c
 +    ${LIGHTSD_SOURCE_DIR}/core/stats.c
      ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
-     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+@@ -14,7 +15,6 @@
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
  )
@@ -1091,9 +1099,9 @@ diff --git a/tests/core/router/CMakeLists.txt b/tests/core/router/CMakeLists.txt
      ${LIGHTSD_SOURCE_DIR}/core/proto.c
 +    ${LIGHTSD_SOURCE_DIR}/core/stats.c
      ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
-     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
-@@ -14,11 +15,7 @@
+@@ -15,11 +16,7 @@
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
  )
  
@@ -1181,18 +1189,17 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
  #include "lifx/bulb.h"
  #include "lifx/gateway.h"
  #include "tests_utils.h"
-@@ -31,8 +34,8 @@
+@@ -31,6 +34,9 @@
  struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
      LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
  
--struct lgtd_lifx_tag_list lgtd_lifx_tags =
--    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
 +struct lgtd_listen_list lgtd_listeners =
 +    SLIST_HEAD_INITIALIZER(&lgtd_listeners);
- 
++
  struct lgtd_lifx_gateway *
  lgtd_tests_insert_mock_gateway(int id)
-@@ -44,6 +47,8 @@
+ {
+@@ -41,6 +47,8 @@
  
      LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
  
@@ -1201,7 +1208,7 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
      return gw;
  }
  
-@@ -118,6 +123,17 @@
+@@ -115,6 +123,17 @@
      return site;
  }
  
