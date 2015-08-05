@@ -1,0 +1,33 @@
+# HG changeset patch
+# Parent  53fb61e971ca76d1222c16512bd7fe7defc79844
+
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -21,7 +21,7 @@
+ // according to my own tests, aggressively polling a bulb doesn't raise its
+ // consumption at all (and it's interesting to note that a turned off bulb
+ // still draw about 2W in ZigBee and about 3W in WiFi).
+-enum { LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 200 };
++enum { LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 1000 };
+ 
+ // You can't send more than one lifx packet per UDP datagram.
+ enum { LGTD_LIFX_GATEWAY_PACKET_RING_SIZE = 16 };
+diff --git a/lifx/timer.h b/lifx/timer.h
+--- a/lifx/timer.h
++++ b/lifx/timer.h
+@@ -17,11 +17,11 @@
+ 
+ #pragma once
+ 
+-enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 200 };
++enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500 };
+ enum { LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
+ enum { LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
+-enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 2000 };
+-enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 600 };
++enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 4000 };
++enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000 };
+ 
+ bool lgtd_lifx_timer_setup(void);
+ void lgtd_lifx_timer_close(void);

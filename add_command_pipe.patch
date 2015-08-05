@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  1d85084c9505a4fb4c935200696b5b2ca731cd7c
+# Parent  f937c717c75e9a3e60a327d5b641ada7a4589a07
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -22,8 +22,8 @@ diff --git a/README.rst b/README.rst
  
 -The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe
 -(coming up) and Unix sockets (coming up).
-+The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe and
-+Unix sockets (coming up).
++The JSON-RPC interface works on top of TCP/IPv4/v6, Unix sockets (coming up) or
++over a command pipe (named pipe, see mkfifo(1)).
  
  lightsd can target single or multiple bulbs at once:
  
@@ -1972,10 +1972,44 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
      ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
      ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
      ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+@@ -15,11 +16,11 @@
+ )
+ TARGET_LINK_LIBRARIES(test_core_proto ${TIME_MONOTONIC_LIBRARY})
+ 
+-FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
++FUNCTION(ADD_PROTO_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
+ ENDFUNCTION()
+ 
+ FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
+ FOREACH(TEST ${TESTS})
+-    ADD_ROUTER_TEST(${TEST})
++    ADD_PROTO_TEST(${TEST})
+ ENDFOREACH()
 diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
 --- a/tests/core/proto/test_proto_get_light_state.c
 +++ b/tests/core/proto/test_proto_get_light_state.c
-@@ -76,7 +76,7 @@
+@@ -29,6 +29,9 @@
+     static struct lgtd_router_device_list devices =
+         SLIST_HEAD_INITIALIZER(&devices);
+ 
++    static struct lgtd_lifx_gateway gw_bulb_1 = {
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs)
++    };
+     static struct lgtd_lifx_bulb bulb_1 = {
+         .addr = { 1, 2, 3, 4, 5 },
+         .state = {
+@@ -39,7 +42,8 @@
+             .label = "wave",
+             .power = LGTD_LIFX_POWER_ON,
+             .tags = 0
+-        }
++        },
++        .gw = &gw_bulb_1
+     };
+     static struct lgtd_router_device device_1 = { .device = &bulb_1 };
+     SLIST_INSERT_HEAD(&devices, &device_1, link);
+@@ -76,7 +80,7 @@
  int
  main(void)
  {
@@ -1984,6 +2018,15 @@ diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/te
      struct lgtd_proto_target_list *targets = (void *)0x2a;
  
      lgtd_proto_get_light_state(&client, targets);
+@@ -103,7 +107,7 @@
+             1,
+             "%d bytes written, expected %lu "
+             "(got %.*s instead of %s)",
+-            client_write_buf_idx, sizeof(expected) - 1,
++            client_write_buf_idx, sizeof(expected) - 1UL,
+             client_write_buf_idx, client_write_buf, expected
+         );
+     }
 diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
 --- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
 +++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
@@ -1996,6 +2039,15 @@ diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/t
      struct lgtd_proto_target_list *targets = (void *)0x2a;
  
      lgtd_proto_get_light_state(&client, targets);
+@@ -45,7 +45,7 @@
+     if (client_write_buf_idx != sizeof(expected) - 1) {
+         lgtd_errx(
+             1, "%d bytes written, expected %lu",
+-            client_write_buf_idx, sizeof(expected) - 1
++            client_write_buf_idx, sizeof(expected) - 1UL
+         );
+     }
+ 
 diff --git a/tests/core/proto/test_proto_get_light_state_null_device_list.c b/tests/core/proto/test_proto_get_light_state_null_device_list.c
 --- a/tests/core/proto/test_proto_get_light_state_null_device_list.c
 +++ b/tests/core/proto/test_proto_get_light_state_null_device_list.c

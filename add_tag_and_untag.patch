@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  6993c9dfa358da1cc5ec3b68c0395b4ae22daee0
+# Parent  d31deced4d0b4228c4215069ee40febb19b71c15
 
 diff --git a/README.rst b/README.rst
 --- a/README.rst
@@ -13,7 +13,7 @@ diff --git a/README.rst b/README.rst
 +- tag/untag (group/ungroup bulbs together);
  - toggle (power on if off and vice-versa, coming up).
  
- The JSON-RPC interface works on top on IPv4/v6, over a command (named) pipe and
+ The JSON-RPC interface works on top of TCP/IPv4/v6, Unix sockets (coming up) or
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
@@ -281,6 +281,22 @@ diff --git a/core/proto.h b/core/proto.h
  void lgtd_proto_get_light_state(struct lgtd_client *, const struct lgtd_proto_target_list *);
 +void lgtd_proto_tag(struct lgtd_client *, const struct lgtd_proto_target_list *, const char *);
 +void lgtd_proto_untag(struct lgtd_client *, const struct lgtd_proto_target_list *, const char *);
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -372,8 +372,8 @@
+ void
+ lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
+ {
+-    assert(devices);
+-
+-    lgtd_router_clear_device_list(devices);
+-    free(devices);
++    if (devices) {
++        lgtd_router_clear_device_list(devices);
++        free(devices);
++    }
+ }
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
@@ -386,7 +402,21 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  static void
  lgtd_lifx_gateway_write_callback(evutil_socket_t socket,
                                   short events, void *ctx)
-@@ -151,36 +168,77 @@
+@@ -133,13 +150,6 @@
+             if (type == LGTD_LIFX_GET_TAG_LABELS) {
+                 gw->pending_refresh_req = false;
+             }
+-            if (lgtd_opts.verbosity <= LGTD_DEBUG) {
+-                const struct lgtd_lifx_packet_infos *pkt_infos =
+-                    lgtd_lifx_wire_get_packet_infos(type);
+-                lgtd_debug(
+-                    "%s --> [%s]:%hu", pkt_infos->name, gw->ip_addr, gw->port
+-                );
+-            }
+             gw->pkt_ring[gw->pkt_ring_tail].type = 0;
+             LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(gw->pkt_ring_tail);
+             gw->pkt_ring_full = false;
+@@ -151,36 +161,77 @@
      }
  }
  
@@ -488,7 +518,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      gw->pending_refresh_req = true;
  }
-@@ -371,19 +429,55 @@
+@@ -371,19 +422,55 @@
  }
  
  void
@@ -550,7 +580,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
  }
  
-@@ -485,16 +579,44 @@
+@@ -485,16 +572,44 @@
  }
  
  int
@@ -597,7 +627,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (!(gw->tag_ids & LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id))) {
          struct lgtd_lifx_tag *tag;
          tag = lgtd_lifx_tagging_incref(tag_label, gw, tag_id);
-@@ -545,9 +667,9 @@
+@@ -545,9 +660,9 @@
      assert(gw && hdr && pkt);
  
      lgtd_debug(
@@ -609,7 +639,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      );
  
      int tag_id;
-@@ -559,3 +681,38 @@
+@@ -559,3 +674,38 @@
          }
      }
  }

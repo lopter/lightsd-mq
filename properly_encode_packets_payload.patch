@@ -1,0 +1,880 @@
+# HG changeset patch
+# Parent  339e9ea6909d7cac4f6a9f8a13ce46d23495b3ec
+Convert LIFX packets to the right endianess before sending them
+
+And refactor the code a bit to pass pkt_info (also now spelled correctly)
+around instead of looking it up twice.
+
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -220,7 +220,7 @@
+     argc -= optind;
+     argv += optind;
+ 
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+     if (!lgtd_lifx_timer_setup() || !lgtd_lifx_broadcast_setup()) {
+         lgtd_err(1, "can't setup lightsd");
+     }
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -49,21 +49,19 @@
+     struct lgtd_lifx_packet_header hdr;
+     union lgtd_lifx_target target = { .tags = 0 };
+ 
+-    const struct lgtd_lifx_packet_infos *pkt_infos = NULL;
++    const struct lgtd_lifx_packet_info *pkt_info = NULL;
+     struct lgtd_lifx_gateway *gw;
+     LIST_FOREACH(gw, &lgtd_lifx_gateways, link) {
+-        pkt_infos = lgtd_lifx_wire_setup_header(
++        pkt_info = lgtd_lifx_wire_setup_header(
+             &hdr,
+             LGTD_LIFX_TARGET_ALL_DEVICES,
+             target,
+             gw->site.as_array,
+             pkt_type
+         );
+-        assert(pkt_infos);
++        assert(pkt_info);
+ 
+-        lgtd_lifx_gateway_enqueue_packet(
+-            gw, &hdr, pkt_type, pkt, pkt_infos->size
+-        );
++        lgtd_lifx_gateway_enqueue_packet(gw, &hdr, pkt_info, pkt);
+ 
+         if (pkt_type == LGTD_LIFX_SET_POWER_STATE) {
+             struct lgtd_lifx_bulb *bulb;
+@@ -76,8 +74,8 @@
+         }
+     }
+ 
+-    if (pkt_infos) {
+-        lgtd_info("broadcasting %s", pkt_infos->name);
++    if (pkt_info) {
++        lgtd_info("broadcasting %s", pkt_info->name);
+     }
+ }
+ 
+@@ -91,19 +89,16 @@
+     struct lgtd_lifx_packet_header hdr;
+     union lgtd_lifx_target target = { .addr = bulb->addr };
+ 
+-    const struct lgtd_lifx_packet_infos *pkt_infos;
+-    pkt_infos = lgtd_lifx_wire_setup_header(
++    const struct lgtd_lifx_packet_info *pkt_info = lgtd_lifx_wire_setup_header(
+         &hdr,
+         LGTD_LIFX_TARGET_DEVICE,
+         target,
+         bulb->gw->site.as_array,
+         pkt_type
+     );
+-    assert(pkt_infos);
++    assert(pkt_info);
+ 
+-    lgtd_lifx_gateway_enqueue_packet(
+-        bulb->gw, &hdr, pkt_type, pkt, pkt_infos->size
+-    );
++    lgtd_lifx_gateway_enqueue_packet(bulb->gw, &hdr, pkt_info, pkt);
+ 
+     if (pkt_type == LGTD_LIFX_SET_POWER_STATE) {
+         bulb->dirty_at = lgtd_time_monotonic_msecs();
+@@ -111,7 +106,7 @@
+         bulb->expected_power_on = payload->power;
+     }
+ 
+-    lgtd_info("sending %s to %s", pkt_infos->name, lgtd_addrtoa(bulb->addr));
++    lgtd_info("sending %s to %s", pkt_info->name, lgtd_addrtoa(bulb->addr));
+ }
+ 
+ void
+@@ -119,7 +114,7 @@
+                         enum lgtd_lifx_packet_type pkt_type,
+                         void *pkt)
+ {
+-    const struct lgtd_lifx_packet_infos *pkt_infos = NULL;
++    const struct lgtd_lifx_packet_info *pkt_info = NULL;
+ 
+     struct lgtd_lifx_site *site;
+     LIST_FOREACH(site, &tag->sites, link) {
+@@ -130,18 +125,16 @@
+         union lgtd_lifx_target target;
+         assert(tag == gw->tags[tag_id]);
+         target.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
+-        pkt_infos = lgtd_lifx_wire_setup_header(
++        pkt_info = lgtd_lifx_wire_setup_header(
+             &hdr,
+             LGTD_LIFX_TARGET_TAGS,
+             target,
+             gw->site.as_array,
+             pkt_type
+         );
+-        assert(pkt_infos);
++        assert(pkt_info);
+ 
+-        lgtd_lifx_gateway_enqueue_packet(
+-            gw, &hdr, pkt_type, pkt, pkt_infos->size
+-        );
++        lgtd_lifx_gateway_enqueue_packet(gw, &hdr, pkt_info, pkt);
+ 
+         if (pkt_type == LGTD_LIFX_SET_POWER_STATE) {
+             struct lgtd_lifx_bulb *bulb;
+@@ -156,8 +149,8 @@
+         }
+     }
+ 
+-    if (pkt_infos) {
+-        lgtd_info("sending %s to #%s", pkt_infos->name, tag->label);
++    if (pkt_info) {
++        lgtd_info("sending %s to #%s", pkt_info->name, tag->label);
+     }
+ }
+ 
+@@ -166,25 +159,23 @@
+                           enum lgtd_lifx_packet_type pkt_type,
+                           void *pkt)
+ {
+-    const struct lgtd_lifx_packet_infos *pkt_infos = NULL;
++    const struct lgtd_lifx_packet_info *pkt_info = NULL;
+ 
+     struct lgtd_lifx_bulb *bulb;
+     RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
+         if (!strcmp(bulb->state.label, label)) {
+             struct lgtd_lifx_packet_header hdr;
+             union lgtd_lifx_target target = { .addr = bulb->addr };
+-            pkt_infos = lgtd_lifx_wire_setup_header(
++            pkt_info = lgtd_lifx_wire_setup_header(
+                 &hdr,
+                 LGTD_LIFX_TARGET_DEVICE,
+                 target,
+                 bulb->gw->site.as_array,
+                 pkt_type
+             );
+-            assert(pkt_infos);
++            assert(pkt_info);
+ 
+-            lgtd_lifx_gateway_enqueue_packet(
+-                bulb->gw, &hdr, pkt_type, pkt, pkt_infos->size
+-            );
++            lgtd_lifx_gateway_enqueue_packet(bulb->gw, &hdr, pkt_info, pkt);
+ 
+             if (pkt_type == LGTD_LIFX_SET_POWER_STATE) {
+                 bulb->dirty_at = lgtd_time_monotonic_msecs();
+@@ -194,8 +185,8 @@
+         }
+     }
+ 
+-    if (pkt_infos) {
+-        lgtd_info("sending %s to %s", pkt_infos->name, label);
++    if (pkt_info) {
++        lgtd_info("sending %s to %s", pkt_info->name, label);
+     }
+ }
+ 
+diff --git a/lifx/broadcast.c b/lifx/broadcast.c
+--- a/lifx/broadcast.c
++++ b/lifx/broadcast.c
+@@ -117,9 +117,9 @@
+             continue;
+         }
+ 
+-        const struct lgtd_lifx_packet_infos *pkt_infos =
+-            lgtd_lifx_wire_get_packet_infos(read.hdr.packet_type);
+-        if (!pkt_infos) {
++        const struct lgtd_lifx_packet_info *pkt_info =
++            lgtd_lifx_wire_get_packet_info(read.hdr.packet_type);
++        if (!pkt_info) {
+             lgtd_warnx(
+                 "received unknown packet %#x from [%s]:%hu",
+                 read.hdr.packet_type, peer_addr, peer_port
+@@ -129,7 +129,7 @@
+         if (!(read.hdr.protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE)) {
+             lgtd_warnx(
+                 "received non-addressable packet %s from [%s]:%hu",
+-                pkt_infos->name, peer_addr, peer_port
++                pkt_info->name, peer_addr, peer_port
+             );
+             continue;
+         }
+@@ -145,8 +145,8 @@
+         if (gw) {
+             void *pkt = &read.buf[LGTD_LIFX_PACKET_HEADER_SIZE];
+             gw->last_pkt_at = received_at;
+-            pkt_infos->decode(pkt);
+-            pkt_infos->handle(gw, &read.hdr, pkt);
++            pkt_info->decode(pkt);
++            pkt_info->handle(gw, &read.hdr, pkt);
+         } else {
+             lgtd_warnx(
+                 "got packet from unknown gateway [%s]:%hu", peer_addr, peer_port
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -164,24 +164,24 @@
+ static bool
+ lgtd_lifx_gateway_send_to_site_impl(struct lgtd_lifx_gateway *gw,
+                                     enum lgtd_lifx_packet_type pkt_type,
+-                                    const void *pkt,
+-                                    const struct lgtd_lifx_packet_infos **pkt_infos)
++                                    void *pkt,
++                                    const struct lgtd_lifx_packet_info **pkt_info)
+ {
+     assert(gw);
+-    assert(pkt_infos);
++    assert(pkt_info);
+ 
+     struct lgtd_lifx_packet_header hdr;
+     union lgtd_lifx_target target = { .addr = gw->site.as_array };
+-    *pkt_infos = lgtd_lifx_wire_setup_header(
++    *pkt_info = lgtd_lifx_wire_setup_header(
+         &hdr,
+         LGTD_LIFX_TARGET_SITE,
+         target,
+         gw->site.as_array,
+         pkt_type
+     );
+-    assert(*pkt_infos);
++    assert(*pkt_info);
+ 
+-    lgtd_lifx_gateway_enqueue_packet(gw, &hdr, pkt_type, pkt, (*pkt_infos)->size);
++    lgtd_lifx_gateway_enqueue_packet(gw, &hdr, *pkt_info, pkt);
+ 
+     return true; // FIXME, have real return values on the send paths...
+ }
+@@ -189,17 +189,17 @@
+ static bool
+ lgtd_lifx_gateway_send_to_site_quiet(struct lgtd_lifx_gateway *gw,
+                                      enum lgtd_lifx_packet_type pkt_type,
+-                                     const void *pkt)
++                                     void *pkt)
+ {
+ 
+-    const struct lgtd_lifx_packet_infos *pkt_infos;
++    const struct lgtd_lifx_packet_info *pkt_info;
+     bool rv = lgtd_lifx_gateway_send_to_site_impl(
+-        gw, pkt_type, pkt, &pkt_infos
++        gw, pkt_type, pkt, &pkt_info
+     );
+ 
+     lgtd_debug(
+         "sending %s to site %s",
+-        pkt_infos->name, lgtd_addrtoa(gw->site.as_array)
++        pkt_info->name, lgtd_addrtoa(gw->site.as_array)
+     );
+ 
+     return rv; // FIXME, have real return values on the send paths...
+@@ -208,16 +208,16 @@
+ bool
+ lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
+                                enum lgtd_lifx_packet_type pkt_type,
+-                               const void *pkt)
++                               void *pkt)
+ {
+-    const struct lgtd_lifx_packet_infos *pkt_infos;
++    const struct lgtd_lifx_packet_info *pkt_info;
+     bool rv = lgtd_lifx_gateway_send_to_site_impl(
+-        gw, pkt_type, pkt, &pkt_infos
++        gw, pkt_type, pkt, &pkt_info
+     );
+ 
+     lgtd_info(
+         "sending %s to site %s",
+-        pkt_infos->name, lgtd_addrtoa(gw->site.as_array)
++        pkt_info->name, lgtd_addrtoa(gw->site.as_array)
+     );
+ 
+     return rv; // FIXME, have real return values on the send paths...
+@@ -387,13 +387,12 @@
+ void
+ lgtd_lifx_gateway_enqueue_packet(struct lgtd_lifx_gateway *gw,
+                                  const struct lgtd_lifx_packet_header *hdr,
+-                                 enum lgtd_lifx_packet_type pkt_type,
+-                                 const void *pkt,
+-                                 int pkt_size)
++                                 const struct lgtd_lifx_packet_info *pkt_info,
++                                 void *pkt)
+ {
+     assert(gw);
+     assert(hdr);
+-    assert(pkt_size >= 0 && pkt_size < LGTD_LIFX_MAX_PACKET_SIZE);
++    assert(pkt_info);
+     assert(!memcmp(hdr->site, gw->site.as_array, LGTD_LIFX_ADDR_LENGTH));
+     assert(gw->pkt_ring_head >= 0);
+     assert(gw->pkt_ring_head < (int)LGTD_ARRAY_SIZE(gw->pkt_ring));
+@@ -401,19 +400,19 @@
+     if (gw->pkt_ring_full) {
+         lgtd_warnx(
+             "dropping packet type %s: packet queue on [%s]:%hu is full",
+-            lgtd_lifx_wire_get_packet_infos(pkt_type)->name,
+-            gw->ip_addr, gw->port
++            pkt_info->name, gw->ip_addr, gw->port
+         );
+         return;
+     }
+ 
+     evbuffer_add(gw->write_buf, hdr, sizeof(*hdr));
+     if (pkt) {
+-        assert((unsigned)pkt_size == le16toh(hdr->size) - sizeof(*hdr));
+-        evbuffer_add(gw->write_buf, pkt, pkt_size);
++        assert(pkt_info->size == le16toh(hdr->size) - sizeof(*hdr));
++        pkt_info->encode(pkt);
++        evbuffer_add(gw->write_buf, pkt, pkt_info->size);
+     }
+-    gw->pkt_ring[gw->pkt_ring_head].size = sizeof(*hdr) + pkt_size;
+-    gw->pkt_ring[gw->pkt_ring_head].type = pkt_type;
++    gw->pkt_ring[gw->pkt_ring_head].size = sizeof(*hdr) + pkt_info->size;
++    gw->pkt_ring[gw->pkt_ring_head].type = pkt_info->type;
+     LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(gw->pkt_ring_head);
+     if (gw->pkt_ring_head == gw->pkt_ring_tail) {
+         gw->pkt_ring_full = true;
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -91,13 +91,12 @@
+ 
+ void lgtd_lifx_gateway_enqueue_packet(struct lgtd_lifx_gateway *,
+                                       const struct lgtd_lifx_packet_header *,
+-                                      enum lgtd_lifx_packet_type,
+-                                      const void *,
+-                                      int);
++                                      const struct lgtd_lifx_packet_info *,
++                                      void *);
+ // This could be on router but it's LIFX specific so I'd rather keep it here:
+ bool lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *,
+                                     enum lgtd_lifx_packet_type,
+-                                    const void *);
++                                    void *);
+ 
+ void lgtd_lifx_gateway_update_tag_refcounts(struct lgtd_lifx_gateway *, uint64_t, uint64_t);
+ 
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -48,14 +48,14 @@
+    13, 18,  8, 12,  7,  6,  5, 63
+ };
+ 
+-static struct lgtd_lifx_packet_infos_map lgtd_lifx_packet_infos =
++static struct lgtd_lifx_packet_info_map lgtd_lifx_packet_info =
+     RB_INITIALIZER(&lgtd_lifx_packets_infos);
+ 
+ RB_GENERATE_STATIC(
+-    lgtd_lifx_packet_infos_map,
+-    lgtd_lifx_packet_infos,
++    lgtd_lifx_packet_info_map,
++    lgtd_lifx_packet_info,
+     link,
+-    lgtd_lifx_packet_infos_cmp
++    lgtd_lifx_packet_info_cmp
+ );
+ 
+ static void
+@@ -75,7 +75,7 @@
+ }
+ 
+ void
+-lgtd_lifx_wire_load_packet_infos_map(void)
++lgtd_lifx_wire_load_packet_info_map(void)
+ {
+ #define DECODER(x)  ((void (*)(void *))(x))
+ #define ENCODER(x)  ((void (*)(void *))(x))
+@@ -91,7 +91,7 @@
+     .decode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
+     .handle = lgtd_lifx_wire_null_packet_handler
+ 
+-    static struct lgtd_lifx_packet_infos packet_table[] = {
++    static struct lgtd_lifx_packet_info packet_table[] = {
+         // Gateway packets:
+         {
+             REQUEST_ONLY,
+@@ -192,18 +192,18 @@
+ 
+     for (int i = 0; i != LGTD_ARRAY_SIZE(packet_table); ++i) {
+         RB_INSERT(
+-            lgtd_lifx_packet_infos_map,
+-            &lgtd_lifx_packet_infos,
++            lgtd_lifx_packet_info_map,
++            &lgtd_lifx_packet_info,
+             &packet_table[i]
+         );
+     }
+ }
+ 
+-const struct lgtd_lifx_packet_infos *
+-lgtd_lifx_wire_get_packet_infos(enum lgtd_lifx_packet_type packet_type)
++const struct lgtd_lifx_packet_info *
++lgtd_lifx_wire_get_packet_info(enum lgtd_lifx_packet_type packet_type)
+ {
+-    struct lgtd_lifx_packet_infos pkt_infos = { .type = packet_type };
+-    return RB_FIND(lgtd_lifx_packet_infos_map, &lgtd_lifx_packet_infos, &pkt_infos);
++    struct lgtd_lifx_packet_info pkt_info = { .type = packet_type };
++    return RB_FIND(lgtd_lifx_packet_info_map, &lgtd_lifx_packet_info, &pkt_info);
+ }
+ 
+ 
+@@ -273,7 +273,7 @@
+     hdr->packet_type = le16toh(hdr->packet_type);
+ }
+ 
+-const struct lgtd_lifx_packet_infos *
++const struct lgtd_lifx_packet_info *
+ lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *hdr,
+                             enum lgtd_lifx_target_type target_type,
+                             union lgtd_lifx_target target,
+@@ -282,13 +282,13 @@
+ {
+     assert(hdr);
+ 
+-    const struct lgtd_lifx_packet_infos *pkt_infos =
+-        lgtd_lifx_wire_get_packet_infos(packet_type);
++    const struct lgtd_lifx_packet_info *pkt_info =
++        lgtd_lifx_wire_get_packet_info(packet_type);
+ 
+-    assert(pkt_infos);
++    assert(pkt_info);
+ 
+     memset(hdr, 0, sizeof(*hdr));
+-    hdr->size = pkt_infos->size + sizeof(*hdr);
++    hdr->size = pkt_info->size + sizeof(*hdr);
+     hdr->packet_type = packet_type;
+     if (site) {
+         memcpy(hdr->site, site, sizeof(hdr->site));
+@@ -313,7 +313,7 @@
+ 
+     lgtd_lifx_wire_encode_header(hdr, flags);
+ 
+-    return pkt_infos;
++    return pkt_info;
+ }
+ 
+ void
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -265,8 +265,8 @@
+ 
+ struct lgtd_lifx_gateway;
+ 
+-struct lgtd_lifx_packet_infos {
+-    RB_ENTRY(lgtd_lifx_packet_infos)    link;
++struct lgtd_lifx_packet_info {
++    RB_ENTRY(lgtd_lifx_packet_info)     link;
+     const char                          *name;
+     enum lgtd_lifx_packet_type          type;
+     unsigned                            size;
+@@ -276,11 +276,11 @@
+                                                   const struct lgtd_lifx_packet_header *,
+                                                   const void *);
+ };
+-RB_HEAD(lgtd_lifx_packet_infos_map, lgtd_lifx_packet_infos);
++RB_HEAD(lgtd_lifx_packet_info_map, lgtd_lifx_packet_info);
+ 
+ static inline int
+-lgtd_lifx_packet_infos_cmp(struct lgtd_lifx_packet_infos *a,
+-                           struct lgtd_lifx_packet_infos *b)
++lgtd_lifx_packet_info_cmp(struct lgtd_lifx_packet_info *a,
++                           struct lgtd_lifx_packet_info *b)
+ {
+     return a->type - b->type;
+ }
+@@ -331,10 +331,10 @@
+ 
+ enum lgtd_lifx_waveform_type lgtd_lifx_wire_waveform_string_id_to_type(const char *, int);
+ 
+-const struct lgtd_lifx_packet_infos *lgtd_lifx_wire_get_packet_infos(enum lgtd_lifx_packet_type);
+-void lgtd_lifx_wire_load_packet_infos_map(void);
++const struct lgtd_lifx_packet_info *lgtd_lifx_wire_get_packet_info(enum lgtd_lifx_packet_type);
++void lgtd_lifx_wire_load_packet_info_map(void);
+ 
+-const struct lgtd_lifx_packet_infos *lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *,
++const struct lgtd_lifx_packet_info *lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *,
+                                                                  enum lgtd_lifx_target_type,
+                                                                  union lgtd_lifx_target,
+                                                                  const uint8_t *,
+diff --git a/tests/core/proto/test_proto_tag_create.c b/tests/core/proto/test_proto_tag_create.c
+--- a/tests/core/proto/test_proto_tag_create.c
++++ b/tests/core/proto/test_proto_tag_create.c
+@@ -65,7 +65,7 @@
+ bool
+ lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
+                                enum lgtd_lifx_packet_type pkt_type,
+-                               const void *pkt)
++                               void *pkt)
+ {
+     if (!gw) {
+         errx(1, "missing gateway");
+diff --git a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+--- a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
++++ b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+@@ -61,7 +61,7 @@
+ bool
+ lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
+                                enum lgtd_lifx_packet_type pkt_type,
+-                               const void *pkt)
++                               void *pkt)
+ {
+     (void)gw;
+     (void)pkt_type;
+diff --git a/tests/core/proto/test_proto_tag_update.c b/tests/core/proto/test_proto_tag_update.c
+--- a/tests/core/proto/test_proto_tag_update.c
++++ b/tests/core/proto/test_proto_tag_update.c
+@@ -69,7 +69,7 @@
+ bool
+ lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
+                                enum lgtd_lifx_packet_type pkt_type,
+-                               const void *pkt)
++                               void *pkt)
+ {
+     if (!gw) {
+         errx(1, "missing gateway");
+diff --git a/tests/core/router/test_router_send_to_broadcast.c b/tests/core/router/test_router_send_to_broadcast.c
+--- a/tests/core/router/test_router_send_to_broadcast.c
++++ b/tests/core/router/test_router_send_to_broadcast.c
+@@ -8,7 +8,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     lgtd_tests_insert_mock_gateway(2);
+     lgtd_tests_insert_mock_gateway(1);
+diff --git a/tests/core/router/test_router_send_to_device.c b/tests/core/router/test_router_send_to_device.c
+--- a/tests/core/router/test_router_send_to_device.c
++++ b/tests/core/router/test_router_send_to_device.c
+@@ -7,7 +7,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
+     struct lgtd_lifx_bulb *bulb_1 = lgtd_tests_insert_mock_bulb(gw_1, 1);
+diff --git a/tests/core/router/test_router_send_to_invalid_targets.c b/tests/core/router/test_router_send_to_invalid_targets.c
+--- a/tests/core/router/test_router_send_to_invalid_targets.c
++++ b/tests/core/router/test_router_send_to_invalid_targets.c
+@@ -31,7 +31,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
+     lgtd_tests_insert_mock_bulb(gw_1, 1);
+diff --git a/tests/core/router/test_router_send_to_label.c b/tests/core/router/test_router_send_to_label.c
+--- a/tests/core/router/test_router_send_to_label.c
++++ b/tests/core/router/test_router_send_to_label.c
+@@ -7,7 +7,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
+     struct lgtd_lifx_bulb *bulb_1 = lgtd_tests_insert_mock_bulb(gw_1, 1);
+diff --git a/tests/core/router/test_router_send_to_tag.c b/tests/core/router/test_router_send_to_tag.c
+--- a/tests/core/router/test_router_send_to_tag.c
++++ b/tests/core/router/test_router_send_to_tag.c
+@@ -7,7 +7,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
+     struct lgtd_lifx_gateway *gw_2 = lgtd_tests_insert_mock_gateway(2);
+diff --git a/tests/core/router/test_router_targets_to_devices.c b/tests/core/router/test_router_targets_to_devices.c
+--- a/tests/core/router/test_router_targets_to_devices.c
++++ b/tests/core/router/test_router_targets_to_devices.c
+@@ -41,7 +41,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
+     struct lgtd_lifx_gateway *gw_2 = lgtd_tests_insert_mock_gateway(2);
+diff --git a/tests/core/router/tests_router_utils.h b/tests/core/router/tests_router_utils.h
+--- a/tests/core/router/tests_router_utils.h
++++ b/tests/core/router/tests_router_utils.h
+@@ -13,12 +13,9 @@
+ void
+ lgtd_lifx_gateway_enqueue_packet(struct lgtd_lifx_gateway *gw,
+                                  const struct lgtd_lifx_packet_header *hdr,
+-                                 enum lgtd_lifx_packet_type pkt_type,
+-                                 const void *pkt,
+-                                 int pkt_size)
++                                 const struct lgtd_lifx_packet_info *pkt_info,
++                                 void *pkt)
+ {
+-    (void)pkt_type;
+-
+     lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].gw = gw;
+     // headers are created on the stack so we need to dup them:
+     lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].hdr = malloc(
+@@ -30,7 +27,7 @@
+         sizeof(*hdr)
+     );
+     lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].pkt = pkt;
+-    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].pkt_size = pkt_size;
++    lgtd_tests_gw_pkt_queue[lgtd_tests_gw_pkt_queue_size].pkt_size = pkt_info->size;
+     lgtd_tests_gw_pkt_queue_size++;
+ }
+ 
+diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id.c b/tests/lifx/gateway/test_gateway_allocate_tag_id.c
+--- a/tests/lifx/gateway/test_gateway_allocate_tag_id.c
++++ b/tests/lifx/gateway/test_gateway_allocate_tag_id.c
+@@ -40,7 +40,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+--- a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
++++ b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
+@@ -41,7 +41,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id_no_tag_id_left.c b/tests/lifx/gateway/test_gateway_allocate_tag_id_no_tag_id_left.c
+--- a/tests/lifx/gateway/test_gateway_allocate_tag_id_no_tag_id_left.c
++++ b/tests/lifx/gateway/test_gateway_allocate_tag_id_no_tag_id_left.c
+@@ -41,7 +41,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
+--- a/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
++++ b/tests/lifx/gateway/test_gateway_deallocate_tag_id_from_lifx_network.c
+@@ -23,7 +23,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet.c b/tests/lifx/gateway/test_gateway_enqueue_packet.c
+--- a/tests/lifx/gateway/test_gateway_enqueue_packet.c
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet.c
+@@ -5,7 +5,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+@@ -17,7 +17,7 @@
+     union lgtd_lifx_target target = { .tags = 0 };
+ 
+     struct lgtd_lifx_packet_header hdr;
+-    lgtd_lifx_wire_setup_header(
++    const struct lgtd_lifx_packet_info *pkt_info = lgtd_lifx_wire_setup_header(
+         &hdr,
+         LGTD_LIFX_TARGET_ALL_DEVICES,
+         target,
+@@ -25,9 +25,7 @@
+         LGTD_LIFX_SET_POWER_STATE
+     );
+ 
+-    lgtd_lifx_gateway_enqueue_packet(
+-        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
+-    );
++    lgtd_lifx_gateway_enqueue_packet(&gw, &hdr, pkt_info, &pkt);
+ 
+     if (memcmp(gw_write_buf, &hdr, sizeof(hdr))) {
+         errx(1, "header incorrectly buffered");
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
+--- a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_full.c
+@@ -5,7 +5,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+@@ -17,7 +17,7 @@
+     union lgtd_lifx_target target = { .tags = 0 };
+ 
+     struct lgtd_lifx_packet_header hdr;
+-    lgtd_lifx_wire_setup_header(
++    const struct lgtd_lifx_packet_info *pkt_info = lgtd_lifx_wire_setup_header(
+         &hdr,
+         LGTD_LIFX_TARGET_ALL_DEVICES,
+         target,
+@@ -29,9 +29,7 @@
+     gw.pkt_ring_head = 1;
+     gw.pkt_ring_tail = 2;
+ 
+-    lgtd_lifx_gateway_enqueue_packet(
+-        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
+-    );
++    lgtd_lifx_gateway_enqueue_packet(&gw, &hdr, pkt_info, &pkt);
+ 
+     if (memcmp(gw_write_buf, &hdr, sizeof(hdr))) {
+         errx(1, "header incorrectly buffered");
+@@ -65,9 +63,7 @@
+         errx(1, "event_add should have been called with gw.write_ev");
+     }
+ 
+-    lgtd_lifx_gateway_enqueue_packet(
+-        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
+-    );
++    lgtd_lifx_gateway_enqueue_packet(&gw, &hdr, pkt_info, &pkt);
+ 
+     if (gw_write_buf_idx != sizeof(pkt) + sizeof(hdr)) {
+         errx(1, "nothing should have been buffered");
+diff --git a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
+--- a/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
++++ b/tests/lifx/gateway/test_gateway_enqueue_packet_ring_wraparound.c
+@@ -5,7 +5,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+@@ -17,7 +17,7 @@
+     union lgtd_lifx_target target = { .tags = 0 };
+ 
+     struct lgtd_lifx_packet_header hdr;
+-    lgtd_lifx_wire_setup_header(
++    const struct lgtd_lifx_packet_info *pkt_info = lgtd_lifx_wire_setup_header(
+         &hdr,
+         LGTD_LIFX_TARGET_ALL_DEVICES,
+         target,
+@@ -31,9 +31,7 @@
+     gw.pkt_ring_head = pkt_ring_last_idx;
+     gw.pkt_ring_tail = 2;
+ 
+-    lgtd_lifx_gateway_enqueue_packet(
+-        &gw, &hdr, LGTD_LIFX_SET_POWER_STATE, &pkt, sizeof(pkt)
+-    );
++    lgtd_lifx_gateway_enqueue_packet(&gw, &hdr, pkt_info, &pkt);
+ 
+     if (memcmp(gw_write_buf, &hdr, sizeof(hdr))) {
+         errx(1, "header incorrectly buffered");
+diff --git a/tests/lifx/gateway/test_gateway_handle_tag_labels.c b/tests/lifx/gateway/test_gateway_handle_tag_labels.c
+--- a/tests/lifx/gateway/test_gateway_handle_tag_labels.c
++++ b/tests/lifx/gateway/test_gateway_handle_tag_labels.c
+@@ -7,7 +7,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_update_tag_refcounts.c b/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
+--- a/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
++++ b/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
+@@ -5,7 +5,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_write_callback.c b/tests/lifx/gateway/test_gateway_write_callback.c
+--- a/tests/lifx/gateway/test_gateway_write_callback.c
++++ b/tests/lifx/gateway/test_gateway_write_callback.c
+@@ -43,7 +43,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c b/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_clears_ring_full_flag.c
+@@ -43,7 +43,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c b/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_last_packet_on_ring.c
+@@ -42,7 +42,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_partial_write.c b/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_partial_write.c
+@@ -50,7 +50,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c b/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
+--- a/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
++++ b/tests/lifx/gateway/test_gateway_write_callback_ring_wraparound.c
+@@ -43,7 +43,7 @@
+ int
+ main(void)
+ {
+-    lgtd_lifx_wire_load_packet_infos_map();
++    lgtd_lifx_wire_load_packet_info_map();
+ 
+     struct lgtd_lifx_gateway gw;
+     memset(&gw, 0, sizeof(gw));
+diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
+--- a/tests/lifx/mock_gateway.h
++++ b/tests/lifx/mock_gateway.h
+@@ -11,7 +11,7 @@
+ bool
+ lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
+                                enum lgtd_lifx_packet_type pkt_type,
+-                               const void *pkt)
++                               void *pkt)
+ {
+     (void)gw;
+     (void)pkt_type;
