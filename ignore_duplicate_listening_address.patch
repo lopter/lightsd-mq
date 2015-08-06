@@ -1,5 +1,6 @@
 # HG changeset patch
 # Parent  d8e34f128c677442c5c047793207dbc1664b6c2e
+Allow duplicate listening address in the command line
 
 diff --git a/core/listen.c b/core/listen.c
 --- a/core/listen.c

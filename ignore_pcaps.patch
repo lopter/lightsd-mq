@@ -1,5 +1,9 @@
 # HG changeset patch
-# Parent  d7f8706407ee3520ecd1c964be8df4a2aebd5d12
+# Parent  a0c1768fb594da51951048f6b167ab5a9499d734
+Ignore my packet captures directories
+
+I never found myself looking for an older pcap, what we really need is a bulb
+simulator and test scenarios.
 
 diff --git a/.hgignore b/.hgignore
 --- a/.hgignore

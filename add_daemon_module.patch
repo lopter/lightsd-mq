@@ -1,5 +1,6 @@
 # HG changeset patch
-# Parent  cbddb13a7d39708480843e537aa02af758d220dd
+# Parent  fa84fd51301cf3bf3786f7e3c03031488f31d1ef
+Actual support for daemonization with a nice process name
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -952,7 +953,7 @@ diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
  )
 -TARGET_LINK_LIBRARIES(test_core_proto ${TIME_MONOTONIC_LIBRARY})
  
- FUNCTION(ADD_ROUTER_TEST TEST_SOURCE)
+ FUNCTION(ADD_PROTO_TEST TEST_SOURCE)
      ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_proto)
 diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
 --- a/tests/core/proto/test_proto_get_light_state.c

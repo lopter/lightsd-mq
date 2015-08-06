@@ -1,5 +1,9 @@
 # HG changeset patch
-# Parent  d31deced4d0b4228c4215069ee40febb19b71c15
+# Parent  a4ff67d866644b2bf11abb7030d1f4ce8c6b0988
+Add initial support for tag (grouping) and untag (ungrouping)
+
+It's a bit rough without an auto-retry mechanism and it doesn't seem to work
+well with the newer bulbs like the LIFX White 800.
 
 diff --git a/README.rst b/README.rst
 --- a/README.rst

@@ -1,5 +1,6 @@
 # HG changeset patch
-# Parent  80fb374d7109e03c44f049a2d7a845abf00663e1
+# Parent  493a81b724f08c6d746c3879bafd86e7f05342fa
+Fix a couple function names
 
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
@@ -36,7 +37,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
 --- a/tests/core/proto/test_proto_set_waveform.c
 +++ b/tests/core/proto/test_proto_set_waveform.c
-@@ -37,7 +37,7 @@
+@@ -36,7 +36,7 @@
      int brightness = le16toh(waveform->brightness);
      int kelvin = le16toh(waveform->kelvin);
      int period = le32toh(waveform->period);
@@ -48,7 +49,7 @@ diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_
 diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
 --- a/tests/core/proto/test_proto_set_waveform_on_routing_error.c
 +++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
-@@ -37,7 +37,7 @@
+@@ -36,7 +36,7 @@
      int brightness = le16toh(waveform->brightness);
      int kelvin = le16toh(waveform->kelvin);
      int period = le32toh(waveform->period);

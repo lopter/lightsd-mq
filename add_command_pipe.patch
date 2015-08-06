@@ -1,5 +1,9 @@
 # HG changeset patch
-# Parent  f937c717c75e9a3e60a327d5b641ada7a4589a07
+# Parent  1bf59939e3a0b2c9ab7c201ae836662322cd9fb8
+Add support for a write-only command pipe for easy scripting
+
+You can just dump simple JSON-RPC calls in it, it will pair nicely with
+the toggle command that I'm gonna implement.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt

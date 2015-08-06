@@ -1,10 +1,13 @@
 # HG changeset patch
-# Parent  46aa876b47a3e3c07b4855aa4cbff94acba75e16
+# Parent  b5f496df71441bfe4bb153a027acf832255ea81a
+Handle intermediate values between POWER_STATE_ON and OFF from the bulbs
+
+It's supposed to be 0xffff or 0 but that's actually not true.
 
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
 +++ b/lifx/wire_proto.c
-@@ -341,16 +341,22 @@
+@@ -342,16 +342,22 @@
      pkt->brightness = le16toh(pkt->brightness);
      pkt->kelvin = le16toh(pkt->kelvin);
      pkt->dim = le16toh(pkt->dim);

@@ -1,10 +1,11 @@
 # HG changeset patch
-# Parent  298fe56d98508afd0b2d3098264f4661d5908fe5
+# Parent  0a70598874618551b57f92c9f8fb83769a04487f
+UI/Cosmetic fixes
 
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
-@@ -138,6 +138,7 @@
+@@ -139,6 +139,7 @@
          "  [-v,--verbosity debug|info|warning|error]\n",
          progname
      );
@@ -12,7 +13,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      exit(0);
  }
  
-@@ -159,6 +160,10 @@
+@@ -162,6 +163,10 @@
      };
      const char short_opts[] = "l:c:fthv:V";
  
@@ -23,6 +24,15 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      for (int rv = getopt_long(argc, argv, short_opts, long_opts, NULL);
           rv != -1;
           rv = getopt_long(argc, argv, short_opts, long_opts, NULL)) {
+@@ -205,7 +210,7 @@
+             }
+             break;
+         case 'V':
+-            printf("%s v%s\n", argv[0], LGTD_VERSION);
++            printf("lightsd v%s\n", LGTD_VERSION);
+             return 0;
+         default:
+             lgtd_usage(argv[0]);
 diff --git a/core/version.h.in b/core/version.h.in
 --- a/core/version.h.in
 +++ b/core/version.h.in
@@ -32,6 +42,6 @@ diff --git a/core/version.h.in b/core/version.h.in
  
 -const char LGTD_VERSION[] = "@LGTD_VERSION@";
 +const char LGTD_VERSION[] = (
-+    "@LIGHTSD_VERSION@"
-+    "\n\nCopyright (c) 2014, 2015, Louis Opter <kalessin@kalessin.fr>"
++    "@LIGHTSD_VERSION@\n\n"
++    "Copyright (c) 2014, 2015, Louis Opter <kalessin@kalessin.fr>"
 +);

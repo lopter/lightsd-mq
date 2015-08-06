@@ -1,5 +1,9 @@
 # HG changeset patch
-# Parent  b6ac01b32ad7a6c3ec5b7b3c45490eb9f47c0951
+# Parent  7b0e8adfc825726be69cea48e7cf3883dbbe7d12
+Handle bulbs with bugged tags bitfields
+
+I'm getting that on the LIFX White 800 for tag and untag I'm afraid
+something is weird with their firmare.
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
