@@ -9,5 +9,5 @@ fix_crash_in_get_light_state_when_tag_does_not_exist.patch
 fix_lifx_wire_float_endian_functions_naming.patch
 ignore_pcaps.patch
 fix_unused_unused_attribute.patch
-properly_encode_packets_payload.patch
+properly_encode_packets_payload.patch #-skip
 relax_timings.patch
