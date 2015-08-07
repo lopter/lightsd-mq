@@ -1,9 +1,13 @@
 # HG changeset patch
-# Parent  339e9ea6909d7cac4f6a9f8a13ce46d23495b3ec
-Convert LIFX packets to the right endianess before sending them
+# Parent  719b36bfbb15759d8668f741337694d69f37676c
+Re-organize the packet sending code a bit
 
-And refactor the code a bit to pass pkt_info (also now spelled correctly)
-around instead of looking it up twice.
+Endianess conversion now takes place when enqueuing the packet on the
+gateway. We're gonna encode the same packeta multiple times but this is
+much better from a code perspective.
+
+And refactor the code a bit to pass pkt_info (also now spelled
+correctly) around instead of looking it up twice.
 
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
@@ -17,6 +21,49 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      if (!lgtd_lifx_timer_setup() || !lgtd_lifx_broadcast_setup()) {
          lgtd_err(1, "can't setup lightsd");
      }
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -107,7 +107,6 @@
+         .transition = transition_msecs
+     };
+ 
+-    lgtd_lifx_wire_encode_light_color(&pkt);
+     SEND_RESULT(
+         client, lgtd_router_send(targets, LGTD_LIFX_SET_LIGHT_COLOR, &pkt)
+     );
+@@ -145,7 +144,6 @@
+         .waveform = waveform
+     };
+ 
+-    lgtd_lifx_wire_encode_waveform(&pkt);
+     SEND_RESULT(
+         client, lgtd_router_send(targets, LGTD_LIFX_SET_WAVEFORM, &pkt)
+     );
+@@ -284,7 +282,6 @@
+         struct lgtd_lifx_packet_tag_labels pkt = { .tags = 0 };
+         pkt.tags = LGTD_LIFX_WIRE_TAG_ID_TO_VALUE(tag_id);
+         strncpy(pkt.label, tag_label, sizeof(pkt.label) - 1);
+-        lgtd_lifx_wire_encode_tag_labels(&pkt);
+         bool enqueued = lgtd_lifx_gateway_send_to_site(
+             site->gw, LGTD_LIFX_SET_TAG_LABELS, &pkt
+         );
+@@ -306,7 +303,6 @@
+         if (!(bulb->state.tags & tag_value)) {
+             struct lgtd_lifx_packet_tags pkt;
+             pkt.tags = bulb->state.tags | tag_value;
+-            lgtd_lifx_wire_encode_tags(&pkt);
+             lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_TAGS, &pkt);
+         }
+     }
+@@ -366,7 +362,6 @@
+             if (bulb->state.tags & tag_value) {
+                 struct lgtd_lifx_packet_tags pkt;
+                 pkt.tags = bulb->state.tags & ~tag_value;
+-                lgtd_lifx_wire_encode_tags(&pkt);
+                 lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_TAGS, &pkt);
+             }
+         }
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
