@@ -1,0 +1,19 @@
+# HG changeset patch
+# Parent  c2a45e03f05e05e7c31723254ca63b82df551bda
+Fix an incorrectly check snprintf return value.
+
+In this case we would have returned some invalid output instead of
+skipping one bulb.
+
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -195,7 +195,7 @@
+             bulb->state.power == LGTD_LIFX_POWER_ON ? "true" : "false",
+             bulb->state.label
+         );
+-        if (written == sizeof(buf)) {
++        if (written >= sizeof(buf)) {
+             lgtd_warnx(
+                 "can't send state of bulb %s (%s) to client "
+                 "[%s]:%hu: output buffer to small",
