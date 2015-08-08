@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  7b0e8adfc825726be69cea48e7cf3883dbbe7d12
+# Parent  97f7fd10087f08547f48c20644461f2356e7399b
 Handle bulbs with bugged tags bitfields
 
 I'm getting that on the LIFX White 800 for tag and untag I'm afraid

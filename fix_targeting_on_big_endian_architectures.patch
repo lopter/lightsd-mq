@@ -1,8 +1,9 @@
 # HG changeset patch
-# Parent  19383f32944eded3babc54cd9a7fc623e8f74462
+# Parent  75b032c23f91d4ddf3b4842bb0f1b7839fdf7ecf
 Fix tag targeting on big endian platforms
 
-:\
+I think that was the last issue on big endian platforms. I can't wait to
+setup a buildbot for it.
 
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c

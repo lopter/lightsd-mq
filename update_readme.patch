@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  a660cf68b39b944f49e40116ea2668631c399cda
+# Parent  f4870e0a3ea73f505d404cb84b496614a3db2af2
 Reword the README a bit
 
 diff --git a/README.rst b/README.rst
@@ -27,17 +27,7 @@ diff --git a/README.rst b/README.rst
  - set_light_from_hsbk;
  - set_waveform (change the light according to a function like SAW or SINE);
  - get_light_state;
-@@ -68,7 +68,8 @@
- ``setproctitle`` (pretty much any non-BSD system, including Mac OS X).
- 
- lightsd is actively developed and tested from Arch Linux, Debian and Mac OS X;
--both for 32/64 bits and little/big endian architectures.
-+both for 32/64 bits, little endian with big endian (mips32) support being worked
-+on.
- 
- Build instructions
- ------------------
-@@ -103,4 +104,22 @@
+@@ -103,4 +103,22 @@
  
  Use the ``-f`` option to run lightsd in the foreground.
  
