@@ -9,6 +9,7 @@ fix_crash_in_get_light_state_when_tag_does_not_exist.patch
 fix_lifx_wire_float_endian_functions_naming.patch
 ignore_pcaps.patch
 fix_unused_unused_attribute.patch
-properly_encode_packets_payload.patch #-skip
+pass_pkt_info_around.patch #-skip
 relax_timings.patch
+remove_assert_on_request_id.patch
 fix_targeting_on_big_endian_architectures.patch

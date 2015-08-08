@@ -1,7 +1,30 @@
 # HG changeset patch
-# Parent  0a70598874618551b57f92c9f8fb83769a04487f
+# Parent  d0442b5bc172c3841cc5a2b577d4ffdf311c9116
 UI/Cosmetic fixes
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -35,7 +35,9 @@
+ INCLUDE(AddAllSubdirectories)
+ INCLUDE(AddTestFromSources)
+ 
+-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe -Wextra -Wall -Wstrict-prototypes -std=c99")
++SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}} -pipe")
++SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99")
++SET(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE} "")
+ 
+ ADD_DEFINITIONS(
+     # Only relevant for the GNU libc:
+@@ -55,7 +57,7 @@
+ IF (CMAKE_BUILD_TYPE MATCHES "DEBUG")
+     ADD_DEFINITIONS("-DQUEUE_MACRO_DEBUG=1")
+     IF (CMAKE_COMPILER_IS_GNUCC)
+-        ADD_DEFINITIONS("-g3" "-ggdb")
++        SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g3 -ggdb")
+     ENDIF ()
+ ENDIF ()
+ 
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -36,12 +59,14 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 diff --git a/core/version.h.in b/core/version.h.in
 --- a/core/version.h.in
 +++ b/core/version.h.in
-@@ -29,4 +29,7 @@
+@@ -29,4 +29,9 @@
  
  #pragma once
  
 -const char LGTD_VERSION[] = "@LGTD_VERSION@";
 +const char LGTD_VERSION[] = (
 +    "@LIGHTSD_VERSION@\n\n"
++    "cflags: @CMAKE_C_FLAGS@\n"
++    "proctitle_support: @HAVE_PROCTITLE@\n\n"
 +    "Copyright (c) 2014, 2015, Louis Opter <kalessin@kalessin.fr>"
 +);
