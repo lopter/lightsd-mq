@@ -1,0 +1,92 @@
+# HG changeset patch
+# Parent  4d67ae61b98ed498e692f80031dc1aed42b307d3
+Fix a couple tests and some warning on mips32
+
+diff --git a/tests/core/pipe/test_pipe_read_callback.c b/tests/core/pipe/test_pipe_read_callback.c
+--- a/tests/core/pipe/test_pipe_read_callback.c
++++ b/tests/core/pipe/test_pipe_read_callback.c
+@@ -130,7 +130,9 @@
+     }
+ 
+     if (size != -1) {
+-        errx(1, "got unexpected size %ld in pullup (expected -1)", size);
++        errx(
++            1, "got unexpected size %jd in pullup (expected -1)", (intmax_t)size
++        );
+     }
+ 
+     return &request[evbuffer_pullup_call_count++ ? sizeof(request) - 1 : 0];
+diff --git a/tests/core/pipe/test_pipe_read_callback_extra_data.c b/tests/core/pipe/test_pipe_read_callback_extra_data.c
+--- a/tests/core/pipe/test_pipe_read_callback_extra_data.c
++++ b/tests/core/pipe/test_pipe_read_callback_extra_data.c
+@@ -121,7 +121,7 @@
+         if (len != sizeof(request) - sizeof(REQUEST_1)) {
+             errx(
+                 1, "trying to drain %ju bytes (expected %ju)",
+-                (uintmax_t)len, sizeof(request) - sizeof(REQUEST_1)
++                (uintmax_t)len, (uintmax_t)(sizeof(request) - sizeof(REQUEST_1))
+             );
+         }
+         break;
+@@ -143,7 +143,9 @@
+     }
+ 
+     if (size != -1) {
+-        errx(1, "got unexpected size %ld in pullup (expected -1)", size);
++        errx(
++            1, "got unexpected size %jd in pullup (expected -1)", (intmax_t)size
++        );
+     }
+ 
+     return &request[evbuffer_pullup_call_count++ ? sizeof(request) - 1 : 0];
+diff --git a/tests/core/pipe/test_pipe_read_callback_multiple_requests.c b/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
+--- a/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
++++ b/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
+@@ -160,7 +160,9 @@
+     }
+ 
+     if (size != -1) {
+-        errx(1, "got unexpected size %ld in pullup (expected -1)", size);
++        errx(
++            1, "got unexpected size %jd in pullup (expected -1)", (intmax_t)size
++        );
+     }
+ 
+     int offset;
+diff --git a/tests/core/proto/test_proto_untag.c b/tests/core/proto/test_proto_untag.c
+--- a/tests/core/proto/test_proto_untag.c
++++ b/tests/core/proto/test_proto_untag.c
+@@ -119,10 +119,10 @@
+     }
+ 
+     struct lgtd_lifx_packet_tags *pkt_tags = pkt;
+-    if (pkt_tags->tags != 0x2) {
++    if (le64toh(pkt_tags->tags) != 0x2) {
+         errx(
+             1, "invalid SET_TAGS payload=%#jx (expected %#x)",
+-            (uintmax_t)pkt_tags->tags, 0x2
++            (uintmax_t)le64toh(pkt_tags->tags), 0x2
+         );
+     }
+ 
+diff --git a/tests/core/router/test_router_send_to_tag.c b/tests/core/router/test_router_send_to_tag.c
+--- a/tests/core/router/test_router_send_to_tag.c
++++ b/tests/core/router/test_router_send_to_tag.c
+@@ -31,6 +31,8 @@
+     const void *pkt_queued = lgtd_tests_gw_pkt_queue[0].pkt;
+     int pkt_size = lgtd_tests_gw_pkt_queue[0].pkt_size;
+ 
++    lgtd_lifx_wire_decode_header(hdr_queued);
++
+     if (recpt_gw != gw_1) {
+         lgtd_errx(1, "the packet has been sent to the wrong gateway");
+     }
+@@ -82,6 +84,8 @@
+         pkt_queued = lgtd_tests_gw_pkt_queue[i].pkt;
+         pkt_size = lgtd_tests_gw_pkt_queue[i].pkt_size;
+ 
++        lgtd_lifx_wire_decode_header(hdr_queued);
++
+         if (!lgtd_tests_lifx_header_has_flags(hdr_queued, expected_flags)) {
+             lgtd_errx(1, "the packet header doesn't have the right protocol flags");
+         }
