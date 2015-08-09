@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  580a0540d3c0c0486545e06a586a2cf83bb0c3d2
+# Parent  0955e5e7ff9f454c303a1314cfec54d3c3708cd5
 Handle various informational packet types
 
 - MCU state & firmware info;
@@ -931,3 +931,132 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 +void lgtd_lifx_wire_decode_ip_firmware_info(struct lgtd_lifx_packet_ip_firmware_info *);
 +void lgtd_lifx_wire_decode_product_info(struct lgtd_lifx_packet_product_info *);
 +void lgtd_lifx_wire_decode_runtime_info(struct lgtd_lifx_packet_runtime_info *);
+diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
+--- a/tests/lifx/mock_gateway.h
++++ b/tests/lifx/mock_gateway.h
+@@ -129,3 +129,51 @@
+     (void)pkt_tags;
+ }
+ #endif
++
++#ifndef LGTD_LIFX_GATEWAY_HANDLE_IP_STATE
++void
++lgtd_lifx_gateway_handle_ip_state(struct lgtd_lifx_gateway *gw,
++                                  const struct lgtd_lifx_packet_header *hdr,
++                                  const struct lgtd_lifx_packet_ip_state *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef LGTD_LIFX_GATEWAY_HANDLE_IP_FIRMWARE_INFO
++void
++lgtd_lifx_gateway_handle_ip_firmware_info(struct lgtd_lifx_gateway *gw,
++                                          const struct lgtd_lifx_packet_header *hdr,
++                                          const struct lgtd_lifx_packet_ip_firmware_info *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef LGTD_LIFX_GATEWAY_HANDLE_PRODUCT_INFO
++void
++lgtd_lifx_gateway_handle_product_info(struct lgtd_lifx_gateway *gw,
++                                      const struct lgtd_lifx_packet_header *hdr,
++                                      const struct lgtd_lifx_packet_product_info *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
++
++#ifndef LGTD_LIFX_GATEWAY_HANDLE_RUNTIME_INFO
++void
++lgtd_lifx_gateway_handle_runtime_info(struct lgtd_lifx_gateway *gw,
++                                      const struct lgtd_lifx_packet_header *hdr,
++                                      const struct lgtd_lifx_packet_runtime_info *pkt)
++{
++    (void)gw;
++    (void)hdr;
++    (void)pkt;
++}
++#endif
+diff --git a/tests/lifx/wire_proto/test_wire_proto_encode_decode_header.c b/tests/lifx/wire_proto/test_wire_proto_encode_decode_header.c
+--- a/tests/lifx/wire_proto/test_wire_proto_encode_decode_header.c
++++ b/tests/lifx/wire_proto/test_wire_proto_encode_decode_header.c
+@@ -2,7 +2,7 @@
+ 
+ #include "wire_proto.c"
+ 
+-#include "test_wire_proto_utils.h"
++#include "mock_gateway.h"
+ 
+ int
+ main(void)
+diff --git a/tests/lifx/wire_proto/test_wire_proto_utils.h b/tests/lifx/wire_proto/test_wire_proto_utils.h
+deleted file mode 100644
+--- a/tests/lifx/wire_proto/test_wire_proto_utils.h
++++ /dev/null
+@@ -1,46 +0,0 @@
+-#pragma once
+-
+-void lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
+-                                          const struct lgtd_lifx_packet_header *hdr,
+-                                          const struct lgtd_lifx_packet_pan_gateway *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-void lgtd_lifx_gateway_handle_light_status(struct lgtd_lifx_gateway *gw,
+-                                           const struct lgtd_lifx_packet_header *hdr,
+-                                           const struct lgtd_lifx_packet_light_status *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-void lgtd_lifx_gateway_handle_power_state(struct lgtd_lifx_gateway *gw,
+-                                          const struct lgtd_lifx_packet_header *hdr,
+-                                          const struct lgtd_lifx_packet_power_state *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-void lgtd_lifx_gateway_handle_tag_labels(struct lgtd_lifx_gateway *gw,
+-                                         const struct lgtd_lifx_packet_header *hdr,
+-                                         const struct lgtd_lifx_packet_tag_labels *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+-
+-void lgtd_lifx_gateway_handle_tags(struct lgtd_lifx_gateway *gw,
+-                                   const struct lgtd_lifx_packet_header *hdr,
+-                                   const struct lgtd_lifx_packet_tags *pkt)
+-{
+-    (void)gw;
+-    (void)hdr;
+-    (void)pkt;
+-}
+diff --git a/tests/lifx/wire_proto/test_wire_proto_waveform_table.c b/tests/lifx/wire_proto/test_wire_proto_waveform_table.c
+--- a/tests/lifx/wire_proto/test_wire_proto_waveform_table.c
++++ b/tests/lifx/wire_proto/test_wire_proto_waveform_table.c
+@@ -1,6 +1,6 @@
+ #include "wire_proto.c"
+ 
+-#include "test_wire_proto_utils.h"
++#include "mock_gateway.h"
+ 
+ int
+ main(void)
