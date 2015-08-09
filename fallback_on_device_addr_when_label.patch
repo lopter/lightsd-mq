@@ -1,0 +1,16 @@
+# HG changeset patch
+# Parent  f31af55210fe791d198fc5a25525dc994ad3be3b
+Return the bulb address in get_light_state if a bulb label is empty
+
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -222,7 +222,7 @@
+             buf, sizeof(buf), state_fmt,
+             h, s, b, bulb->state.kelvin,
+             bulb->state.power == LGTD_LIFX_POWER_ON ? "true" : "false",
+-            bulb->state.label
++            bulb->state.label[0] ? bulb->state.label : lgtd_addrtoa(bulb->addr)
+         );
+         if (written >= (int)sizeof(buf)) {
+             lgtd_warnx(

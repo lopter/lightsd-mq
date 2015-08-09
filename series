@@ -1,1 +1,3 @@
 implement_some_metadata_packet_types.h
+fallback_on_device_addr_when_label.patch
+use_jq_when_avalaible.patch
