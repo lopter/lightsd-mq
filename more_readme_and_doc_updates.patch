@@ -1,6 +1,6 @@
 # HG changeset patch
-# Parent  3e0bfd2efc8afcc44834b4ff006934f5c238c353
-Document tag/untag update known issues
+# Parent  0249a2a271bdfa11c38de366543a430aba67dbd6
+Document tag/untag and update known issues
 
 diff --git a/README.rst b/README.rst
 --- a/README.rst
