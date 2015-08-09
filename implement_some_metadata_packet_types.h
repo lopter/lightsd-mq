@@ -472,11 +472,11 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
  struct lgtd_lifx_gateway {
      LIST_ENTRY(lgtd_lifx_gateway)   link;
      struct lgtd_lifx_bulb_list      bulbs;
-+#define LGTD_LIFX_GATEWAY_GET_BULB_OR_RETURN(b, gw, bulb_addr)  do {     \
-+    (b) = lgtd_lifx_gateway_get_or_open_bulb((gw), (bulb_addr));    \
-+    if (!(b)) {                                                     \
-+        return;                                                     \
-+    }                                                               \
++#define LGTD_LIFX_GATEWAY_GET_BULB_OR_RETURN(b, gw, bulb_addr)  do {    \
++    (b) = lgtd_lifx_gateway_get_or_open_bulb((gw), (bulb_addr));        \
++    if (!(b)) {                                                         \
++        return;                                                         \
++    }                                                                   \
 +} while (0)
      // Multiple gateways can share the same site (that happens when bulbs are
      // far away enough that ZigBee can't be used). Moreover the SET_PAN_GATEWAY
