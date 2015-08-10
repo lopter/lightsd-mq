@@ -102,6 +102,106 @@ diff --git a/core/log.c b/core/log.c
  _lgtd_err(void (*errfn)(int, const char *, ...),
             int eval,
             const char *fmt,
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -196,6 +196,39 @@
+     }
+ 
+     static const char *state_fmt = ("{"
++        "\"_lifx\":{"
++            "\"gateway\":{"
++                "\"url\":\"tcp://%s:[%hu]\","
++                "\"latency\":%d"
++            "},"
++            "\"mcu\":{"
++                "\"firmware_built_at\":\"%s\","
++                "\"firmware_installed_at\":\"%s\","
++                "\"firmware_version\":%u,"
++                "\"signal_strength\":%u,"
++                "\"tx_bytes\":%u,"
++                "\"rx_bytes\":%u,"
++                "\"unknown\":%u"
++            "},"
++            "\"wifi\":{"
++                "\"firmware_built_at\":\"%s\","
++                "\"firmware_installed_at\":\"%s\","
++                "\"signal_strength\":%u,"
++                "\"tx_bytes\":%u,"
++                "\"rx_bytes\":%u,"
++                "\"unknown\":%u"
++            "},"
++            "\"product_info\":{"
++                "\"vendor_id\":%#x,"
++                "\"product_id\":%#x,"
++                "\"version\":%u"
++            "},"
++            "\"runtime_info\":{"
++                "\"time\":\"%s\","
++                "\"uptime\":%ju,"
++                "\"downtime\":%ju"
++            "}"
++        "},"
+         "\"hsbk\":[%s,%s,%s,%hu],"
+         "\"power\":%s,"
+         "\"label\":\"%s\","
+@@ -206,6 +239,21 @@
+         (src), (start), (stop), (dst), sizeof((dst))    \
+     )
+ 
++#define PRINT_LIFX_FW_TIMESTAMPS(fw_info, built_at_buf, installed_at_buf)       \
++    LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP((fw_info)->built_at, (built_at_buf));   \
++    LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(                                        \
++        (fw_info)->installed_at, (installed_at_buf)                             \
++    )
++
++#define LIFX_IP_STATUS_ARGS(b, ip)      \
++    ip##_fw_built_at,                   \
++    ip##_fw_installed_at,               \
++    (b)->ip##_fw_info.version,        \
++    (b)->ip##_state.signal_strength,  \
++    (b)->ip##_state.tx_bytes,         \
++    (b)->ip##_state.rx_bytes,         \
++    (b)->ip##_state.reserved
++
+     lgtd_client_start_send_response(client);
+     lgtd_client_write_string(client, "[");
+     struct lgtd_router_device *device;
+@@ -217,9 +265,33 @@
+         PRINT_COMPONENT(bulb->state.saturation, s, 0, 1);
+         PRINT_COMPONENT(bulb->state.brightness, b, 0, 1);
+ 
+-        char buf[3072];
++        char mcu_fw_built_at[64], mcu_fw_installed_at[64], bulb_time[64];
++        LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(bulb->runtime_info.time, bulb_time);
++        PRINT_LIFX_FW_TIMESTAMPS(
++            &bulb->mcu_fw_info, mcu_fw_built_at, mcu_fw_installed_at
++        );
++
++        char wifi_fw_built_at[64], wifi_fw_installed_at[64];
++        PRINT_LIFX_FW_TIMESTAMPS(
++            &bulb->wifi_fw_info, wifi_fw_built_at, wifi_fw_installed_at
++        );
++
++        char buf[4096];
+         int written = snprintf(
+             buf, sizeof(buf), state_fmt,
++            // _lifx.gateway:
++            bulb->gw->ip_addr, bulb->gw->port,
++            LGTD_LIFX_GATEWAY_LATENCY(bulb->gw),
++            // _lifx.{mcu,wifi}:
++            LIFX_IP_STATUS_ARGS(bulb, mcu), LIFX_IP_STATUS_ARGS(bulb, wifi),
++            // _lifx.product_info:
++            bulb->product_info.vendor_id, bulb->product_info.product_id,
++            bulb->product_info.version,
++            // _lifx.runtime_info:
++            bulb_time,
++            LGTD_NSECS_TO_SECS(bulb->runtime_info.uptime),
++            LGTD_NSECS_TO_SECS(bulb->runtime_info.downtime),
++            // bulb state:
+             h, s, b, bulb->state.kelvin,
+             bulb->state.power == LGTD_LIFX_POWER_ON ? "true" : "false",
+             bulb->state.label[0] ? bulb->state.label : lgtd_addrtoa(bulb->addr)
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
@@ -276,6 +376,15 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      assert(sizeof(*pkt) == sizeof(b->state));
      lgtd_lifx_bulb_set_light_state(
+@@ -519,7 +515,7 @@
+         }
+     }
+ 
+-    int latency = gw->last_pkt_at - gw->last_req_at;
++    int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
+     if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
+         if (!event_pending(gw->refresh_ev, EV_TIMEOUT, NULL)) {
+             int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
 @@ -559,14 +555,9 @@
          gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr), pkt->power
      );
@@ -481,7 +590,15 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
      // Multiple gateways can share the same site (that happens when bulbs are
      // far away enough that ZigBee can't be used). Moreover the SET_PAN_GATEWAY
      // packet doesn't include the device address in the header (i.e: site and
-@@ -77,6 +83,18 @@
+@@ -60,6 +66,7 @@
+     lgtd_time_mono_t                last_req_at;
+     lgtd_time_mono_t                next_req_at;
+     lgtd_time_mono_t                last_pkt_at;
++#define LGTD_LIFX_GATEWAY_LATENCY(gw) ((gw)->last_pkt_at - (gw)->last_req_at)
+     struct lgtd_lifx_message        pkt_ring[LGTD_LIFX_GATEWAY_PACKET_RING_SIZE];
+ #define LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(idx)  do { \
+     (idx) += 1;                                             \
+@@ -77,6 +84,18 @@
  
  extern struct lgtd_lifx_gateway_list lgtd_lifx_gateways;
  
@@ -500,7 +617,7 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
  struct lgtd_lifx_gateway *lgtd_lifx_gateway_get(const struct sockaddr_storage *);
  struct lgtd_lifx_gateway *lgtd_lifx_gateway_open(const struct sockaddr_storage *,
                                                   ev_socklen_t,
-@@ -119,3 +137,15 @@
+@@ -119,3 +138,15 @@
  void lgtd_lifx_gateway_handle_tags(struct lgtd_lifx_gateway *,
                                     const struct lgtd_lifx_packet_header *,
                                     const struct lgtd_lifx_packet_tags *);
