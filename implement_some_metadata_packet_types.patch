@@ -1,15 +1,32 @@
 # HG changeset patch
-# Parent  0955e5e7ff9f454c303a1314cfec54d3c3708cd5
+# Parent  42808e1e42e717f87163cdaf63d9c72303da2d9f
 Handle various informational packet types
 
 - MCU state & firmware info;
 - WiFi state & firmware info;
 - device/runtime info.
 
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -106,10 +106,9 @@
+     char title[LGTD_DAEMON_TITLE_SIZE] = { 0 };
+     int i = 0;
+ 
+-#define TITLE_APPEND(fmt, ...) do {                                         \
+-    int n = snprintf((&title[i]), (sizeof(title) - i), (fmt), __VA_ARGS__); \
+-    i = LGTD_MIN(i + n, (int)sizeof(title));                                \
+-} while (0)
++#define TITLE_APPEND(fmt, ...) LGTD_SNPRINTF_APPEND(    \
++    title, i, (int)sizeof(title), (fmt), __VA_ARGS__    \
++)
+ 
+ #define PREFIX(fmt, ...) TITLE_APPEND(                              \
+     "%s" fmt, (i && title[i - 1] == ')' ? "; " : ""), __VA_ARGS__   \
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -24,10 +24,33 @@
+@@ -24,10 +24,37 @@
  #define LGTD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
  #define LGTD_MIN(a, b) ((a) < (b) ? (a) : (b))
  #define LGTD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -41,10 +58,14 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 +        );                                                                      \
 +    }                                                                           \
 +} while (0)
++#define LGTD_SNPRINTF_APPEND(buf, i, bufsz, ...) do {       \
++    int n = snprintf(&(buf)[(i)], bufsz - i, __VA_ARGS__);  \
++    (i) = LGTD_MIN((i) + n, bufsz);                         \
++while (0)
  
  enum lgtd_verbosity {
      LGTD_DEBUG = 0,
-@@ -51,6 +74,11 @@
+@@ -51,6 +78,11 @@
  void lgtd_sockaddrtoa(const struct sockaddr_storage *, char *buf, int buflen);
  short lgtd_sockaddrport(const struct sockaddr_storage *);
  
@@ -105,7 +126,7 @@ diff --git a/core/log.c b/core/log.c
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -196,6 +196,39 @@
+@@ -196,6 +196,40 @@
      }
  
      static const char *state_fmt = ("{"
@@ -126,6 +147,7 @@ diff --git a/core/proto.c b/core/proto.c
 +            "\"wifi\":{"
 +                "\"firmware_built_at\":\"%s\","
 +                "\"firmware_installed_at\":\"%s\","
++                "\"firmware_version\":%u,"
 +                "\"signal_strength\":%u,"
 +                "\"tx_bytes\":%u,"
 +                "\"rx_bytes\":%u,"
@@ -145,7 +167,7 @@ diff --git a/core/proto.c b/core/proto.c
          "\"hsbk\":[%s,%s,%s,%hu],"
          "\"power\":%s,"
          "\"label\":\"%s\","
-@@ -206,6 +239,21 @@
+@@ -206,6 +240,12 @@
          (src), (start), (stop), (dst), sizeof((dst))    \
      )
  
@@ -155,23 +177,16 @@ diff --git a/core/proto.c b/core/proto.c
 +        (fw_info)->installed_at, (installed_at_buf)                             \
 +    )
 +
-+#define LIFX_IP_STATUS_ARGS(b, ip)      \
-+    ip##_fw_built_at,                   \
-+    ip##_fw_installed_at,               \
-+    (b)->ip##_fw_info.version,        \
-+    (b)->ip##_state.signal_strength,  \
-+    (b)->ip##_state.tx_bytes,         \
-+    (b)->ip##_state.rx_bytes,         \
-+    (b)->ip##_state.reserved
-+
      lgtd_client_start_send_response(client);
      lgtd_client_write_string(client, "[");
      struct lgtd_router_device *device;
-@@ -217,9 +265,33 @@
+@@ -217,14 +257,91 @@
          PRINT_COMPONENT(bulb->state.saturation, s, 0, 1);
          PRINT_COMPONENT(bulb->state.brightness, b, 0, 1);
  
 -        char buf[3072];
+-        int written = snprintf(
+-            buf, sizeof(buf), state_fmt,
 +        char mcu_fw_built_at[64], mcu_fw_installed_at[64], bulb_time[64];
 +        LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(bulb->runtime_info.time, bulb_time);
 +        PRINT_LIFX_FW_TIMESTAMPS(
@@ -183,29 +198,97 @@ diff --git a/core/proto.c b/core/proto.c
 +            &bulb->wifi_fw_info, wifi_fw_built_at, wifi_fw_installed_at
 +        );
 +
-+        char buf[4096];
-         int written = snprintf(
-             buf, sizeof(buf), state_fmt,
-+            // _lifx.gateway:
++        char buf[2048];
++        int i = 0;
++
++        LGTD_SNPRINTF_APPEND(
++            buf, i, (int)sizeof(buf), "{"
++                "\"_lifx\":{"
++                    "\"gateway\":{"
++                        "\"url\":\"tcp://%s:[%hu]\","
++                        "\"latency\":%d"
++                    "},",
 +            bulb->gw->ip_addr, bulb->gw->port,
-+            LGTD_LIFX_GATEWAY_LATENCY(bulb->gw),
-+            // _lifx.{mcu,wifi}:
-+            LIFX_IP_STATUS_ARGS(bulb, mcu), LIFX_IP_STATUS_ARGS(bulb, wifi),
-+            // _lifx.product_info:
-+            bulb->product_info.vendor_id, bulb->product_info.product_id,
++            LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
++        );
++
++        for (int ip = 0; ip != LGTD_LIFX_BULB_IP_COUNT; ip++) {
++            LGTD_SNPRINTF_APPEND(
++                buf, i, (int)sizeof(buf),
++                "\"%s\":{"
++                    "\"firmware_built_at\":\"%s\","
++                    "\"firmware_installed_at\":\"%s\","
++                    "\"firmware_version\":%u,"
++                    "\"signal_strength\":%u,"
++                    "\"tx_bytes\":%u,"
++                    "\"rx_bytes\":%u,"
++                    "\"unknown\":%u"
++                "},",
++                lgtd_lifx_bulb_ip_names[ip],
++                bulb->ips[ip].fw_info.built_at,
++                bulb->ips[ip].fw_info.installed_at,
++                bulb->ips[ip].fw_info.version,
++                bulb->ips[ip].state.signal_strength,
++                bulb->ips[ip].state.tx_bytes,
++                bulb->ips[ip].state.rx_bytes,
++                bulb->ips[ip].state.reserved
++            );
++        }
++
++        LGTD_SNPRINTF_APPEND(
++            buf, i, (int)sizeof(buf),
++                "\"product_info\":{"
++                    "\"vendor_id\":%#x,"
++                    "\"product_id\":%#x,"
++                    "\"version\":%u"
++                "},",
++            bulb->product_info.vendor_id,
++            bulb->product_info.product_id,
 +            bulb->product_info.version,
-+            // _lifx.runtime_info:
++        );
++
++        LGTD_SNPRINTF_APPEND(
++            buf, i, (int)sizeof(buf),
++                "\"runtime_info\":{"
++                    "\"time\":\"%s\","
++                    "\"uptime\":%ju,"
++                    "\"downtime\":%ju"
++                "}"
++            "},"
 +            bulb_time,
 +            LGTD_NSECS_TO_SECS(bulb->runtime_info.uptime),
 +            LGTD_NSECS_TO_SECS(bulb->runtime_info.downtime),
-+            // bulb state:
++        );
++
++        LGTD_SNPRINTF_APPEND(
++            buf, i, (int)sizeof(buf),
++            "\"hsbk\":[%s,%s,%s,%hu],"
++            "\"power\":%s,"
++            "\"label\":\"%s\","
++            "\"tags\":[",
              h, s, b, bulb->state.kelvin,
              bulb->state.power == LGTD_LIFX_POWER_ON ? "true" : "false",
              bulb->state.label[0] ? bulb->state.label : lgtd_addrtoa(bulb->addr)
+         );
+-        if (written >= (int)sizeof(buf)) {
++
++        if (i == (int)sizeof(buf)) {
+             lgtd_warnx(
+                 "can't send state of bulb %s (%s) to client "
+                 "[%s]:%hu: output buffer to small",
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -154,3 +154,69 @@
+@@ -39,6 +39,8 @@
+ struct lgtd_lifx_bulb_map lgtd_lifx_bulbs_table =
+     RB_INITIALIZER(&lgtd_lifx_bulbs_table);
+ 
++const const char *lgtd_lifx_bulb_ip_names[] = { "mcu", "wifi" };
++
+ struct lgtd_lifx_bulb *
+ lgtd_lifx_bulb_get(const uint8_t *addr)
+ {
+@@ -154,3 +156,69 @@
  
      bulb->state.tags = tags;
  }
@@ -278,7 +361,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 diff --git a/lifx/bulb.h b/lifx/bulb.h
 --- a/lifx/bulb.h
 +++ b/lifx/bulb.h
-@@ -30,17 +30,51 @@
+@@ -30,17 +30,58 @@
      char        label[LGTD_LIFX_LABEL_SIZE];
      uint64_t    tags;
  };
@@ -309,6 +392,14 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 +};
  #pragma pack(pop)
  
++enum lgtd_lifx_bulb_ips {
++    LGTD_LIFX_BULB_MCU_IP   = 0,
++    LGTD_LIFX_BULB_WIFI_IP  = 1,
++    LGTD_LIFX_BULB_IP_COUNT = 2
++};
++
++extern const char *lgtd_lifx_bulb_ip_names[];
++
  struct lgtd_lifx_bulb {
 -    RB_ENTRY(lgtd_lifx_bulb)        link;
 -    SLIST_ENTRY(lgtd_lifx_bulb)     link_by_gw;
@@ -318,27 +409,26 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 -    lgtd_time_mono_t                last_light_state_at;
 -    lgtd_time_mono_t                dirty_at;
 -    uint16_t                        expected_power_on;
-+    RB_ENTRY(lgtd_lifx_bulb)            link;
-+    SLIST_ENTRY(lgtd_lifx_bulb)         link_by_gw;
-+    lgtd_time_mono_t                    last_light_state_at;
-+    lgtd_time_mono_t                    last_mcu_state_at;
-+    lgtd_time_mono_t                    last_wifi_state_at;
-+    lgtd_time_mono_t                    last_runtime_info_at;
-+    lgtd_time_mono_t                    dirty_at;
-+    uint16_t                            expected_power_on;
-+    uint8_t                             addr[LGTD_LIFX_ADDR_LENGTH];
-+    struct lgtd_lifx_gateway            *gw;
-+    struct lgtd_lifx_light_state        state;
-+    struct lgtd_lifx_ip_state           mcu_state;
-+    struct lgtd_lifx_ip_state           wifi_state;
-+    struct lgtd_lifx_ip_firmware_info   mcu_fw_info;
-+    struct lgtd_lifx_ip_firmware_info   wifi_fw_info;
-+    struct lgtd_lifx_product_info       product_info;
-+    struct lgtd_lifx_runtime_info       runtime_info;
++    RB_ENTRY(lgtd_lifx_bulb)                link;
++    SLIST_ENTRY(lgtd_lifx_bulb)             link_by_gw;
++    lgtd_time_mono_t                        last_light_state_at;
++    lgtd_time_mono_t                        last_runtime_info_at;
++    lgtd_time_mono_t                        dirty_at;
++    uint16_t                                expected_power_on;
++    uint8_t                                 addr[LGTD_LIFX_ADDR_LENGTH];
++    struct lgtd_lifx_gateway                *gw;
++    struct lgtd_lifx_light_state            state;
++    struct {
++        lgtd_time_mono_t                    updated_at;
++        struct lgtd_lifx_ip_state           state;
++        struct lgtd_lifx_ip_firmware_info   fw_info;
++    }                                       ips[LGTD_LIFX_BULB_IP_COUNT];
++    struct lgtd_lifx_product_info           product_info;
++    struct lgtd_lifx_runtime_info           runtime_info;
  };
  RB_HEAD(lgtd_lifx_bulb_map, lgtd_lifx_bulb);
  SLIST_HEAD(lgtd_lifx_bulb_list, lgtd_lifx_bulb);
-@@ -69,3 +103,19 @@
+@@ -69,3 +110,19 @@
                                      lgtd_time_mono_t);
  void lgtd_lifx_bulb_set_power_state(struct lgtd_lifx_bulb *, uint16_t);
  void lgtd_lifx_bulb_set_tags(struct lgtd_lifx_bulb *, uint64_t);
