@@ -1,3 +1,4 @@
 use_jq_when_avalaible.patch
 fix_ipv4_address_formatting.patch
+fix_command_pipe_read_loop.patch
 implement_some_metadata_packet_types.patch

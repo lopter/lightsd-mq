@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  42808e1e42e717f87163cdaf63d9c72303da2d9f
+# Parent  c861815ea8cd4d7a6feba313ce8edab140f769f6
 Handle various informational packet types
 
 - MCU state & firmware info;
@@ -80,7 +80,7 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 diff --git a/core/log.c b/core/log.c
 --- a/core/log.c
 +++ b/core/log.c
-@@ -52,14 +52,7 @@
+@@ -53,14 +53,7 @@
      if (!localtime_r(&now.tv_sec, &tm_now)) {
          goto error;
      }
@@ -96,7 +96,7 @@ diff --git a/core/log.c b/core/log.c
      return;
  error:
      strbuf[0] = '\0';
-@@ -110,6 +103,26 @@
+@@ -121,6 +114,26 @@
  }
  
  void
@@ -149,10 +149,10 @@ diff --git a/core/proto.c b/core/proto.c
 +            "{"
 +                "\"_lifx\":{"
 +                    "\"gateway\":{"
-+                        "\"url\":\"tcp://[%s]:%hu\","
++                        "\"addr\":\"%s\","
 +                        "\"latency\":%ju"
 +                    "},",
-+            bulb->gw->ip_addr, bulb->gw->port,
++            lgtd_addrtoa(bulb->gw->addr),
 +            (uintmax_t)LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
 +        );
 +
@@ -191,8 +191,8 @@ diff --git a/core/proto.c b/core/proto.c
 +        LGTD_SNPRINTF_APPEND(
 +            buf, i, (int)sizeof(buf),
 +                "\"product_info\":{"
-+                    "\"vendor_id\":%#x,"
-+                    "\"product_id\":%#x,"
++                    "\"vendor_id\":%x,"
++                    "\"product_id\":%x,"
 +                    "\"version\":%u"
 +                "},",
 +            bulb->product_info.vendor_id,
@@ -265,7 +265,14 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -39,6 +39,8 @@
+@@ -34,11 +34,15 @@
+ #include "gateway.h"
+ #include "core/daemon.h"
+ #include "core/stats.h"
++#include "core/proto.h"
++#include "core/router.h"
+ #include "core/lightsd.h"
+ 
  struct lgtd_lifx_bulb_map lgtd_lifx_bulbs_table =
      RB_INITIALIZER(&lgtd_lifx_bulbs_table);
  
@@ -274,7 +281,34 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  struct lgtd_lifx_bulb *
  lgtd_lifx_bulb_get(const uint8_t *addr)
  {
-@@ -154,3 +156,53 @@
+@@ -68,6 +72,10 @@
+ 
+     bulb->last_light_state_at = lgtd_time_monotonic_msecs();
+ 
++    lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_VERSION, NULL);
++    lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_MESH_FIRMWARE, NULL);
++    lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_WIFI_FIRMWARE_STATE, NULL);
++
+     return bulb;
+ }
+ 
+@@ -123,6 +131,7 @@
+         LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
+             bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
+         );
++        lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_INFO, NULL);
+     }
+ 
+     lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
+@@ -140,6 +149,7 @@
+         LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
+             bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
+         );
++        lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_INFO, NULL);
+     }
+ 
+     bulb->state.power = power;
+@@ -154,3 +164,53 @@
  
      bulb->state.tags = tags;
  }
@@ -417,7 +451,81 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -489,12 +489,8 @@
+@@ -15,12 +15,15 @@
+ // You should have received a copy of the GNU General Public License
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
++#include <sys/ioctl.h>
+ #include <sys/queue.h>
++#include <sys/socket.h>
+ #include <sys/tree.h>
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
+ #include <errno.h>
++#include <net/if_arp.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -275,6 +278,27 @@
+     return bulb;
+ }
+ 
++// TODO: make a separate shared library to resolve ip addresses to mac
++// addresses:
++static bool
++lgtd_lifx_gateway_resolve_ipv4_addr(int socket,
++                                    const struct sockaddr_in *sin,
++                                    uint8_t *hw_addr)
++{
++    assert(sin);
++    assert(hw_addr);
++    assert(socket >= 0);
++
++    struct arpreq req;
++    memset(&req, 0, sizeof(req));
++    memcpy(&req.arp_pa, sin, sizeof(*sin));
++    if (!ioctl(socket, SIOCGARP, &req)) {
++        memcpy(hw_addr, req.arp_pa.sa_data, LGTD_LIFX_ADDR_LENGTH);
++        return true;
++    }
++    return false;
++}
++
+ struct lgtd_lifx_gateway *
+ lgtd_lifx_gateway_open(const struct sockaddr_storage *peer,
+                        ev_socklen_t addrlen,
+@@ -310,10 +334,20 @@
+     gw->refresh_ev = evtimer_new(
+         lgtd_ev_base, lgtd_lifx_gateway_refresh_callback, gw
+     );
++
+     memcpy(&gw->peer, peer, sizeof(gw->peer));
+     lgtd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
+     gw->port = lgtd_sockaddrport(peer);
+     memcpy(gw->site.as_array, site, sizeof(gw->site.as_array));
++    if (peer->ss_family == AF_INET) {
++        bool ok = lgtd_lifx_gateway_resolve_ipv4_addr(
++            gw->socket, (const struct sockaddr_in *)peer, gw->addr
++        );
++        if (!ok) {
++            lgtd_warn("couldn't resolve %s to a LIFX address", gw->ip_addr);
++        }
++    }
++
+     gw->last_req_at = received_at;
+     gw->next_req_at = received_at;
+     gw->last_pkt_at = received_at;
+@@ -336,7 +370,7 @@
+ 
+     // In case this is the first bulb (re-)discovered, start the watchdog, it
+     // will stop by itself:
+-    lgtd_lifx_timer_start_watchdog();
++    lgtd_lifx_timer_start_timers();
+ 
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, 1);
+ 
+@@ -489,12 +523,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -432,7 +540,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      assert(sizeof(*pkt) == sizeof(b->state));
      lgtd_lifx_bulb_set_light_state(
-@@ -519,7 +515,7 @@
+@@ -519,7 +549,7 @@
          }
      }
  
@@ -441,7 +549,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
          if (!event_pending(gw->refresh_ev, EV_TIMEOUT, NULL)) {
              int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
-@@ -559,14 +555,9 @@
+@@ -559,14 +589,9 @@
          gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr), pkt->power
      );
  
@@ -458,7 +566,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  }
  
  int
-@@ -673,9 +664,10 @@
+@@ -673,9 +698,10 @@
      }
  }
  
@@ -472,7 +580,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  {
      assert(gw && hdr && pkt);
  
-@@ -685,12 +677,8 @@
+@@ -685,12 +711,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -487,7 +595,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      int tag_id;
      LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, pkt->tags) {
-@@ -707,3 +695,129 @@
+@@ -707,3 +729,129 @@
  
      lgtd_lifx_bulb_set_tags(b, pkt->tags);
  }
@@ -620,7 +728,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 diff --git a/lifx/gateway.h b/lifx/gateway.h
 --- a/lifx/gateway.h
 +++ b/lifx/gateway.h
-@@ -36,6 +36,12 @@
+@@ -36,12 +36,19 @@
  struct lgtd_lifx_gateway {
      LIST_ENTRY(lgtd_lifx_gateway)   link;
      struct lgtd_lifx_bulb_list      bulbs;
@@ -633,7 +741,14 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
      // Multiple gateways can share the same site (that happens when bulbs are
      // far away enough that ZigBee can't be used). Moreover the SET_PAN_GATEWAY
      // packet doesn't include the device address in the header (i.e: site and
-@@ -60,6 +66,7 @@
+     // device_addr have the same value) so we have no choice but to use the
+     // remote ip address to identify a gateway:
+     struct sockaddr_storage         peer;
++    uint8_t                         addr[LGTD_LIFX_ADDR_LENGTH];
+     char                            ip_addr[INET6_ADDRSTRLEN];
+     uint16_t                        port;
+     // TODO: just use an integer and rename it to site_id:
+@@ -60,6 +67,7 @@
      lgtd_time_mono_t                last_req_at;
      lgtd_time_mono_t                next_req_at;
      lgtd_time_mono_t                last_pkt_at;
@@ -641,7 +756,7 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
      struct lgtd_lifx_message        pkt_ring[LGTD_LIFX_GATEWAY_PACKET_RING_SIZE];
  #define LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(idx)  do { \
      (idx) += 1;                                             \
-@@ -77,6 +84,12 @@
+@@ -77,6 +85,12 @@
  
  extern struct lgtd_lifx_gateway_list lgtd_lifx_gateways;
  
@@ -654,7 +769,7 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
  struct lgtd_lifx_gateway *lgtd_lifx_gateway_get(const struct sockaddr_storage *);
  struct lgtd_lifx_gateway *lgtd_lifx_gateway_open(const struct sockaddr_storage *,
                                                   ev_socklen_t,
-@@ -119,3 +132,15 @@
+@@ -119,3 +133,15 @@
  void lgtd_lifx_gateway_handle_tags(struct lgtd_lifx_gateway *,
                                     const struct lgtd_lifx_packet_header *,
                                     const struct lgtd_lifx_packet_tags *);
@@ -670,6 +785,185 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 +void lgtd_lifx_gateway_handle_runtime_info(struct lgtd_lifx_gateway *,
 +                                           const struct lgtd_lifx_packet_header *,
 +                                           const struct lgtd_lifx_packet_runtime_info *);
+diff --git a/lifx/timer.c b/lifx/timer.c
+--- a/lifx/timer.c
++++ b/lifx/timer.c
+@@ -38,9 +38,11 @@
+ static struct {
+     struct event *watchdog_interval_ev;
+     struct event *discovery_timeout_ev;
+-} lgtd_lifx_timer_context = {
++    struct event *metadata_refresh_ev;
++} lgtd_lifx_timers = {
+     .watchdog_interval_ev = NULL,
+-    .discovery_timeout_ev = NULL
++    .discovery_timeout_ev = NULL,
++    .metadata_refresh_ev = NULL
+ };
+ 
+ static void
+@@ -64,7 +66,7 @@
+     }
+ 
+     struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
+-    if (event_add(lgtd_lifx_timer_context.discovery_timeout_ev, &tv)
++    if (event_add(lgtd_lifx_timers.discovery_timeout_ev, &tv)
+         || !lgtd_lifx_broadcast_discovery()) {
+         lgtd_err(1, "can't start discovery");
+     }
+@@ -132,29 +134,46 @@
+     }
+ }
+ 
++static void
++lgtd_lifx_timer_metadata_refresh_event_callback(evutil_socket_t socket,
++                                                short events,
++                                                void *ctx)
++{
++    (void)socket;
++    (void)events;
++    (void)ctx;
++
++    struct lgtd_lifx_gateway *gw, *next_gw;
++    LIST_FOREACH_SAFE(gw, &lgtd_lifx_gateways, link, next_gw) {
++        lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_GET_MESH_INFO, NULL);
++        lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_GET_WIFI_INFO, NULL);
++        lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_GET_INFO, NULL);
++    }
++}
++
+ bool
+ lgtd_lifx_timer_setup(void)
+ {
+-    assert(!lgtd_lifx_timer_context.watchdog_interval_ev);
+-    assert(!lgtd_lifx_timer_context.discovery_timeout_ev);
++    assert(!lgtd_lifx_timers.watchdog_interval_ev);
++    assert(!lgtd_lifx_timers.discovery_timeout_ev);
++    assert(!lgtd_lifx_timers.metadata_refresh_ev);
+ 
+-    lgtd_lifx_timer_context.discovery_timeout_ev = event_new(
+-        lgtd_ev_base,
+-        -1,
+-        0,
+-        lgtd_lifx_timer_discovery_timeout_event_callback,
+-        NULL
++    lgtd_lifx_timers.discovery_timeout_ev = event_new(
++        lgtd_ev_base, -1, 0,
++        lgtd_lifx_timer_discovery_timeout_event_callback, NULL
+     );
+-    lgtd_lifx_timer_context.watchdog_interval_ev = event_new(
+-        lgtd_ev_base,
+-        -1,
+-        EV_PERSIST,
+-        lgtd_lifx_timer_watchdog_timeout_event_callback,
+-        NULL
++    lgtd_lifx_timers.watchdog_interval_ev = event_new(
++        lgtd_ev_base, -1, EV_PERSIST,
++        lgtd_lifx_timer_watchdog_timeout_event_callback, NULL
++    );
++    lgtd_lifx_timers.metadata_refresh_ev = event_new(
++        lgtd_ev_base, -1, EV_PERSIST,
++        lgtd_lifx_timer_metadata_refresh_event_callback, NULL
+     );
+ 
+-    if (lgtd_lifx_timer_context.discovery_timeout_ev
+-        && lgtd_lifx_timer_context.watchdog_interval_ev) {
++    if (lgtd_lifx_timers.discovery_timeout_ev
++        && lgtd_lifx_timers.watchdog_interval_ev
++        && lgtd_lifx_timers.metadata_refresh_ev) {
+         return true;
+     }
+ 
+@@ -167,42 +186,53 @@
+ void
+ lgtd_lifx_timer_close(void)
+ {
+-    if (lgtd_lifx_timer_context.discovery_timeout_ev) {
+-        event_del(lgtd_lifx_timer_context.discovery_timeout_ev);
+-        event_free(lgtd_lifx_timer_context.discovery_timeout_ev);
+-        lgtd_lifx_timer_context.discovery_timeout_ev = NULL;
++    if (lgtd_lifx_timers.discovery_timeout_ev) {
++        event_del(lgtd_lifx_timers.discovery_timeout_ev);
++        event_free(lgtd_lifx_timers.discovery_timeout_ev);
++        lgtd_lifx_timers.discovery_timeout_ev = NULL;
+     }
+-    if (lgtd_lifx_timer_context.watchdog_interval_ev) {
+-        event_del(lgtd_lifx_timer_context.watchdog_interval_ev);
+-        event_free(lgtd_lifx_timer_context.watchdog_interval_ev);
+-        lgtd_lifx_timer_context.watchdog_interval_ev = NULL;
++    if (lgtd_lifx_timers.watchdog_interval_ev) {
++        event_del(lgtd_lifx_timers.watchdog_interval_ev);
++        event_free(lgtd_lifx_timers.watchdog_interval_ev);
++        lgtd_lifx_timers.watchdog_interval_ev = NULL;
++    }
++    if (lgtd_lifx_timers.metadata_refresh_ev) {
++        event_del(lgtd_lifx_timers.metadata_refresh_ev);
++        event_free(lgtd_lifx_timers.metadata_refresh_ev);
++        lgtd_lifx_timers.metadata_refresh_ev = NULL;
+     }
+ }
+ 
+ void
+-lgtd_lifx_timer_start_watchdog(void)
++lgtd_lifx_timer_start_timers(void)
+ {
+     assert(
+         !RB_EMPTY(&lgtd_lifx_bulbs_table) || !LIST_EMPTY(&lgtd_lifx_gateways)
+     );
+ 
+-    if (!evtimer_pending(lgtd_lifx_timer_context.watchdog_interval_ev, NULL)) {
++    if (!evtimer_pending(lgtd_lifx_timers.watchdog_interval_ev, NULL)) {
+         struct timeval tv = LGTD_MSECS_TO_TIMEVAL(
+             LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS
+         );
+-        if (event_add(lgtd_lifx_timer_context.watchdog_interval_ev, &tv)) {
+-            lgtd_err(1, "can't start watchdog");
++        if (event_add(lgtd_lifx_timers.watchdog_interval_ev, &tv)) {
++            lgtd_err(1, "can't start timers");
+         }
+-        lgtd_debug("starting watchdog timer");
+     }
++    if (!evtimer_pending(lgtd_lifx_timers.metadata_refresh_ev, NULL)) {
++        struct timeval tv = {
++            .tv_sec = LGTD_LIFX_TIMER_METADATA_REFRESH_INTERVAL_SECS
++        };
++        if (event_add(lgtd_lifx_timers.metadata_refresh_ev, &tv)) {
++            lgtd_err(1, "can't start timers");
++        }
++    }
++    lgtd_debug("starting timers");
+ }
+ 
+ void
+ lgtd_lifx_timer_start_discovery(void)
+ {
+-    assert(!evtimer_pending(
+-        lgtd_lifx_timer_context.discovery_timeout_ev, NULL
+-    ));
++    assert(!evtimer_pending(lgtd_lifx_timers.discovery_timeout_ev, NULL));
+ 
+     lgtd_lifx_timer_discovery_timeout_event_callback(-1, 0, NULL);
+     lgtd_debug("starting discovery timer");
+diff --git a/lifx/timer.h b/lifx/timer.h
+--- a/lifx/timer.h
++++ b/lifx/timer.h
+@@ -17,9 +17,13 @@
+ 
+ #pragma once
+ 
+-enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500 };
+-enum { LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
+-enum { LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
++enum lgtd_lifx_timer_intervals {
++    LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500,
++    LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000,
++    LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000,
++    LGTD_LIFX_TIMER_METADATA_REFRESH_INTERVAL_SECS = 60
++};
++
+ enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 3000 };
+ enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000 };
+ 
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
 +++ b/lifx/wire_proto.c
