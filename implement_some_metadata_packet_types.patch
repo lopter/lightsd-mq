@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c861815ea8cd4d7a6feba313ce8edab140f769f6
+# Parent  81b1d5f7c694bd5fc5838962bb1bee40d7d5b918
 Handle various informational packet types
 
 - MCU state & firmware info;
@@ -35,9 +35,9 @@ diff --git a/core/lightsd.h b/core/lightsd.h
      .tv_sec = (v) / 1000,           \
      .tv_usec = ((v) % 1000) * 1000  \
  }
-+#define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)10E6)
-+#define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)10E9)
-+#define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)10E9)
++#define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)10E5)
++#define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)10E8)
++#define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)10E8)
 +#define LGTD_TM_TO_ISOTIME(tm, sbuf, bufsz, usec) do {                          \
 +    /* '2015-01-02T10:13:16.132222+00:00' */                                    \
 +    if ((usec)) {                                                               \
@@ -126,7 +126,7 @@ diff --git a/core/log.c b/core/log.c
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -195,36 +195,108 @@
+@@ -195,36 +195,114 @@
          return;
      }
  
@@ -148,11 +148,17 @@ diff --git a/core/proto.c b/core/proto.c
 +            buf, i, (int)sizeof(buf),
 +            "{"
 +                "\"_lifx\":{"
++                    "\"addr\": \"%s\","
 +                    "\"gateway\":{"
 +                        "\"addr\":\"%s\","
++                        "\"site\":\"%s\","
++                        "\"url\":\"tcp://[%s]:%hu\","
 +                        "\"latency\":%ju"
 +                    "},",
++            lgtd_addrtoa(bulb->addr),
 +            lgtd_addrtoa(bulb->gw->addr),
++            lgtd_addrtoa(bulb->gw->site.as_array),
++            bulb->gw->ip_addr, bulb->gw->port,
 +            (uintmax_t)LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
 +        );
 +
@@ -173,26 +179,26 @@ diff --git a/core/proto.c b/core/proto.c
 +                "\"%s\":{"
 +                    "\"firmware_built_at\":\"%s\","
 +                    "\"firmware_installed_at\":\"%s\","
-+                    "\"firmware_version\":%u,"
++                    "\"firmware_version\":\"%x\","
 +                    "\"signal_strength\":%f,"
 +                    "\"tx_bytes\":%u,"
 +                    "\"rx_bytes\":%u,"
-+                    "\"unknown\":%u"
++                    "\"temperature\":%u"
 +                "},",
 +                lgtd_lifx_bulb_ip_names[ip],
 +                fw_built_at, fw_installed_at, bulb->ips[ip].fw_info.version,
 +                bulb->ips[ip].state.signal_strength,
 +                bulb->ips[ip].state.tx_bytes,
 +                bulb->ips[ip].state.rx_bytes,
-+                bulb->ips[ip].state.reserved
++                bulb->ips[ip].state.temperature
 +            );
 +        }
 +
 +        LGTD_SNPRINTF_APPEND(
 +            buf, i, (int)sizeof(buf),
 +                "\"product_info\":{"
-+                    "\"vendor_id\":%x,"
-+                    "\"product_id\":%x,"
++                    "\"vendor_id\":\"%x\","
++                    "\"product_id\":\"%x\","
 +                    "\"version\":%u"
 +                "},",
 +            bulb->product_info.vendor_id,
@@ -265,10 +271,15 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -34,11 +34,15 @@
+@@ -33,12 +33,51 @@
+ #include "bulb.h"
  #include "gateway.h"
  #include "core/daemon.h"
++#include "timer.h"
  #include "core/stats.h"
++#include "core/jsmn.h"
++#include "core/jsonrpc.h"
++#include "core/client.h"
 +#include "core/proto.h"
 +#include "core/router.h"
  #include "core/lightsd.h"
@@ -278,21 +289,54 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  
 +const char * const lgtd_lifx_bulb_ip_names[] = { "mcu", "wifi" };
 +
++static void
++lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer, void *ctx)
++{
++    assert(timer);
++    assert(ctx);
++
++    bool stop = true;
++    struct lgtd_lifx_bulb *bulb = ctx;
++
++#define RESEND_IF(test, pkt_type) do {                      \
++    if ((test)) {                                           \
++        stop = false;                                       \
++        lgtd_router_send_to_device(bulb, (pkt_type), NULL); \
++    }                                                       \
++} while (0)
++
++    RESEND_IF(!bulb->product_info.vendor_id, LGTD_LIFX_GET_VERSION);
++    RESEND_IF(
++        !bulb->ips[LGTD_LIFX_BULB_MCU_IP].fw_info.version,
++        LGTD_LIFX_GET_MESH_FIRMWARE
++    );
++    RESEND_IF(
++        !bulb->ips[LGTD_LIFX_BULB_WIFI_IP].fw_info.version,
++        LGTD_LIFX_GET_WIFI_FIRMWARE_STATE
++    );
++
++    if (stop) {
++        lgtd_lifx_timer_stop_timer(timer);
++    }
++}
++
  struct lgtd_lifx_bulb *
  lgtd_lifx_bulb_get(const uint8_t *addr)
  {
-@@ -68,6 +72,10 @@
+@@ -68,6 +107,12 @@
  
      bulb->last_light_state_at = lgtd_time_monotonic_msecs();
  
-+    lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_VERSION, NULL);
-+    lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_MESH_FIRMWARE, NULL);
-+    lgtd_router_send_to_device(bulb, LGTD_LIFX_GET_WIFI_FIRMWARE_STATE, NULL);
++    lgtd_lifx_timer_start_timer(
++        LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS,
++        lgtd_lifx_bulb_fetch_hardware_info,
++        bulb
++    );
 +
      return bulb;
  }
  
-@@ -123,6 +131,7 @@
+@@ -123,6 +168,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -300,7 +344,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
-@@ -140,6 +149,7 @@
+@@ -140,6 +186,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -308,7 +352,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      bulb->state.power = power;
-@@ -154,3 +164,53 @@
+@@ -154,3 +201,53 @@
  
      bulb->state.tags = tags;
  }
@@ -365,7 +409,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 diff --git a/lifx/bulb.h b/lifx/bulb.h
 --- a/lifx/bulb.h
 +++ b/lifx/bulb.h
-@@ -30,17 +30,61 @@
+@@ -30,17 +30,64 @@
      char        label[LGTD_LIFX_LABEL_SIZE];
      uint64_t    tags;
  };
@@ -374,7 +418,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 +    float       signal_strength;    // mW
 +    uint32_t    tx_bytes;
 +    uint32_t    rx_bytes;
-+    uint16_t    reserved;           // Temperature?
++    uint16_t    temperature;        // Deci-celcius: e.g 24.3 -> 2430
 +};
 +
 +struct lgtd_lifx_ip_firmware_info {
@@ -396,12 +440,15 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 +};
  #pragma pack(pop)
  
++enum { LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS = 5000 };
++
 +enum lgtd_lifx_bulb_ips {
 +    LGTD_LIFX_BULB_MCU_IP = 0,
 +    LGTD_LIFX_BULB_WIFI_IP,
 +    LGTD_LIFX_BULB_IP_COUNT,
 +};
 +
++// keyed with enum lgtd_lifx_bulb_ips:
 +extern const char * const lgtd_lifx_bulb_ip_names[];
 +
 +struct lgtd_lifx_bulb_ip {
@@ -430,7 +477,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
  };
  RB_HEAD(lgtd_lifx_bulb_map, lgtd_lifx_bulb);
  SLIST_HEAD(lgtd_lifx_bulb_list, lgtd_lifx_bulb);
-@@ -69,3 +113,17 @@
+@@ -69,3 +116,17 @@
                                      lgtd_time_mono_t);
  void lgtd_lifx_bulb_set_power_state(struct lgtd_lifx_bulb *, uint16_t);
  void lgtd_lifx_bulb_set_tags(struct lgtd_lifx_bulb *, uint64_t);
@@ -486,7 +533,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +    memset(&req, 0, sizeof(req));
 +    memcpy(&req.arp_pa, sin, sizeof(*sin));
 +    if (!ioctl(socket, SIOCGARP, &req)) {
-+        memcpy(hw_addr, req.arp_pa.sa_data, LGTD_LIFX_ADDR_LENGTH);
++        memcpy(hw_addr, req.arp_ha.sa_data, LGTD_LIFX_ADDR_LENGTH);
 +        return true;
 +    }
 +    return false;
@@ -516,15 +563,6 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      gw->last_req_at = received_at;
      gw->next_req_at = received_at;
      gw->last_pkt_at = received_at;
-@@ -336,7 +370,7 @@
- 
-     // In case this is the first bulb (re-)discovered, start the watchdog, it
-     // will stop by itself:
--    lgtd_lifx_timer_start_watchdog();
-+    lgtd_lifx_timer_start_timers();
- 
-     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, 1);
- 
 @@ -489,12 +523,8 @@
          (uintmax_t)pkt->tags
      );
@@ -628,9 +666,9 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +
 +    lgtd_debug(
 +        "%s <-- [%s]:%hu - %s "
-+        "signal_strength=%f, rx_bytes=%u, tx_bytes=%u, reserved=%hu",
++        "signal_strength=%f, rx_bytes=%u, tx_bytes=%u, temperature=%hu",
 +        type, gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr),
-+        pkt->signal_strength, pkt->rx_bytes, pkt->tx_bytes, pkt->reserved
++        pkt->signal_strength, pkt->rx_bytes, pkt->tx_bytes, pkt->temperature
 +    );
 +
 +    LGTD_LIFX_GATEWAY_SET_BULB_ATTR(
@@ -788,181 +826,13 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 diff --git a/lifx/timer.c b/lifx/timer.c
 --- a/lifx/timer.c
 +++ b/lifx/timer.c
-@@ -38,9 +38,11 @@
- static struct {
-     struct event *watchdog_interval_ev;
-     struct event *discovery_timeout_ev;
--} lgtd_lifx_timer_context = {
-+    struct event *metadata_refresh_ev;
-+} lgtd_lifx_timers = {
-     .watchdog_interval_ev = NULL,
--    .discovery_timeout_ev = NULL
-+    .discovery_timeout_ev = NULL,
-+    .metadata_refresh_ev = NULL
- };
- 
- static void
-@@ -64,7 +66,7 @@
-     }
- 
-     struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
--    if (event_add(lgtd_lifx_timer_context.discovery_timeout_ev, &tv)
-+    if (event_add(lgtd_lifx_timers.discovery_timeout_ev, &tv)
-         || !lgtd_lifx_broadcast_discovery()) {
-         lgtd_err(1, "can't start discovery");
-     }
-@@ -132,29 +134,46 @@
-     }
- }
- 
-+static void
-+lgtd_lifx_timer_metadata_refresh_event_callback(evutil_socket_t socket,
-+                                                short events,
-+                                                void *ctx)
-+{
-+    (void)socket;
-+    (void)events;
-+    (void)ctx;
-+
-+    struct lgtd_lifx_gateway *gw, *next_gw;
-+    LIST_FOREACH_SAFE(gw, &lgtd_lifx_gateways, link, next_gw) {
-+        lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_GET_MESH_INFO, NULL);
-+        lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_GET_WIFI_INFO, NULL);
-+        lgtd_lifx_gateway_send_to_site(gw, LGTD_LIFX_GET_INFO, NULL);
-+    }
-+}
-+
- bool
- lgtd_lifx_timer_setup(void)
- {
--    assert(!lgtd_lifx_timer_context.watchdog_interval_ev);
--    assert(!lgtd_lifx_timer_context.discovery_timeout_ev);
-+    assert(!lgtd_lifx_timers.watchdog_interval_ev);
-+    assert(!lgtd_lifx_timers.discovery_timeout_ev);
-+    assert(!lgtd_lifx_timers.metadata_refresh_ev);
- 
--    lgtd_lifx_timer_context.discovery_timeout_ev = event_new(
--        lgtd_ev_base,
--        -1,
--        0,
--        lgtd_lifx_timer_discovery_timeout_event_callback,
--        NULL
-+    lgtd_lifx_timers.discovery_timeout_ev = event_new(
-+        lgtd_ev_base, -1, 0,
-+        lgtd_lifx_timer_discovery_timeout_event_callback, NULL
-     );
--    lgtd_lifx_timer_context.watchdog_interval_ev = event_new(
--        lgtd_ev_base,
--        -1,
--        EV_PERSIST,
--        lgtd_lifx_timer_watchdog_timeout_event_callback,
--        NULL
-+    lgtd_lifx_timers.watchdog_interval_ev = event_new(
-+        lgtd_ev_base, -1, EV_PERSIST,
-+        lgtd_lifx_timer_watchdog_timeout_event_callback, NULL
-+    );
-+    lgtd_lifx_timers.metadata_refresh_ev = event_new(
-+        lgtd_ev_base, -1, EV_PERSIST,
-+        lgtd_lifx_timer_metadata_refresh_event_callback, NULL
-     );
- 
--    if (lgtd_lifx_timer_context.discovery_timeout_ev
--        && lgtd_lifx_timer_context.watchdog_interval_ev) {
-+    if (lgtd_lifx_timers.discovery_timeout_ev
-+        && lgtd_lifx_timers.watchdog_interval_ev
-+        && lgtd_lifx_timers.metadata_refresh_ev) {
-         return true;
-     }
- 
-@@ -167,42 +186,53 @@
- void
- lgtd_lifx_timer_close(void)
- {
--    if (lgtd_lifx_timer_context.discovery_timeout_ev) {
--        event_del(lgtd_lifx_timer_context.discovery_timeout_ev);
--        event_free(lgtd_lifx_timer_context.discovery_timeout_ev);
--        lgtd_lifx_timer_context.discovery_timeout_ev = NULL;
-+    if (lgtd_lifx_timers.discovery_timeout_ev) {
-+        event_del(lgtd_lifx_timers.discovery_timeout_ev);
-+        event_free(lgtd_lifx_timers.discovery_timeout_ev);
-+        lgtd_lifx_timers.discovery_timeout_ev = NULL;
-     }
--    if (lgtd_lifx_timer_context.watchdog_interval_ev) {
--        event_del(lgtd_lifx_timer_context.watchdog_interval_ev);
--        event_free(lgtd_lifx_timer_context.watchdog_interval_ev);
--        lgtd_lifx_timer_context.watchdog_interval_ev = NULL;
-+    if (lgtd_lifx_timers.watchdog_interval_ev) {
-+        event_del(lgtd_lifx_timers.watchdog_interval_ev);
-+        event_free(lgtd_lifx_timers.watchdog_interval_ev);
-+        lgtd_lifx_timers.watchdog_interval_ev = NULL;
-+    }
-+    if (lgtd_lifx_timers.metadata_refresh_ev) {
-+        event_del(lgtd_lifx_timers.metadata_refresh_ev);
-+        event_free(lgtd_lifx_timers.metadata_refresh_ev);
-+        lgtd_lifx_timers.metadata_refresh_ev = NULL;
-     }
- }
- 
- void
--lgtd_lifx_timer_start_watchdog(void)
-+lgtd_lifx_timer_start_timers(void)
- {
-     assert(
-         !RB_EMPTY(&lgtd_lifx_bulbs_table) || !LIST_EMPTY(&lgtd_lifx_gateways)
-     );
- 
--    if (!evtimer_pending(lgtd_lifx_timer_context.watchdog_interval_ev, NULL)) {
-+    if (!evtimer_pending(lgtd_lifx_timers.watchdog_interval_ev, NULL)) {
-         struct timeval tv = LGTD_MSECS_TO_TIMEVAL(
-             LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS
-         );
--        if (event_add(lgtd_lifx_timer_context.watchdog_interval_ev, &tv)) {
--            lgtd_err(1, "can't start watchdog");
-+        if (event_add(lgtd_lifx_timers.watchdog_interval_ev, &tv)) {
-+            lgtd_err(1, "can't start timers");
+@@ -193,7 +193,6 @@
+         if (event_add(lgtd_lifx_timer_context.watchdog_interval_ev, &tv)) {
+             lgtd_err(1, "can't start watchdog");
          }
 -        lgtd_debug("starting watchdog timer");
      }
-+    if (!evtimer_pending(lgtd_lifx_timers.metadata_refresh_ev, NULL)) {
-+        struct timeval tv = {
-+            .tv_sec = LGTD_LIFX_TIMER_METADATA_REFRESH_INTERVAL_SECS
-+        };
-+        if (event_add(lgtd_lifx_timers.metadata_refresh_ev, &tv)) {
-+            lgtd_err(1, "can't start timers");
-+        }
-+    }
-+    lgtd_debug("starting timers");
  }
- 
- void
- lgtd_lifx_timer_start_discovery(void)
- {
--    assert(!evtimer_pending(
--        lgtd_lifx_timer_context.discovery_timeout_ev, NULL
--    ));
-+    assert(!evtimer_pending(lgtd_lifx_timers.discovery_timeout_ev, NULL));
- 
-     lgtd_lifx_timer_discovery_timeout_event_callback(-1, 0, NULL);
-     lgtd_debug("starting discovery timer");
-diff --git a/lifx/timer.h b/lifx/timer.h
---- a/lifx/timer.h
-+++ b/lifx/timer.h
-@@ -17,9 +17,13 @@
- 
- #pragma once
- 
--enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500 };
--enum { LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
--enum { LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
-+enum lgtd_lifx_timer_intervals {
-+    LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500,
-+    LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000,
-+    LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000,
-+    LGTD_LIFX_TIMER_METADATA_REFRESH_INTERVAL_SECS = 60
-+};
-+
- enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 3000 };
- enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000 };
  
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
@@ -1273,7 +1143,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 +    pkt->signal_strength = lgtd_lifx_wire_lefloattoh(pkt->signal_strength);
 +    pkt->tx_bytes = le32toh(pkt->tx_bytes);
 +    pkt->rx_bytes = le32toh(pkt->rx_bytes);
-+    pkt->reserved = le16toh(pkt->reserved);
++    pkt->temperature = le16toh(pkt->temperature);
 +}
 +
 +void
@@ -1334,7 +1204,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 +    floatle_t   signal_strength;
 +    uint32le_t  tx_bytes;
 +    uint32le_t  rx_bytes;
-+    uint16le_t  reserved;
++    uint16le_t  temperature;
 +};
 +
 +struct lgtd_lifx_packet_ip_firmware_info {

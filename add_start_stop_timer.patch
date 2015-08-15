@@ -1,0 +1,129 @@
+# HG changeset patch
+# Parent  61e16c697f54f585be5989aec7693caf5686b4e1
+Add an interface to start and stop standalone timers
+
+diff --git a/lifx/timer.c b/lifx/timer.c
+--- a/lifx/timer.c
++++ b/lifx/timer.c
+@@ -22,6 +22,7 @@
+ #include <err.h>
+ #include <errno.h>
+ #include <stdbool.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #include <event2/event.h>
+@@ -43,6 +44,9 @@
+     .discovery_timeout_ev = NULL
+ };
+ 
++static struct lgtd_lifx_timer_list lgtd_lifx_timers =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_bulb_timers);
++
+ static void
+ lgtd_lifx_timer_discovery_timeout_event_callback(evutil_socket_t socket,
+                                                  short events,
+@@ -167,6 +171,10 @@
+ void
+ lgtd_lifx_timer_close(void)
+ {
++    struct lgtd_lifx_timer *timer, *next_timer;
++    LIST_FOREACH_SAFE(timer, &lgtd_lifx_timers, link, next_timer) {
++        lgtd_lifx_timer_stop_timer(timer);
++    }
+     if (lgtd_lifx_timer_context.discovery_timeout_ev) {
+         event_del(lgtd_lifx_timer_context.discovery_timeout_ev);
+         event_free(lgtd_lifx_timer_context.discovery_timeout_ev);
+@@ -207,3 +215,54 @@
+     lgtd_lifx_timer_discovery_timeout_event_callback(-1, 0, NULL);
+     lgtd_debug("starting discovery timer");
+ }
++
++static void
++lgtd_lifx_timer_callback(evutil_socket_t socket, short events, void *ctx)
++{
++    assert(ctx);
++
++    (void)socket;
++    (void)events;
++
++    struct lgtd_lifx_timer *timer = ctx;
++    timer->callback(timer, timer->ctx);
++}
++
++bool
++lgtd_lifx_timer_start_timer(int ms,
++                            void (*cb)(struct lgtd_lifx_timer *, void *),
++                            void *ctx)
++{
++    assert(ms > 0);
++    assert(cb);
++
++    struct lgtd_lifx_timer *timer = calloc(1, sizeof(*timer));
++    if (!timer) {
++        return false;
++    }
++    timer->callback = cb;
++    timer->ctx = ctx;
++    LIST_INSERT_HEAD(&lgtd_lifx_timers, timer, link);
++
++    struct timeval tv = LGTD_MSECS_TO_TIMEVAL(ms);
++    timer->event = evtimer_new(lgtd_ev_base, lgtd_lifx_timer_callback, timer);
++    if (!timer->event || evtimer_add(timer->event, &tv)) {
++        LIST_REMOVE(timer, link);
++        free(timer);
++        return false;
++    }
++
++    event_active(timer->event, 0, 0);
++    return true;
++}
++
++void
++lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *timer)
++{
++    assert(timer);
++
++    LIST_REMOVE(timer, link);
++    event_del(timer->event);
++    event_free(timer->event);
++    free(timer);
++}
+diff --git a/lifx/timer.h b/lifx/timer.h
+--- a/lifx/timer.h
++++ b/lifx/timer.h
+@@ -17,13 +17,29 @@
+ 
+ #pragma once
+ 
+-enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500 };
+-enum { LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
+-enum { LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
+-enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 3000 };
+-enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000 };
++enum {
++    LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500,
++    LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000,
++    LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000,
++    LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 3000,
++    LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000
++};
++
++struct event;
++
++struct lgtd_lifx_timer {
++    LIST_ENTRY(lgtd_lifx_timer) link;
++    void                        (*callback)(struct lgtd_lifx_timer *, void *);
++    void                        *ctx;
++    struct event                *event;
++};
++LIST_HEAD(lgtd_lifx_timer_list, lgtd_lifx_timer);
+ 
+ bool lgtd_lifx_timer_setup(void);
+ void lgtd_lifx_timer_close(void);
+ void lgtd_lifx_timer_start_watchdog(void);
+ void lgtd_lifx_timer_start_discovery(void);
++bool lgtd_lifx_timer_start_timer(int, // ms, & the timer is activated right away
++                                 void (*)(struct lgtd_lifx_timer *, void *),
++                                 void *);
++void lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *);
