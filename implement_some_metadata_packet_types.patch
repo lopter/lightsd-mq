@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  81b1d5f7c694bd5fc5838962bb1bee40d7d5b918
+# Parent  565b259950b9b0cf5d5ec30bd8f39dd41f337f6d
 Handle various informational packet types
 
 - MCU state & firmware info;
@@ -35,9 +35,9 @@ diff --git a/core/lightsd.h b/core/lightsd.h
      .tv_sec = (v) / 1000,           \
      .tv_usec = ((v) % 1000) * 1000  \
  }
-+#define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)10E5)
-+#define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)10E8)
-+#define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)10E8)
++#define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)1E6)
++#define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)1E9)
++#define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)1E9)
 +#define LGTD_TM_TO_ISOTIME(tm, sbuf, bufsz, usec) do {                          \
 +    /* '2015-01-02T10:13:16.132222+00:00' */                                    \
 +    if ((usec)) {                                                               \
@@ -826,7 +826,7 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 diff --git a/lifx/timer.c b/lifx/timer.c
 --- a/lifx/timer.c
 +++ b/lifx/timer.c
-@@ -193,7 +193,6 @@
+@@ -201,7 +201,6 @@
          if (event_add(lgtd_lifx_timer_context.watchdog_interval_ev, &tv)) {
              lgtd_err(1, "can't start watchdog");
          }
