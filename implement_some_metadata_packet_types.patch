@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  565b259950b9b0cf5d5ec30bd8f39dd41f337f6d
+# Parent  54b21b430e79df4954da6508b6ed793eccb30b5a
 Handle various informational packet types
 
 - MCU state & firmware info;
@@ -26,7 +26,7 @@ diff --git a/core/daemon.c b/core/daemon.c
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -24,10 +24,37 @@
+@@ -24,10 +24,33 @@
  #define LGTD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
  #define LGTD_MIN(a, b) ((a) < (b) ? (a) : (b))
  #define LGTD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -58,14 +58,10 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 +        );                                                                      \
 +    }                                                                           \
 +} while (0)
-+#define LGTD_SNPRINTF_APPEND(buf, i, bufsz, ...) do {       \
-+    int n = snprintf(&(buf)[(i)], bufsz - i, __VA_ARGS__);  \
-+    (i) = LGTD_MIN((i) + n, bufsz);                         \
-+} while (0)
- 
- enum lgtd_verbosity {
-     LGTD_DEBUG = 0,
-@@ -51,6 +78,11 @@
+ #define LGTD_SNPRINTF_APPEND(buf, i, bufsz, ...) do {       \
+     int n = snprintf(&(buf)[(i)], bufsz - i, __VA_ARGS__);  \
+     (i) = LGTD_MIN((i) + n, bufsz);                         \
+@@ -55,6 +78,11 @@
  void lgtd_sockaddrtoa(const struct sockaddr_storage *, char *buf, int buflen);
  short lgtd_sockaddrport(const struct sockaddr_storage *);
  
@@ -217,8 +213,8 @@ diff --git a/core/proto.c b/core/proto.c
 +                "}"
 +            "},",
 +            bulb_time,
-+            LGTD_NSECS_TO_SECS(bulb->runtime_info.uptime),
-+            LGTD_NSECS_TO_SECS(bulb->runtime_info.downtime)
++            (uintmax_t)LGTD_NSECS_TO_SECS(bulb->runtime_info.uptime),
++            (uintmax_t)LGTD_NSECS_TO_SECS(bulb->runtime_info.downtime)
 +        );
  
  #define PRINT_COMPONENT(src, dst, start, stop)          \
@@ -1265,7 +1261,7 @@ diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
  }
  #endif
 +
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_IP_STATE
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_IP_STATE
 +void
 +lgtd_lifx_gateway_handle_ip_state(struct lgtd_lifx_gateway *gw,
 +                                  const struct lgtd_lifx_packet_header *hdr,
@@ -1277,7 +1273,7 @@ diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
 +}
 +#endif
 +
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_IP_FIRMWARE_INFO
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_IP_FIRMWARE_INFO
 +void
 +lgtd_lifx_gateway_handle_ip_firmware_info(struct lgtd_lifx_gateway *gw,
 +                                          const struct lgtd_lifx_packet_header *hdr,
@@ -1289,7 +1285,7 @@ diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
 +}
 +#endif
 +
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_PRODUCT_INFO
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_PRODUCT_INFO
 +void
 +lgtd_lifx_gateway_handle_product_info(struct lgtd_lifx_gateway *gw,
 +                                      const struct lgtd_lifx_packet_header *hdr,
@@ -1301,7 +1297,7 @@ diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
 +}
 +#endif
 +
-+#ifndef LGTD_LIFX_GATEWAY_HANDLE_RUNTIME_INFO
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_HANDLE_RUNTIME_INFO
 +void
 +lgtd_lifx_gateway_handle_runtime_info(struct lgtd_lifx_gateway *gw,
 +                                      const struct lgtd_lifx_packet_header *hdr,

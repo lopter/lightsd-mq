@@ -1,0 +1,22 @@
+# HG changeset patch
+# Parent  cf311c1e428a6bccd48b7fb7ca82715fb493ae0b
+
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -285,6 +285,7 @@
+                                     const struct sockaddr_in *sin,
+                                     uint8_t *hw_addr)
+ {
++#if 0
+     assert(sin);
+     assert(hw_addr);
+     assert(socket >= 0);
+@@ -296,6 +297,7 @@
+         memcpy(hw_addr, req.arp_ha.sa_data, LGTD_LIFX_ADDR_LENGTH);
+         return true;
+     }
++#endif
+     return false;
+ }
+ 
