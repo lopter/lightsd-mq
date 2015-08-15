@@ -1,7 +1,21 @@
 # HG changeset patch
-# Parent  9a3306521fe5002bdaf61c06d6d74ae5abc3d38e
+# Parent  118f1bcc0f067c493b1f5e112c02ac92fd922dc1
 Fix IPv4 address formatting
 
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -28,6 +28,10 @@
+     .tv_sec = (v) / 1000,           \
+     .tv_usec = ((v) % 1000) * 1000  \
+ }
++#define LGTD_SNPRINTF_APPEND(buf, i, bufsz, ...) do {       \
++    int n = snprintf(&(buf)[(i)], bufsz - i, __VA_ARGS__);  \
++    (i) = LGTD_MIN((i) + n, bufsz);                         \
++} while (0)
+ 
+ enum lgtd_verbosity {
+     LGTD_DEBUG = 0,
 diff --git a/core/log.c b/core/log.c
 --- a/core/log.c
 +++ b/core/log.c
@@ -13,7 +27,7 @@ diff --git a/core/log.c b/core/log.c
  #include <time.h>
  
  #if LGTD_HAVE_LIBBSD
-@@ -93,12 +94,22 @@
+@@ -100,12 +101,22 @@
      assert(buf);
      assert(buflen > 0);
  
