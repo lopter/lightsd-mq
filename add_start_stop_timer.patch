@@ -34,7 +34,7 @@ diff --git a/lifx/timer.c b/lifx/timer.c
      if (lgtd_lifx_timer_context.discovery_timeout_ev) {
          event_del(lgtd_lifx_timer_context.discovery_timeout_ev);
          event_free(lgtd_lifx_timer_context.discovery_timeout_ev);
-@@ -207,3 +215,54 @@
+@@ -207,3 +215,55 @@
      lgtd_lifx_timer_discovery_timeout_event_callback(-1, 0, NULL);
      lgtd_debug("starting discovery timer");
  }
@@ -53,8 +53,9 @@ diff --git a/lifx/timer.c b/lifx/timer.c
 +
 +bool
 +lgtd_lifx_timer_start_timer(int ms,
-+                            void (*cb)(struct lgtd_lifx_timer *, void *),
-+                            void *ctx)
++                            void (*cb)(struct lgtd_lifx_timer *,
++                                       union lgtd_lifx_timer_ctx),
++                            union lgtd_lifx_timer_ctx ctx)
 +{
 +    assert(ms > 0);
 +    assert(cb);
@@ -92,7 +93,7 @@ diff --git a/lifx/timer.c b/lifx/timer.c
 diff --git a/lifx/timer.h b/lifx/timer.h
 --- a/lifx/timer.h
 +++ b/lifx/timer.h
-@@ -17,13 +17,29 @@
+@@ -17,13 +17,36 @@
  
  #pragma once
  
@@ -111,10 +112,16 @@ diff --git a/lifx/timer.h b/lifx/timer.h
 +
 +struct event;
 +
++union lgtd_lifx_timer_ctx {
++    uint64_t    as_uint;
++    void        *as_ptr;
++};
++
 +struct lgtd_lifx_timer {
 +    LIST_ENTRY(lgtd_lifx_timer) link;
-+    void                        (*callback)(struct lgtd_lifx_timer *, void *);
-+    void                        *ctx;
++    void                        (*callback)(struct lgtd_lifx_timer *,
++                                            union lgtd_lifx_timer_ctx);
++    union lgtd_lifx_timer_ctx   ctx;
 +    struct event                *event;
 +};
 +LIST_HEAD(lgtd_lifx_timer_list, lgtd_lifx_timer);
@@ -124,6 +131,7 @@ diff --git a/lifx/timer.h b/lifx/timer.h
  void lgtd_lifx_timer_start_watchdog(void);
  void lgtd_lifx_timer_start_discovery(void);
 +bool lgtd_lifx_timer_start_timer(int, // ms, & the timer is activated right away
-+                                 void (*)(struct lgtd_lifx_timer *, void *),
-+                                 void *);
++                                 void (*)(struct lgtd_lifx_timer *,
++                                          union lgtd_lifx_timer_ctx),
++                                 union lgtd_lifx_timer_ctx);
 +void lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *);

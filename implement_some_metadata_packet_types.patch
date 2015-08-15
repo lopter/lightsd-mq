@@ -271,7 +271,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -33,12 +33,51 @@
+@@ -33,12 +33,57 @@
  #include "bulb.h"
  #include "gateway.h"
  #include "core/daemon.h"
@@ -290,13 +290,19 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +const char * const lgtd_lifx_bulb_ip_names[] = { "mcu", "wifi" };
 +
 +static void
-+lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer, void *ctx)
++lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer,
++                                   union lgtd_lifx_timer_ctx ctx)
 +{
 +    assert(timer);
-+    assert(ctx);
++    assert(ctx.as_uint);
 +
-+    bool stop = true;
-+    struct lgtd_lifx_bulb *bulb = ctx;
++    // Get the bulb again, it might have been closed while we were waiting:
++    const uint8_t *bulb_addr = (const uint8_t *)&ctx.as_uint;
++    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(bulb_addr);
++    if (!bulb) {
++        lgtd_lifx_timer_stop_timer(timer);
++        return;
++    }
 +
 +#define RESEND_IF(test, pkt_type) do {                      \
 +    if ((test)) {                                           \
@@ -305,6 +311,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +    }                                                       \
 +} while (0)
 +
++    bool stop = true;
 +    RESEND_IF(!bulb->product_info.vendor_id, LGTD_LIFX_GET_VERSION);
 +    RESEND_IF(
 +        !bulb->ips[LGTD_LIFX_BULB_MCU_IP].fw_info.version,
@@ -314,7 +321,6 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +        !bulb->ips[LGTD_LIFX_BULB_WIFI_IP].fw_info.version,
 +        LGTD_LIFX_GET_WIFI_FIRMWARE_STATE
 +    );
-+
 +    if (stop) {
 +        lgtd_lifx_timer_stop_timer(timer);
 +    }
@@ -323,20 +329,22 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  struct lgtd_lifx_bulb *
  lgtd_lifx_bulb_get(const uint8_t *addr)
  {
-@@ -68,6 +107,12 @@
+@@ -68,6 +113,14 @@
  
      bulb->last_light_state_at = lgtd_time_monotonic_msecs();
  
++    union lgtd_lifx_timer_ctx ctx = { .as_uint = 0 };
++    memcpy(&ctx.as_uint, addr, LGTD_LIFX_ADDR_LENGTH);
 +    lgtd_lifx_timer_start_timer(
 +        LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS,
 +        lgtd_lifx_bulb_fetch_hardware_info,
-+        bulb
++        ctx
 +    );
 +
      return bulb;
  }
  
-@@ -123,6 +168,7 @@
+@@ -123,6 +176,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -344,7 +352,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
-@@ -140,6 +186,7 @@
+@@ -140,6 +194,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -352,7 +360,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      bulb->state.power = power;
-@@ -154,3 +201,53 @@
+@@ -154,3 +209,53 @@
  
      bulb->state.tags = tags;
  }
