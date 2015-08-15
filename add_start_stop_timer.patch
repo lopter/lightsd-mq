@@ -1,21 +1,7 @@
 # HG changeset patch
-# Parent  48879d9efc6d1b1fa8361857e19b217a4a5a9892
+# Parent  bddbeba717a2c01b12f3818c0d3b24ae72066f3c
 Add an interface to start and stop standalone timers
 
-diff --git a/core/lightsd.h b/core/lightsd.h
---- a/core/lightsd.h
-+++ b/core/lightsd.h
-@@ -28,6 +28,10 @@
-     .tv_sec = (v) / 1000,           \
-     .tv_usec = ((v) % 1000) * 1000  \
- }
-+#define LGTD_SNPRINTF_APPEND(buf, i, bufsz, ...) do {       \
-+    int n = snprintf(&(buf)[(i)], bufsz - i, __VA_ARGS__);  \
-+    (i) = LGTD_MIN((i) + n, bufsz);                         \
-+} while (0)
- 
- enum lgtd_verbosity {
-     LGTD_DEBUG = 0,
 diff --git a/lifx/timer.c b/lifx/timer.c
 --- a/lifx/timer.c
 +++ b/lifx/timer.c
@@ -325,7 +311,7 @@ diff --git a/tests/core/pipe/test_pipe_open_fifo_already_exists.c b/tests/core/p
 diff --git a/tests/core/pipe/test_pipe_read_callback.c b/tests/core/pipe/test_pipe_read_callback.c
 --- a/tests/core/pipe/test_pipe_read_callback.c
 +++ b/tests/core/pipe/test_pipe_read_callback.c
-@@ -14,6 +14,8 @@
+@@ -15,6 +15,8 @@
  #define MOCKED_EVBUFFER_DRAIN
  #include "mock_event2.h"
  #include "mock_gateway.h"
@@ -349,6 +335,18 @@ diff --git a/tests/core/pipe/test_pipe_read_callback_extra_data.c b/tests/core/p
 diff --git a/tests/core/pipe/test_pipe_read_callback_multiple_requests.c b/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
 --- a/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
 +++ b/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
+@@ -14,6 +14,8 @@
+ #define MOCKED_EVBUFFER_DRAIN
+ #include "mock_event2.h"
+ #include "mock_gateway.h"
++#include "mock_router.h"
++#include "mock_timer.h"
+ 
+ #include "tests_utils.h"
+ #define MOCKED_JSONRPC_DISPATCH_REQUEST
+diff --git a/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c b/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c
+--- a/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c
++++ b/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c
 @@ -14,6 +14,8 @@
  #define MOCKED_EVBUFFER_DRAIN
  #include "mock_event2.h"
