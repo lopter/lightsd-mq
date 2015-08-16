@@ -1,5 +1,6 @@
 fix_addrtoa_mess.patch
 make_device_timeout_2_5x_force_refresh.patch
+ignore_sigpipe.patch
 add_start_stop_timer.patch
 expose_a_bunch_of_metadata_in_get_light_state.patch
 add_ipv4_to_ieee8023mac.patch #+future #+linux

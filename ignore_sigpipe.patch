@@ -1,0 +1,30 @@
+# HG changeset patch
+# Parent  f2f2853633d97350ae110af1464739d0238d5530
+Ignore SIGPIPE
+
+It would be sad to die on this one, because a client decided to leave at
+the wrong moment.
+
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -29,6 +29,7 @@
+ #include <stdio.h>
+ #include <stdint.h>
+ #include <stdlib.h>
++#include <signal.h>
+ #include <string.h>
+ #include <strings.h>
+ 
+@@ -123,6 +124,11 @@
+         );
+         evsignal_add(&sigevs[i], NULL);
+     }
++
++    struct sigaction act = { .sa_handler = SIG_IGN };
++    if (sigaction(SIGPIPE, &act, NULL)) {
++        lgtd_err(1, "can't configure signal handling");
++    }
+ }
+ 
+ static void
