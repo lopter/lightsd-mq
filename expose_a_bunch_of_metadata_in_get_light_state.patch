@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  20f6402b334b0f32e6f7b8efe65a421a3c5fdb97
+# Parent  2cfd0a561bb72156459fc8a9dde5bfbb5613724a
 
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
@@ -117,7 +117,7 @@ diff --git a/core/log.c b/core/log.c
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -195,40 +195,116 @@
+@@ -195,40 +195,142 @@
          return;
      }
  
@@ -144,12 +144,12 @@ diff --git a/core/proto.c b/core/proto.c
 +            buf, i, (int)sizeof(buf),
 +            "{"
 +                "\"_lifx\":{"
-+                    "\"addr\": \"%s\","
++                    "\"addr\":\"%s\","
 +                    "\"gateway\":{"
 +                        "\"site\":\"%s\","
 +                        "\"url\":\"tcp://[%s]:%hu\","
 +                        "\"latency\":%ju"
-+                    "},",
++                    "}",
 +            bulb_addr, site_addr,
 +            bulb->gw->ip_addr, bulb->gw->port,
 +            (uintmax_t)LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
@@ -162,57 +162,83 @@ diff --git a/core/proto.c b/core/proto.c
 +    )
 +
 +        for (int ip = 0; ip != LGTD_LIFX_BULB_IP_COUNT; ip++) {
-+            char fw_built_at[64], fw_installed_at[64];
-+            PRINT_LIFX_FW_TIMESTAMPS(
-+                &bulb->ips[ip].fw_info, fw_built_at, fw_installed_at
-+            );
++            if (lgtd_opts.verbosity == LGTD_DEBUG) {
++                char fw_built_at[64], fw_installed_at[64];
++                PRINT_LIFX_FW_TIMESTAMPS(
++                    &bulb->ips[ip].fw_info, fw_built_at, fw_installed_at
++                );
 +
-+            LGTD_SNPRINTF_APPEND(
-+                buf, i, (int)sizeof(buf),
-+                "\"%s\":{"
-+                    "\"firmware_built_at\":\"%s\","
-+                    "\"firmware_installed_at\":\"%s\","
-+                    "\"firmware_version\":\"%x\","
-+                    "\"signal_strength\":%f,"
-+                    "\"tx_bytes\":%u,"
-+                    "\"rx_bytes\":%u,"
-+                    "\"temperature\":%u"
-+                "},",
-+                lgtd_lifx_bulb_ip_names[ip],
-+                fw_built_at, fw_installed_at, bulb->ips[ip].fw_info.version,
-+                bulb->ips[ip].state.signal_strength,
-+                bulb->ips[ip].state.tx_bytes,
-+                bulb->ips[ip].state.rx_bytes,
-+                bulb->ips[ip].state.temperature
-+            );
++                LGTD_SNPRINTF_APPEND(
++                    buf, i, (int)sizeof(buf),
++                    ",\"%s\":{"
++                        "\"firmware_built_at\":\"%s\","
++                        "\"firmware_installed_at\":\"%s\","
++                        "\"firmware_version\":\"%x\","
++                        "\"signal_strength\":%f,"
++                        "\"tx_bytes\":%u,"
++                        "\"rx_bytes\":%u,"
++                        "\"temperature\":%u"
++                    "}",
++                    lgtd_lifx_bulb_ip_names[ip],
++                    fw_built_at, fw_installed_at, bulb->ips[ip].fw_info.version,
++                    bulb->ips[ip].state.signal_strength,
++                    bulb->ips[ip].state.tx_bytes,
++                    bulb->ips[ip].state.rx_bytes,
++                    bulb->ips[ip].state.temperature
++                );
++            } else {
++                LGTD_SNPRINTF_APPEND(
++                    buf, i, (int)sizeof(buf),
++                    ",\"%s\":{\"firmware_version\":\"%x\"}",
++                    lgtd_lifx_bulb_ip_names[ip], bulb->ips[ip].fw_info.version
++                );
++            }
 +        }
 +
-+        LGTD_SNPRINTF_APPEND(
-+            buf, i, (int)sizeof(buf),
-+                "\"product_info\":{"
-+                    "\"vendor_id\":\"%x\","
-+                    "\"product_id\":\"%x\","
-+                    "\"version\":%u"
-+                "},",
-+            bulb->product_info.vendor_id,
-+            bulb->product_info.product_id,
-+            bulb->product_info.version
-+        );
++        if (lgtd_opts.verbosity == LGTD_DEBUG) {
++            LGTD_SNPRINTF_APPEND(
++                buf, i, (int)sizeof(buf),
++                    ",\"product_info\":{"
++                        "\"vendor_id\":\"%x\","
++                        "\"product_id\":\"%x\","
++                        "\"version\":%u"
++                    "}",
++                bulb->product_info.vendor_id,
++                bulb->product_info.product_id,
++                bulb->product_info.version
++            );
 +
-+        char bulb_time[64];
-+        LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(bulb->runtime_info.time, bulb_time);
-+        LGTD_SNPRINTF_APPEND(
-+            buf, i, (int)sizeof(buf),
-+                "\"runtime_info\":{"
-+                    "\"time\":\"%s\","
-+                    "\"uptime\":%ju,"
-+                    "\"downtime\":%ju"
-+                "}"
-+            "},",
-+            bulb_time,
-+            (uintmax_t)LGTD_NSECS_TO_SECS(bulb->runtime_info.uptime),
-+            (uintmax_t)LGTD_NSECS_TO_SECS(bulb->runtime_info.downtime)
-+        );
++            char bulb_time[64];
++            LGTD_SNPRINTF_APPEND(
++                buf, i, (int)sizeof(buf),
++                    ",\"runtime_info\":{"
++                        "\"time\":\"%s\","
++                        "\"uptime\":%ju,"
++                        "\"downtime\":%ju"
++                    "}"
++                "}",
++                LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(
++                    bulb->runtime_info.time, bulb_time
++                ),
++                (uintmax_t)LGTD_NSECS_TO_SECS(bulb->runtime_info.uptime),
++                (uintmax_t)LGTD_NSECS_TO_SECS(bulb->runtime_info.downtime)
++            );
++        } else {
++            LGTD_SNPRINTF_APPEND(buf, i, (int)sizeof(buf), "}");
++        }
++
++#define PRINT_STRING_OR_NULL(buf, i, bufsz, v) do {                 \
++    if ((v)) {                                                      \
++        LGTD_SNPRINTF_APPEND((buf), (i), (bufsz), "\"%s\"", (v));   \
++    } else {                                                        \
++        LGTD_SNPRINTF_APPEND((buf), (i), (bufsz), "null");          \
++    }                                                               \
++} while (0)
++
++    LGTD_SNPRINTF_APPEND(buf, i, (int)sizeof(buf), ",\"_model\":");
++    PRINT_STRING_OR_NULL(buf, i, (int)sizeof(buf), bulb->model);
++    LGTD_SNPRINTF_APPEND(buf, i, (int)sizeof(buf), ",\"_vendor\":");
++    PRINT_STRING_OR_NULL(buf, i, (int)sizeof(buf), bulb->vendor);
  
  #define PRINT_COMPONENT(src, dst, start, stop)          \
      lgtd_jsonrpc_uint16_range_to_float_string(          \
@@ -239,7 +265,7 @@ diff --git a/core/proto.c b/core/proto.c
 -            buf, sizeof(buf), state_fmt,
 +        LGTD_SNPRINTF_APPEND(
 +            buf, i, (int)sizeof(buf),
-+            "\"hsbk\":[%s,%s,%s,%hu],"
++            ",\"hsbk\":[%s,%s,%s,%hu],"
 +            "\"power\":%s,"
 +            "\"label\":\"%s\","
 +            "\"tags\":[",
@@ -268,7 +294,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -33,12 +33,57 @@
+@@ -33,12 +33,86 @@
  #include "bulb.h"
  #include "gateway.h"
  #include "core/daemon.h"
@@ -285,6 +311,35 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      RB_INITIALIZER(&lgtd_lifx_bulbs_table);
  
 +const char * const lgtd_lifx_bulb_ip_names[] = { "mcu", "wifi" };
++
++static const char *
++lgtd_lifx_bulb_get_model_name(uint32_t vendor_id, uint32_t product_id)
++{
++    if (vendor_id != LGTD_LIFX_VENDOR_ID) {
++        return "Unknown";
++    }
++
++    switch (product_id) {
++    case 1:
++    case 2:
++        return "Original";
++    case 0xa:
++        return "White 800";
++    default:
++        return "Unknown";
++    }
++}
++
++static const char *
++lgtd_lifx_bulb_get_vendor_name(uint32_t vendor_id)
++{
++    switch (vendor_id) {
++    case LGTD_LIFX_VENDOR_ID:
++        return "LIFX";
++    default:
++        return "Unknown";
++    }
++}
 +
 +static void
 +lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer,
@@ -326,7 +381,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  struct lgtd_lifx_bulb *
  lgtd_lifx_bulb_get(const uint8_t *addr)
  {
-@@ -68,6 +113,14 @@
+@@ -68,6 +142,14 @@
  
      bulb->last_light_state_at = lgtd_time_monotonic_msecs();
  
@@ -341,7 +396,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      return bulb;
  }
  
-@@ -124,6 +177,7 @@
+@@ -124,6 +206,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -349,7 +404,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
-@@ -141,6 +195,7 @@
+@@ -141,6 +224,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -357,7 +412,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      bulb->state.power = power;
-@@ -155,3 +210,53 @@
+@@ -155,3 +239,57 @@
  
      bulb->state.tags = tags;
  }
@@ -398,6 +453,10 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +    assert(info);
 +
 +    memcpy(&bulb->product_info, info, sizeof(bulb->product_info));
++    bulb->vendor = lgtd_lifx_bulb_get_vendor_name(info->vendor_id);
++    bulb->model = lgtd_lifx_bulb_get_model_name(
++        info->vendor_id, info->product_id
++    );
 +}
 +
 +void
@@ -414,7 +473,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 diff --git a/lifx/bulb.h b/lifx/bulb.h
 --- a/lifx/bulb.h
 +++ b/lifx/bulb.h
-@@ -30,17 +30,64 @@
+@@ -30,17 +30,66 @@
      char        label[LGTD_LIFX_LABEL_SIZE];
      uint64_t    tags;
  };
@@ -474,6 +533,8 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
      lgtd_time_mono_t                dirty_at;
      uint16_t                        expected_power_on;
 +    uint8_t                         addr[LGTD_LIFX_ADDR_LENGTH];
++    const char                      *model;
++    const char                      *vendor;
 +    struct lgtd_lifx_gateway        *gw;
 +    struct lgtd_lifx_light_state    state;
 +    struct lgtd_lifx_bulb_ip        ips[LGTD_LIFX_BULB_IP_COUNT];
@@ -482,7 +543,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
  };
  RB_HEAD(lgtd_lifx_bulb_map, lgtd_lifx_bulb);
  SLIST_HEAD(lgtd_lifx_bulb_list, lgtd_lifx_bulb);
-@@ -69,3 +116,17 @@
+@@ -69,3 +118,17 @@
                                      lgtd_time_mono_t);
  void lgtd_lifx_bulb_set_power_state(struct lgtd_lifx_bulb *, uint16_t);
  void lgtd_lifx_bulb_set_tags(struct lgtd_lifx_bulb *, uint64_t);
@@ -1129,7 +1190,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
      le32toh(u.i);
      return u.f;
  }
-@@ -250,6 +250,30 @@
+@@ -250,8 +250,34 @@
      char        label[LGTD_LIFX_LABEL_SIZE];
  };
  
@@ -1159,8 +1220,12 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 +};
  #pragma pack(pop)
  
++enum { LGTD_LIFX_VENDOR_ID = 1 };
++
  enum lgtd_lifx_header_flags {
-@@ -331,8 +355,10 @@
+     LGTD_LIFX_ADDRESSABLE = 1,
+     LGTD_LIFX_TAGGED = 1 << 1,
+@@ -331,8 +357,10 @@
           (tag_id_varname) != -1;                                                    \
           (tag_id_varname) = lgtd_lifx_wire_next_tag_id((tag_id_varname), (tags)))
  
@@ -1172,7 +1237,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  
  const struct lgtd_lifx_packet_info *lgtd_lifx_wire_get_packet_info(enum lgtd_lifx_packet_type);
  void lgtd_lifx_wire_load_packet_info_map(void);
-@@ -357,3 +383,8 @@
+@@ -357,3 +385,8 @@
  void lgtd_lifx_wire_decode_tags(struct lgtd_lifx_packet_tags *);
  void lgtd_lifx_wire_encode_tag_labels(struct lgtd_lifx_packet_tag_labels *);
  void lgtd_lifx_wire_decode_tag_labels(struct lgtd_lifx_packet_tag_labels *);
