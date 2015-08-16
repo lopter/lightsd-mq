@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  54b21b430e79df4954da6508b6ed793eccb30b5a
+# Parent  de1c6a01d9955785187b591d15ab41b516c7cb78
 Handle various informational packet types
 
 - MCU state & firmware info;
@@ -518,7 +518,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  #include <stdarg.h>
  #include <stdbool.h>
  #include <stdint.h>
-@@ -275,6 +278,27 @@
+@@ -275,6 +278,28 @@
      return bulb;
  }
  
@@ -536,6 +536,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +    struct arpreq req;
 +    memset(&req, 0, sizeof(req));
 +    memcpy(&req.arp_pa, sin, sizeof(*sin));
++    memcpy(req.arp_dev, "br0", 4);
 +    if (!ioctl(socket, SIOCGARP, &req)) {
 +        memcpy(hw_addr, req.arp_ha.sa_data, LGTD_LIFX_ADDR_LENGTH);
 +        return true;
@@ -546,7 +547,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  struct lgtd_lifx_gateway *
  lgtd_lifx_gateway_open(const struct sockaddr_storage *peer,
                         ev_socklen_t addrlen,
-@@ -310,10 +334,20 @@
+@@ -310,10 +335,20 @@
      gw->refresh_ev = evtimer_new(
          lgtd_ev_base, lgtd_lifx_gateway_refresh_callback, gw
      );
@@ -567,7 +568,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      gw->last_req_at = received_at;
      gw->next_req_at = received_at;
      gw->last_pkt_at = received_at;
-@@ -489,12 +523,8 @@
+@@ -489,12 +524,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -582,7 +583,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      assert(sizeof(*pkt) == sizeof(b->state));
      lgtd_lifx_bulb_set_light_state(
-@@ -519,7 +549,7 @@
+@@ -519,7 +550,7 @@
          }
      }
  
@@ -591,7 +592,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
          if (!event_pending(gw->refresh_ev, EV_TIMEOUT, NULL)) {
              int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
-@@ -559,14 +589,9 @@
+@@ -559,14 +590,9 @@
          gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr), pkt->power
      );
  
@@ -608,7 +609,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  }
  
  int
-@@ -673,9 +698,10 @@
+@@ -673,9 +699,10 @@
      }
  }
  
@@ -622,7 +623,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  {
      assert(gw && hdr && pkt);
  
-@@ -685,12 +711,8 @@
+@@ -685,12 +712,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -637,7 +638,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      int tag_id;
      LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, pkt->tags) {
-@@ -707,3 +729,129 @@
+@@ -707,3 +730,129 @@
  
      lgtd_lifx_bulb_set_tags(b, pkt->tags);
  }
