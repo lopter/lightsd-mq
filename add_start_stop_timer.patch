@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  bddbeba717a2c01b12f3818c0d3b24ae72066f3c
+# Parent  e9bbea56e55f41d6bf2f774208408c8f7e9395bd
 Add an interface to start and stop standalone timers
 
 diff --git a/lifx/timer.c b/lifx/timer.c
@@ -100,7 +100,7 @@ diff --git a/lifx/timer.h b/lifx/timer.h
 -enum { LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500 };
 -enum { LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000 };
 -enum { LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000 };
--enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 3000 };
+-enum { LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 5000 };
 -enum { LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000 };
 +enum {
 +    LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500,

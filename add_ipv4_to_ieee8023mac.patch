@@ -1,0 +1,118 @@
+# HG changeset patch
+# Parent  cb2ea88a7a426fb93e3c781fbc146126e574a9de
+
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -202,11 +202,13 @@
+         struct lgtd_lifx_bulb *bulb = device->device;
+ 
+         char buf[2048],
++             gw_addr[LGTD_LIFX_ADDR_STRLEN],
+              site_addr[LGTD_LIFX_ADDR_STRLEN],
+              bulb_addr[LGTD_LIFX_ADDR_STRLEN];
+         int i = 0;
+ 
+         LGTD_IEEE8023MACTOA(bulb->addr, bulb_addr);
++        LGTD_IEEE8023MACTOA(bulb->gw->addr, gw_addr);
+         LGTD_IEEE8023MACTOA(bulb->gw->site.as_array, site_addr);
+ 
+         LGTD_SNPRINTF_APPEND(
+@@ -215,11 +217,12 @@
+                 "\"_lifx\":{"
+                     "\"addr\": \"%s\","
+                     "\"gateway\":{"
++                        "\"addr\":\"%s\","
+                         "\"site\":\"%s\","
+                         "\"url\":\"tcp://[%s]:%hu\","
+                         "\"latency\":%ju"
+                     "},",
+-            bulb_addr, site_addr,
++            bulb_addr, gw_addr, site_addr,
+             bulb->gw->ip_addr, bulb->gw->port,
+             (uintmax_t)LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
+         );
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -15,12 +15,15 @@
+ // You should have received a copy of the GNU General Public License
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
++#include <sys/ioctl.h>
+ #include <sys/queue.h>
++#include <sys/socket.h>
+ #include <sys/tree.h>
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
+ #include <errno.h>
++#include <net/if_arp.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -279,6 +282,28 @@
+     return bulb;
+ }
+ 
++// TODO: make a separate shared library to resolve ip addresses to mac
++// addresses:
++static bool
++lgtd_lifx_gateway_resolve_ipv4_addr(int socket,
++                                    const struct sockaddr_in *sin,
++                                    uint8_t *hw_addr)
++{
++    assert(sin);
++    assert(hw_addr);
++    assert(socket >= 0);
++
++    struct arpreq req;
++    memset(&req, 0, sizeof(req));
++    memcpy(&req.arp_pa, sin, sizeof(*sin));
++    memcpy(req.arp_dev, "br0", 4);
++    if (!ioctl(socket, SIOCGARP, &req)) {
++        memcpy(hw_addr, req.arp_ha.sa_data, LGTD_LIFX_ADDR_LENGTH);
++        return true;
++    }
++    return false;
++}
++
+ struct lgtd_lifx_gateway *
+ lgtd_lifx_gateway_open(const struct sockaddr_storage *peer,
+                        ev_socklen_t addrlen,
+@@ -314,10 +339,20 @@
+     gw->refresh_ev = evtimer_new(
+         lgtd_ev_base, lgtd_lifx_gateway_refresh_callback, gw
+     );
++
+     memcpy(&gw->peer, peer, sizeof(gw->peer));
+     lgtd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
+     gw->port = lgtd_sockaddrport(peer);
+     memcpy(gw->site.as_array, site, sizeof(gw->site.as_array));
++    if (peer->ss_family == AF_INET) {
++        bool ok = lgtd_lifx_gateway_resolve_ipv4_addr(
++            gw->socket, (const struct sockaddr_in *)peer, gw->addr
++        );
++        if (!ok) {
++            lgtd_warn("couldn't resolve %s to a LIFX address", gw->ip_addr);
++        }
++    }
++
+     gw->last_req_at = received_at;
+     gw->next_req_at = received_at;
+     gw->last_pkt_at = received_at;
+@@ -332,11 +367,11 @@
+         goto error_allocate;
+     }
+ 
+-    char site_addr[LGTD_LIFX_ADDR_STRLEN];
++    char site_addr[LGTD_LIFX_ADDR_STRLEN], addr[LGTD_LIFX_ADDR_STRLEN];
+     lgtd_info(
+-        "gateway for site %s at [%s]:%hu",
++        "gateway for site %s at [%s]:%hu (%s)",
+         LGTD_IEEE8023MACTOA(gw->site.as_array, site_addr),
+-        gw->ip_addr, gw->port
++        gw->ip_addr, gw->port, LGTD_IEEE8023MACTOA(gw->addr, addr)
+     );
+     LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
+ 

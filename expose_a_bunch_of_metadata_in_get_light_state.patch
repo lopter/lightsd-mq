@@ -1,10 +1,5 @@
 # HG changeset patch
-# Parent  de1c6a01d9955785187b591d15ab41b516c7cb78
-Handle various informational packet types
-
-- MCU state & firmware info;
-- WiFi state & firmware info;
-- device/runtime info.
+# Parent  20f6402b334b0f32e6f7b8efe65a421a3c5fdb97
 
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
@@ -61,14 +56,13 @@ diff --git a/core/lightsd.h b/core/lightsd.h
  #define LGTD_SNPRINTF_APPEND(buf, i, bufsz, ...) do {       \
      int n = snprintf(&(buf)[(i)], bufsz - i, __VA_ARGS__);  \
      (i) = LGTD_MIN((i) + n, bufsz);                         \
-@@ -55,6 +78,11 @@
+@@ -57,6 +80,10 @@
  void lgtd_sockaddrtoa(const struct sockaddr_storage *, char *buf, int buflen);
  short lgtd_sockaddrport(const struct sockaddr_storage *);
  
-+void lgtd_print_duration(uint64_t, char *, int);
-+#define LGTD_PRINT_DURATION(secs, arr) do {             \
-+    lgtd_print_duration((secs), (arr), sizeof((arr)));  \
-+} while (0)
++char *lgtd_print_duration(uint64_t, char *, int);
++#define LGTD_PRINT_DURATION(secs, arr) \
++    lgtd_print_duration((secs), (arr), sizeof((arr)))
 +
  void _lgtd_err(void (*)(int, const char *, ...), int, const char *, ...)
      __attribute__((format(printf, 3, 4)));
@@ -92,10 +86,11 @@ diff --git a/core/log.c b/core/log.c
      return;
  error:
      strbuf[0] = '\0';
-@@ -121,6 +114,26 @@
+@@ -121,6 +114,27 @@
+     }
  }
  
- void
++char *
 +lgtd_print_duration(uint64_t secs, char *buf, int bufsz)
 +{
 +    assert(buf);
@@ -113,16 +108,16 @@ diff --git a/core/log.c b/core/log.c
 +        i = LGTD_MIN(i + n, bufsz);
 +    }
 +    snprintf(&buf[i], bufsz - i, "%02d:%02d", hours, minutes);
++    return buf;
 +}
 +
-+void
+ void
  _lgtd_err(void (*errfn)(int, const char *, ...),
             int eval,
-            const char *fmt,
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -195,36 +195,114 @@
+@@ -195,40 +195,116 @@
          return;
      }
  
@@ -137,8 +132,13 @@ diff --git a/core/proto.c b/core/proto.c
 +    SLIST_FOREACH(device, devices, link) {
 +        struct lgtd_lifx_bulb *bulb = device->device;
 +
-+        char buf[2048];
++        char buf[2048],
++             site_addr[LGTD_LIFX_ADDR_STRLEN],
++             bulb_addr[LGTD_LIFX_ADDR_STRLEN];
 +        int i = 0;
++
++        LGTD_IEEE8023MACTOA(bulb->addr, bulb_addr);
++        LGTD_IEEE8023MACTOA(bulb->gw->site.as_array, site_addr);
 +
 +        LGTD_SNPRINTF_APPEND(
 +            buf, i, (int)sizeof(buf),
@@ -146,14 +146,11 @@ diff --git a/core/proto.c b/core/proto.c
 +                "\"_lifx\":{"
 +                    "\"addr\": \"%s\","
 +                    "\"gateway\":{"
-+                        "\"addr\":\"%s\","
 +                        "\"site\":\"%s\","
 +                        "\"url\":\"tcp://[%s]:%hu\","
 +                        "\"latency\":%ju"
 +                    "},",
-+            lgtd_addrtoa(bulb->addr),
-+            lgtd_addrtoa(bulb->gw->addr),
-+            lgtd_addrtoa(bulb->gw->site.as_array),
++            bulb_addr, site_addr,
 +            bulb->gw->ip_addr, bulb->gw->port,
 +            (uintmax_t)LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
 +        );
@@ -233,7 +230,11 @@ diff --git a/core/proto.c b/core/proto.c
          PRINT_COMPONENT(bulb->state.saturation, s, 0, 1);
          PRINT_COMPONENT(bulb->state.brightness, b, 0, 1);
  
--        char buf[3072];
+-        char buf[3072],
+-             bulb_addr[LGTD_LIFX_ADDR_STRLEN],
+-             site_addr[LGTD_LIFX_ADDR_STRLEN];
+-        LGTD_IEEE8023MACTOA(bulb->addr, bulb_addr);
+-        LGTD_IEEE8023MACTOA(bulb->gw->site.as_array, site_addr);
 -        int written = snprintf(
 -            buf, sizeof(buf), state_fmt,
 +        LGTD_SNPRINTF_APPEND(
@@ -244,7 +245,7 @@ diff --git a/core/proto.c b/core/proto.c
 +            "\"tags\":[",
              h, s, b, bulb->state.kelvin,
              bulb->state.power == LGTD_LIFX_POWER_ON ? "true" : "false",
-             bulb->state.label[0] ? bulb->state.label : lgtd_addrtoa(bulb->addr)
+             bulb->state.label[0] ? bulb->state.label : bulb_addr
          );
 -        if (written >= (int)sizeof(buf)) {
 +
@@ -340,7 +341,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      return bulb;
  }
  
-@@ -123,6 +176,7 @@
+@@ -124,6 +177,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -348,7 +349,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
-@@ -140,6 +194,7 @@
+@@ -141,6 +195,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -356,7 +357,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      bulb->state.power = power;
-@@ -154,3 +209,53 @@
+@@ -155,3 +210,53 @@
  
      bulb->state.tags = tags;
  }
@@ -502,73 +503,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -15,12 +15,15 @@
- // You should have received a copy of the GNU General Public License
- // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
- 
-+#include <sys/ioctl.h>
- #include <sys/queue.h>
-+#include <sys/socket.h>
- #include <sys/tree.h>
- #include <assert.h>
- #include <endian.h>
- #include <err.h>
- #include <errno.h>
-+#include <net/if_arp.h>
- #include <stdarg.h>
- #include <stdbool.h>
- #include <stdint.h>
-@@ -275,6 +278,28 @@
-     return bulb;
- }
- 
-+// TODO: make a separate shared library to resolve ip addresses to mac
-+// addresses:
-+static bool
-+lgtd_lifx_gateway_resolve_ipv4_addr(int socket,
-+                                    const struct sockaddr_in *sin,
-+                                    uint8_t *hw_addr)
-+{
-+    assert(sin);
-+    assert(hw_addr);
-+    assert(socket >= 0);
-+
-+    struct arpreq req;
-+    memset(&req, 0, sizeof(req));
-+    memcpy(&req.arp_pa, sin, sizeof(*sin));
-+    memcpy(req.arp_dev, "br0", 4);
-+    if (!ioctl(socket, SIOCGARP, &req)) {
-+        memcpy(hw_addr, req.arp_ha.sa_data, LGTD_LIFX_ADDR_LENGTH);
-+        return true;
-+    }
-+    return false;
-+}
-+
- struct lgtd_lifx_gateway *
- lgtd_lifx_gateway_open(const struct sockaddr_storage *peer,
-                        ev_socklen_t addrlen,
-@@ -310,10 +335,20 @@
-     gw->refresh_ev = evtimer_new(
-         lgtd_ev_base, lgtd_lifx_gateway_refresh_callback, gw
-     );
-+
-     memcpy(&gw->peer, peer, sizeof(gw->peer));
-     lgtd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
-     gw->port = lgtd_sockaddrport(peer);
-     memcpy(gw->site.as_array, site, sizeof(gw->site.as_array));
-+    if (peer->ss_family == AF_INET) {
-+        bool ok = lgtd_lifx_gateway_resolve_ipv4_addr(
-+            gw->socket, (const struct sockaddr_in *)peer, gw->addr
-+        );
-+        if (!ok) {
-+            lgtd_warn("couldn't resolve %s to a LIFX address", gw->ip_addr);
-+        }
-+    }
-+
-     gw->last_req_at = received_at;
-     gw->next_req_at = received_at;
-     gw->last_pkt_at = received_at;
-@@ -489,12 +524,8 @@
+@@ -501,12 +501,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -583,7 +518,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      assert(sizeof(*pkt) == sizeof(b->state));
      lgtd_lifx_bulb_set_light_state(
-@@ -519,7 +550,7 @@
+@@ -531,7 +527,7 @@
          }
      }
  
@@ -592,8 +527,8 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
      if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
          if (!event_pending(gw->refresh_ev, EV_TIMEOUT, NULL)) {
              int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
-@@ -559,14 +590,9 @@
-         gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr), pkt->power
+@@ -573,14 +569,9 @@
+         LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr), pkt->power
      );
  
 -    struct lgtd_lifx_bulb *b = lgtd_lifx_gateway_get_or_open_bulb(
@@ -609,7 +544,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  }
  
  int
-@@ -673,9 +699,10 @@
+@@ -691,9 +682,10 @@
      }
  }
  
@@ -618,12 +553,12 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 -                                   const struct lgtd_lifx_packet_tags *pkt)
 +void
 +lgtd_lifx_gateway_handle_tags(struct lgtd_lifx_gateway *gw,
-+                             const struct lgtd_lifx_packet_header *hdr,
-+                             const struct lgtd_lifx_packet_tags *pkt)
++                              const struct lgtd_lifx_packet_header *hdr,
++                              const struct lgtd_lifx_packet_tags *pkt)
  {
      assert(gw && hdr && pkt);
  
-@@ -685,12 +712,8 @@
+@@ -705,12 +697,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -636,9 +571,9 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +    struct lgtd_lifx_bulb *b;
 +    LGTD_LIFX_GATEWAY_GET_BULB_OR_RETURN(b, gw, hdr->target.device_addr);
  
+     char bulb_addr[LGTD_LIFX_ADDR_STRLEN], site_addr[LGTD_LIFX_ADDR_STRLEN];
      int tag_id;
-     LGTD_LIFX_WIRE_FOREACH_TAG_ID(tag_id, pkt->tags) {
-@@ -707,3 +730,129 @@
+@@ -729,3 +717,132 @@
  
      lgtd_lifx_bulb_set_tags(b, pkt->tags);
  }
@@ -669,10 +604,12 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +        return;
 +    }
 +
++    char addr[LGTD_LIFX_ADDR_STRLEN];
 +    lgtd_debug(
 +        "%s <-- [%s]:%hu - %s "
 +        "signal_strength=%f, rx_bytes=%u, tx_bytes=%u, temperature=%hu",
-+        type, gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr),
++        type, gw->ip_addr, gw->port,
++        LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr),
 +        pkt->signal_strength, pkt->rx_bytes, pkt->tx_bytes, pkt->temperature
 +    );
 +
@@ -688,10 +625,6 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +                                          const struct lgtd_lifx_packet_ip_firmware_info *pkt)
 +{
 +    assert(gw && hdr && pkt);
-+
-+    char built_at[64], installed_at[64];
-+    LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(pkt->built_at, built_at);
-+    LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(pkt->installed_at, installed_at);
 +
 +    const char  *type;
 +    enum lgtd_lifx_bulb_ips ip_id;
@@ -712,11 +645,15 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +        return;
 +    }
 +
++    char built_at[64], installed_at[64], addr[LGTD_LIFX_ADDR_STRLEN];
 +    lgtd_debug(
 +        "%s <-- [%s]:%hu - %s "
 +        "built_at=%s, installed_at=%s, version=%u",
-+        type, gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr),
-+        built_at, installed_at, pkt->version
++        type, gw->ip_addr, gw->port,
++        LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr),
++        LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(pkt->built_at, built_at),
++        LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(pkt->installed_at, installed_at),
++        pkt->version
 +    );
 +
 +    LGTD_LIFX_GATEWAY_SET_BULB_ATTR(
@@ -732,10 +669,12 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +{
 +    assert(gw && hdr && pkt);
 +
++    char addr[LGTD_LIFX_ADDR_STRLEN];
 +    lgtd_debug(
 +        "PRODUCT_INFO <-- [%s]:%hu - %s "
 +        "vendor_id=%#x, product_id=%#x, version=%u",
-+        gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr),
++        gw->ip_addr, gw->port,
++        LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr),
 +        pkt->vendor_id, pkt->product_id, pkt->version
 +    );
 +
@@ -752,15 +691,14 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 +{
 +    assert(gw && hdr && pkt);
 +
-+    char device_time[64], uptime[64], downtime[64];
-+    LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(pkt->time, device_time);
-+    LGTD_PRINT_DURATION(LGTD_NSECS_TO_SECS(pkt->uptime), uptime);
-+    LGTD_PRINT_DURATION(LGTD_NSECS_TO_SECS(pkt->downtime), downtime);
-+
++    char device_time[64], uptime[64], downtime[64], addr[LGTD_LIFX_ADDR_STRLEN];
 +    lgtd_debug(
 +        "PRODUCT_INFO <-- [%s]:%hu - %s time=%s, uptime=%s, downtime=%s",
-+        gw->ip_addr, gw->port, lgtd_addrtoa(hdr->target.device_addr),
-+        device_time, uptime, downtime
++        gw->ip_addr, gw->port,
++        LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr),
++        LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(pkt->time, device_time),
++        LGTD_PRINT_DURATION(LGTD_NSECS_TO_SECS(pkt->uptime), uptime),
++        LGTD_PRINT_DURATION(LGTD_NSECS_TO_SECS(pkt->downtime), downtime)
 +    );
 +
 +    LGTD_LIFX_GATEWAY_SET_BULB_ATTR(
@@ -828,17 +766,6 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
 +void lgtd_lifx_gateway_handle_runtime_info(struct lgtd_lifx_gateway *,
 +                                           const struct lgtd_lifx_packet_header *,
 +                                           const struct lgtd_lifx_packet_runtime_info *);
-diff --git a/lifx/timer.c b/lifx/timer.c
---- a/lifx/timer.c
-+++ b/lifx/timer.c
-@@ -201,7 +201,6 @@
-         if (event_add(lgtd_lifx_timer_context.watchdog_interval_ev, &tv)) {
-             lgtd_err(1, "can't start watchdog");
-         }
--        lgtd_debug("starting watchdog timer");
-     }
- }
- 
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
 +++ b/lifx/wire_proto.c
@@ -1110,11 +1037,11 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
          }
      };
  
-@@ -234,6 +465,24 @@
+@@ -234,6 +465,25 @@
      return LGTD_LIFX_WAVEFORM_INVALID;
  }
  
-+void
++char *
 +lgtd_lifx_wire_print_nsec_timestamp(uint64_t nsec_ts, char *buf, int bufsz)
 +{
 +    assert(buf);
@@ -1126,16 +1053,17 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 +    if (gmtime_r(&ts, &tm_utc)) {
 +        int64_t usecs = LGTD_NSECS_TO_USECS(nsec_ts - LGTD_SECS_TO_NSECS(ts));
 +        LGTD_TM_TO_ISOTIME(&tm_utc, buf, bufsz, usecs);
-+        return;
++    } else {
++        buf[0] = '\0';
 +    }
 +
-+    buf[0] = '\0';
++    return buf;
 +}
 +
  static void
  lgtd_lifx_wire_encode_header(struct lgtd_lifx_packet_header *hdr, int flags)
  {
-@@ -423,3 +672,44 @@
+@@ -423,3 +673,44 @@
  
      pkt->tags = le64toh(pkt->tags);
  }
@@ -1201,7 +1129,7 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
      le32toh(u.i);
      return u.f;
  }
-@@ -249,6 +249,30 @@
+@@ -250,6 +250,30 @@
      char        label[LGTD_LIFX_LABEL_SIZE];
  };
  
@@ -1232,20 +1160,19 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  #pragma pack(pop)
  
  enum lgtd_lifx_header_flags {
-@@ -330,8 +354,11 @@
+@@ -331,8 +355,10 @@
           (tag_id_varname) != -1;                                                    \
           (tag_id_varname) = lgtd_lifx_wire_next_tag_id((tag_id_varname), (tags)))
  
 -
  enum lgtd_lifx_waveform_type lgtd_lifx_wire_waveform_string_id_to_type(const char *, int);
-+void lgtd_lifx_wire_print_nsec_timestamp(uint64_t, char *, int);
-+#define LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(ts, arr) do {               \
-+    lgtd_lifx_wire_print_nsec_timestamp((ts), (arr), sizeof((arr)));    \
-+} while (0)
++char* lgtd_lifx_wire_print_nsec_timestamp(uint64_t, char *, int);
++#define LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(ts, arr) \
++    lgtd_lifx_wire_print_nsec_timestamp((ts), (arr), sizeof((arr)))
  
  const struct lgtd_lifx_packet_info *lgtd_lifx_wire_get_packet_info(enum lgtd_lifx_packet_type);
  void lgtd_lifx_wire_load_packet_info_map(void);
-@@ -356,3 +383,8 @@
+@@ -357,3 +383,8 @@
  void lgtd_lifx_wire_decode_tags(struct lgtd_lifx_packet_tags *);
  void lgtd_lifx_wire_encode_tag_labels(struct lgtd_lifx_packet_tag_labels *);
  void lgtd_lifx_wire_decode_tag_labels(struct lgtd_lifx_packet_tag_labels *);
