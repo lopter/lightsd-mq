@@ -1,0 +1,840 @@
+# HG changeset patch
+# Parent  c37ebab03112866b0462977002e587754511146a
+
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -25,6 +25,7 @@
+     proto.c
+     router.c
+     stats.c
++    timer.c
+ )
+ 
+ TARGET_LINK_LIBRARIES(
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -41,12 +41,13 @@
+ #include "lifx/bulb.h"
+ #include "lifx/gateway.h"
+ #include "lifx/broadcast.h"
+-#include "lifx/timer.h"
++#include "lifx/watchdog.h"
+ #include "version.h"
+ #include "jsmn.h"
+ #include "jsonrpc.h"
+ #include "client.h"
+ #include "pipe.h"
++#include "timer.h"
+ #include "listen.h"
+ #include "daemon.h"
+ #include "lightsd.h"
+@@ -67,7 +68,7 @@
+     lgtd_client_close_all();
+     lgtd_lifx_broadcast_close();
+     lgtd_lifx_gateway_close_all();
+-    lgtd_lifx_timer_close();
++    lgtd_timer_stop_all();
+     event_base_free(lgtd_ev_base);
+ #if LIBEVENT_VERSION_NUMBER >= 0x02010100
+     libevent_global_shutdown();
+@@ -227,7 +228,7 @@
+     argv += optind;
+ 
+     lgtd_lifx_wire_load_packet_info_map();
+-    if (!lgtd_lifx_timer_setup() || !lgtd_lifx_broadcast_setup()) {
++    if (!lgtd_lifx_watchdog_setup() || !lgtd_lifx_broadcast_setup()) {
+         lgtd_err(1, "can't setup lightsd");
+     }
+ 
+@@ -235,7 +236,7 @@
+         lgtd_err(1, "can't fork to the background");
+     }
+ 
+-    lgtd_lifx_timer_start_discovery();
++    lgtd_lifx_watchdog_start_discovery();
+ 
+     event_base_dispatch(lgtd_ev_base);
+ 
+diff --git a/core/timer.c b/core/timer.c
+new file mode 100644
+--- /dev/null
++++ b/core/timer.c
+@@ -0,0 +1,104 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#include <sys/queue.h>
++#include <assert.h>
++#include <err.h>
++#include <stdbool.h>
++#include <stdlib.h>
++
++#include <event2/event.h>
++#include <event2/util.h>
++
++#include "timer.h"
++#include "lightsd.h"
++
++static struct lgtd_timer_list lgtd_timers =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_bulb_timers);
++
++static void
++lgtd_timer_callback(evutil_socket_t socket, short events, void *ctx)
++{
++    assert(ctx);
++
++    (void)socket;
++    (void)events;
++
++    struct lgtd_timer *timer = ctx;
++    timer->callback(timer, timer->ctx);
++}
++
++struct lgtd_timer *
++lgtd_timer_start(int flags,
++                 int ms,
++                 void (*cb)(struct lgtd_timer *,
++                            union lgtd_timer_ctx),
++                 union lgtd_timer_ctx ctx)
++{
++    assert(ms > 0);
++    assert(cb);
++
++    struct lgtd_timer *timer = calloc(1, sizeof(*timer));
++    if (!timer) {
++        return false;
++    }
++    timer->callback = cb;
++    timer->ctx = ctx;
++    LIST_INSERT_HEAD(&lgtd_timers, timer, link);
++
++    struct timeval tv = LGTD_MSECS_TO_TIMEVAL(ms);
++    timer->event = event_new(
++        lgtd_ev_base,
++        -1,
++        flags & LGTD_TIMER_PERSISTENT ? EV_PERSIST : 0,
++        lgtd_timer_callback,
++        timer
++    );
++    if (!timer->event || evtimer_add(timer->event, &tv)) {
++        LIST_REMOVE(timer, link);
++        if (timer->event) {
++            event_free(timer->event);
++        }
++        free(timer);
++        return NULL;
++    }
++
++    if (flags & LGTD_TIMER_ACTIVATE_NOW) {
++        lgtd_timer_activate(timer);
++    }
++    return timer;
++}
++
++void
++lgtd_timer_stop(struct lgtd_timer *timer)
++{
++    assert(timer);
++
++    LIST_REMOVE(timer, link);
++    event_del(timer->event);
++    event_free(timer->event);
++    free(timer);
++}
++
++void
++lgtd_timer_stop_all(void)
++{
++    struct lgtd_timer *timer, *next_timer;
++    LIST_FOREACH_SAFE(timer, &lgtd_timers, link, next_timer) {
++        lgtd_timer_stop(timer);
++    }
++}
+diff --git a/core/timer.h b/core/timer.h
+new file mode 100644
+--- /dev/null
++++ b/core/timer.h
+@@ -0,0 +1,78 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#pragma once
++
++struct timeval;
++
++union lgtd_timer_ctx {
++    uint64_t    as_uint;
++    void        *as_ptr;
++};
++
++struct lgtd_timer {
++    LIST_ENTRY(lgtd_timer) link;
++    void                   (*callback)(struct lgtd_timer *,
++                                       union lgtd_timer_ctx);
++    union lgtd_timer_ctx   ctx;
++    struct event           *event;
++};
++LIST_HEAD(lgtd_timer_list, lgtd_timer);
++
++enum lgtd_timer_flags {
++    LGTD_TIMER_DEFAULT_FLAGS = 0,
++    LGTD_TIMER_ACTIVATE_NOW  = 1,
++    LGTD_TIMER_PERSISTENT    = 1 << 1,
++};
++
++// Activate the timer now, in other words make the callback pending:
++static inline void
++lgtd_timer_activate(struct lgtd_timer *timer)
++{
++    assert(timer);
++
++    event_active(timer->event, 0, 0);
++}
++
++// Re-schedule a non-persistent timer with the given timeout:
++static inline bool
++lgtd_timer_reschedule(struct lgtd_timer *timer,
++                           struct timeval *tv)
++{
++    assert(timer);
++    assert(tv);
++
++    return !evtimer_add(timer->event, tv);
++}
++
++static inline bool
++lgtd_timer_ispending(struct lgtd_timer *timer)
++{
++    assert(timer);
++
++    return evtimer_pending(timer->event, NULL);
++}
++
++void lgtd_timer_stop(struct lgtd_timer *);
++void lgtd_timer_stop_all(void);
++// NOTE: if you start a persistent timer and don't keep track of it, make sure
++//       you don't up in a callback using a context that has been freed.
++struct lgtd_timer *lgtd_timer_start(int,
++                                    int, // ms
++                                    void (*)(struct lgtd_timer *,
++                                             union lgtd_timer_ctx),
++                                    union lgtd_timer_ctx);
+diff --git a/lifx/CMakeLists.txt b/lifx/CMakeLists.txt
+--- a/lifx/CMakeLists.txt
++++ b/lifx/CMakeLists.txt
+@@ -11,6 +11,6 @@
+     bulb.c
+     gateway.c
+     tagging.c
+-    timer.c
++    watchdog.c
+     wire_proto.c
+ )
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -26,6 +26,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#include <event2/event.h>
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
+@@ -33,7 +34,7 @@
+ #include "bulb.h"
+ #include "gateway.h"
+ #include "core/daemon.h"
+-#include "timer.h"
++#include "core/timer.h"
+ #include "core/stats.h"
+ #include "core/jsmn.h"
+ #include "core/jsonrpc.h"
+@@ -77,8 +78,8 @@
+ }
+ 
+ static void
+-lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer,
+-                                   union lgtd_lifx_timer_ctx ctx)
++lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_timer *timer,
++                                   union lgtd_timer_ctx ctx)
+ {
+     assert(timer);
+     assert(ctx.as_uint);
+@@ -87,7 +88,7 @@
+     const uint8_t *bulb_addr = (const uint8_t *)&ctx.as_uint;
+     struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(bulb_addr);
+     if (!bulb) {
+-        lgtd_lifx_timer_stop_timer(timer);
++        lgtd_timer_stop(timer);
+         return;
+     }
+ 
+@@ -115,7 +116,7 @@
+         LGTD_LIFX_GET_WIFI_FIRMWARE_STATE
+     );
+     if (stop) {
+-        lgtd_lifx_timer_stop_timer(timer);
++        lgtd_timer_stop(timer);
+     }
+ }
+ 
+@@ -148,10 +149,10 @@
+ 
+     bulb->last_light_state_at = lgtd_time_monotonic_msecs();
+ 
+-    union lgtd_lifx_timer_ctx ctx = { .as_uint = 0 };
++    union lgtd_timer_ctx ctx = { .as_uint = 0 };
+     memcpy(&ctx.as_uint, addr, LGTD_LIFX_ADDR_LENGTH);
+-    struct lgtd_lifx_timer *timer = lgtd_lifx_timer_start_timer(
+-        LGTD_LIFX_TIMER_ACTIVATE_NOW|LGTD_LIFX_TIMER_PERSISTENT,
++    struct lgtd_timer *timer = lgtd_timer_start(
++        LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT,
+         LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS,
+         lgtd_lifx_bulb_fetch_hardware_info,
+         ctx
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -36,8 +36,9 @@
+ #include "core/time_monotonic.h"
+ #include "bulb.h"
+ #include "gateway.h"
++#include "watchdog.h"
+ #include "broadcast.h"
+-#include "timer.h"
++#include "core/timer.h"
+ #include "tagging.h"
+ #include "core/jsmn.h"
+ #include "core/jsonrpc.h"
+@@ -57,7 +58,7 @@
+     assert(gw);
+ 
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, -1);
+-    lgtd_lifx_timer_stop_timer(gw->refresh_timer);
++    lgtd_timer_stop(gw->refresh_timer);
+     event_del(gw->write_ev);
+     if (gw->socket != -1) {
+         evutil_closesocket(gw->socket);
+@@ -239,8 +240,8 @@
+ }
+ 
+ static void
+-lgtd_lifx_gateway_refresh_callback(struct lgtd_lifx_timer *timer,
+-                                   union lgtd_lifx_timer_ctx ctx)
++lgtd_lifx_gateway_refresh_callback(struct lgtd_timer *timer,
++                                   union lgtd_timer_ctx ctx)
+ {
+     (void)timer;
+     struct lgtd_lifx_gateway *gw = ctx.as_ptr;
+@@ -252,7 +253,7 @@
+ {
+     assert(gw);
+ 
+-    lgtd_lifx_timer_activate_timer(gw->refresh_timer);
++    lgtd_timer_activate(gw->refresh_timer);
+ }
+ 
+ static struct lgtd_lifx_bulb *
+@@ -323,9 +324,9 @@
+     gw->next_req_at = received_at;
+     gw->last_pkt_at = received_at;
+ 
+-    union lgtd_lifx_timer_ctx ctx = { .as_ptr = gw };
+-    gw->refresh_timer = lgtd_lifx_timer_start_timer(
+-        LGTD_LIFX_TIMER_ACTIVATE_NOW,
++    union lgtd_timer_ctx ctx = { .as_ptr = gw };
++    gw->refresh_timer = lgtd_timer_start(
++        LGTD_TIMER_ACTIVATE_NOW,
+         LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS,
+         lgtd_lifx_gateway_refresh_callback,
+         ctx
+@@ -345,7 +346,7 @@
+ 
+     // In case this is the first bulb (re-)discovered, start the watchdog, it
+     // will stop by itself:
+-    lgtd_lifx_timer_start_watchdog();
++    lgtd_lifx_watchdog_start();
+ 
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, 1);
+ 
+@@ -529,10 +530,10 @@
+ 
+     int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
+     if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
+-        if (!lgtd_lifx_timer_ispending_timer(gw->refresh_timer)) {
++        if (!lgtd_timer_ispending(gw->refresh_timer)) {
+             int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
+             struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
+-            lgtd_lifx_timer_reschedule_timer(gw->refresh_timer, &tv);
++            lgtd_timer_reschedule(gw->refresh_timer, &tv);
+             lgtd_debug(
+                 "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
+                 gw->ip_addr, gw->port, latency, timeout
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -60,7 +60,7 @@
+     struct lgtd_lifx_tag            *tags[LGTD_LIFX_GATEWAY_MAX_TAGS];
+     uint8_t                         tag_refcounts[LGTD_LIFX_GATEWAY_MAX_TAGS];
+     evutil_socket_t                 socket;
+-    // Those three timers let us measure the latency of the gateway. If we
++    // Those three timestamps let us measure the latency of the gateway. If we
+     // aren't the only client on the network then this won't be accurate since
+     // we will get pushed packets we didn't ask for, but good enough for our
+     // purpose of rate limiting our requests to the gateway:
+@@ -79,7 +79,7 @@
+     struct event                    *write_ev;
+     struct evbuffer                 *write_buf;
+     bool                            pending_refresh_req;
+-    struct lgtd_lifx_timer          *refresh_timer;
++    struct lgtd_timer               *refresh_timer;
+ };
+ LIST_HEAD(lgtd_lifx_gateway_list, lgtd_lifx_gateway);
+ 
+diff --git a/lifx/timer.c b/lifx/watchdog.c
+rename from lifx/timer.c
+rename to lifx/watchdog.c
+--- a/lifx/timer.c
++++ b/lifx/watchdog.c
+@@ -33,51 +33,48 @@
+ #include "broadcast.h"
+ #include "bulb.h"
+ #include "gateway.h"
+-#include "timer.h"
++#include "watchdog.h"
+ #include "core/lightsd.h"
+ 
+ static struct {
+     struct event *watchdog_interval_ev;
+     struct event *discovery_timeout_ev;
+-} lgtd_lifx_timer_context = {
++} lgtd_lifx_watchdog_context = {
+     .watchdog_interval_ev = NULL,
+     .discovery_timeout_ev = NULL
+ };
+ 
+-static struct lgtd_lifx_timer_list lgtd_lifx_timers =
+-    LIST_HEAD_INITIALIZER(&lgtd_lifx_bulb_timers);
+-
+ static void
+-lgtd_lifx_timer_discovery_timeout_event_callback(evutil_socket_t socket,
+-                                                 short events,
+-                                                 void *ctx)
++lgtd_lifx_watchdog_discovery_timeout_event_callback(evutil_socket_t socket,
++                                                    short events,
++                                                    void *ctx)
+ {
+     (void)socket;
+     (void)events;
+     (void)ctx;
+ 
+-    int timeout = LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS;
++    int timeout = LGTD_LIFX_WATCHDOG_PASSIVE_DISCOVERY_INTERVAL_MSECS;
+     if (LIST_EMPTY(&lgtd_lifx_gateways)) {
+         lgtd_debug(
+             "discovery didn't returned anything in %dms, restarting it",
+-            LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS
++            LGTD_LIFX_WATCHDOG_ACTIVE_DISCOVERY_INTERVAL_MSECS
+         );
+-        timeout = LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS;
++        timeout = LGTD_LIFX_WATCHDOG_ACTIVE_DISCOVERY_INTERVAL_MSECS;
+     } else {
+         lgtd_debug("sending periodic discovery packet");
+     }
+ 
+     struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
+-    if (event_add(lgtd_lifx_timer_context.discovery_timeout_ev, &tv)
++    if (event_add(lgtd_lifx_watchdog_context.discovery_timeout_ev, &tv)
+         || !lgtd_lifx_broadcast_discovery()) {
+         lgtd_err(1, "can't start discovery");
+     }
+ }
+ 
+ static void
+-lgtd_lifx_timer_watchdog_timeout_event_callback(evutil_socket_t socket,
+-                                                short events,
+-                                                void *ctx)
++lgtd_lifx_watchdog_timeout_event_callback(evutil_socket_t socket,
++                                          short events,
++                                          void *ctx)
+ {
+     (void)socket;
+     (void)events;
+@@ -94,7 +91,7 @@
+         next_bulb
+     ) {
+         int light_state_lag = now - bulb->last_light_state_at;
+-        if (light_state_lag >= LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS) {
++        if (light_state_lag >= LGTD_LIFX_WATCHDOG_DEVICE_TIMEOUT_MSECS) {
+             lgtd_info(
+                 "closing bulb \"%.*s\" that hasn't been updated for %dms",
+                 LGTD_LIFX_LABEL_SIZE, bulb->state.label, light_state_lag
+@@ -111,7 +108,7 @@
+     struct lgtd_lifx_gateway *gw, *next_gw;
+     LIST_FOREACH_SAFE(gw, &lgtd_lifx_gateways, link, next_gw) {
+         int gw_lag = now - gw->last_pkt_at;
+-        if (gw_lag >= LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS) {
++        if (gw_lag >= LGTD_LIFX_WATCHDOG_DEVICE_TIMEOUT_MSECS) {
+             lgtd_info(
+                 "closing bulb gateway [%s]:%hu that "
+                 "hasn't received traffic for %dms",
+@@ -120,7 +117,7 @@
+             );
+             lgtd_lifx_gateway_close(gw);
+             start_discovery = true;
+-        } else if (gw_lag >= LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS) {
++        } else if (gw_lag >= LGTD_LIFX_WATCHDOG_DEVICE_FORCE_REFRESH_MSECS) {
+             lgtd_info(
+                 "no update on bulb gateway [%s]:%hu for %dms, forcing refresh",
+                 gw->ip_addr, gw->port, gw_lag
+@@ -137,68 +134,67 @@
+ }
+ 
+ bool
+-lgtd_lifx_timer_setup(void)
++lgtd_lifx_watchdog_setup(void)
+ {
+-    assert(!lgtd_lifx_timer_context.watchdog_interval_ev);
+-    assert(!lgtd_lifx_timer_context.discovery_timeout_ev);
++    assert(!lgtd_lifx_watchdog_context.watchdog_interval_ev);
++    assert(!lgtd_lifx_watchdog_context.discovery_timeout_ev);
+ 
+-    lgtd_lifx_timer_context.discovery_timeout_ev = event_new(
++    lgtd_lifx_watchdog_context.discovery_timeout_ev = event_new(
+         lgtd_ev_base,
+         -1,
+         0,
+-        lgtd_lifx_timer_discovery_timeout_event_callback,
++        lgtd_lifx_watchdog_discovery_timeout_event_callback,
+         NULL
+     );
+-    lgtd_lifx_timer_context.watchdog_interval_ev = event_new(
++    lgtd_lifx_watchdog_context.watchdog_interval_ev = event_new(
+         lgtd_ev_base,
+         -1,
+         EV_PERSIST,
+-        lgtd_lifx_timer_watchdog_timeout_event_callback,
++        lgtd_lifx_watchdog_timeout_event_callback,
+         NULL
+     );
+ 
+-    if (lgtd_lifx_timer_context.discovery_timeout_ev
+-        && lgtd_lifx_timer_context.watchdog_interval_ev) {
++    if (lgtd_lifx_watchdog_context.discovery_timeout_ev
++        && lgtd_lifx_watchdog_context.watchdog_interval_ev) {
+         return true;
+     }
+ 
+     int errsave = errno;
+-    lgtd_lifx_timer_close();
++    lgtd_lifx_watchdog_close();
+     errno = errsave;
+     return false;
+ }
+ 
+ void
+-lgtd_lifx_timer_close(void)
++lgtd_lifx_watchdog_close(void)
+ {
+-    struct lgtd_lifx_timer *timer, *next_timer;
+-    LIST_FOREACH_SAFE(timer, &lgtd_lifx_timers, link, next_timer) {
+-        lgtd_lifx_timer_stop_timer(timer);
++    if (lgtd_lifx_watchdog_context.discovery_timeout_ev) {
++        event_del(lgtd_lifx_watchdog_context.discovery_timeout_ev);
++        event_free(lgtd_lifx_watchdog_context.discovery_timeout_ev);
++        lgtd_lifx_watchdog_context.discovery_timeout_ev = NULL;
+     }
+-    if (lgtd_lifx_timer_context.discovery_timeout_ev) {
+-        event_del(lgtd_lifx_timer_context.discovery_timeout_ev);
+-        event_free(lgtd_lifx_timer_context.discovery_timeout_ev);
+-        lgtd_lifx_timer_context.discovery_timeout_ev = NULL;
+-    }
+-    if (lgtd_lifx_timer_context.watchdog_interval_ev) {
+-        event_del(lgtd_lifx_timer_context.watchdog_interval_ev);
+-        event_free(lgtd_lifx_timer_context.watchdog_interval_ev);
+-        lgtd_lifx_timer_context.watchdog_interval_ev = NULL;
++    if (lgtd_lifx_watchdog_context.watchdog_interval_ev) {
++        event_del(lgtd_lifx_watchdog_context.watchdog_interval_ev);
++        event_free(lgtd_lifx_watchdog_context.watchdog_interval_ev);
++        lgtd_lifx_watchdog_context.watchdog_interval_ev = NULL;
+     }
+ }
+ 
+ void
+-lgtd_lifx_timer_start_watchdog(void)
++lgtd_lifx_watchdog_start(void)
+ {
+     assert(
+         !RB_EMPTY(&lgtd_lifx_bulbs_table) || !LIST_EMPTY(&lgtd_lifx_gateways)
+     );
+ 
+-    if (!evtimer_pending(lgtd_lifx_timer_context.watchdog_interval_ev, NULL)) {
++    bool pending = evtimer_pending(
++        lgtd_lifx_watchdog_context.watchdog_interval_ev, NULL
++    );
++    if (!pending) {
+         struct timeval tv = LGTD_MSECS_TO_TIMEVAL(
+-            LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS
++            LGTD_LIFX_WATCHDOG_INTERVAL_MSECS
+         );
+-        if (event_add(lgtd_lifx_timer_context.watchdog_interval_ev, &tv)) {
++        if (event_add(lgtd_lifx_watchdog_context.watchdog_interval_ev, &tv)) {
+             lgtd_err(1, "can't start watchdog");
+         }
+         lgtd_debug("starting watchdog timer");
+@@ -206,76 +202,12 @@
+ }
+ 
+ void
+-lgtd_lifx_timer_start_discovery(void)
++lgtd_lifx_watchdog_start_discovery(void)
+ {
+     assert(!evtimer_pending(
+-        lgtd_lifx_timer_context.discovery_timeout_ev, NULL
++        lgtd_lifx_watchdog_context.discovery_timeout_ev, NULL
+     ));
+ 
+-    lgtd_lifx_timer_discovery_timeout_event_callback(-1, 0, NULL);
++    lgtd_lifx_watchdog_discovery_timeout_event_callback(-1, 0, NULL);
+     lgtd_debug("starting discovery timer");
+ }
+-
+-static void
+-lgtd_lifx_timer_callback(evutil_socket_t socket, short events, void *ctx)
+-{
+-    assert(ctx);
+-
+-    (void)socket;
+-    (void)events;
+-
+-    struct lgtd_lifx_timer *timer = ctx;
+-    timer->callback(timer, timer->ctx);
+-}
+-
+-struct lgtd_lifx_timer *
+-lgtd_lifx_timer_start_timer(int flags,
+-                            int ms,
+-                            void (*cb)(struct lgtd_lifx_timer *,
+-                                       union lgtd_lifx_timer_ctx),
+-                            union lgtd_lifx_timer_ctx ctx)
+-{
+-    assert(ms > 0);
+-    assert(cb);
+-
+-    struct lgtd_lifx_timer *timer = calloc(1, sizeof(*timer));
+-    if (!timer) {
+-        return false;
+-    }
+-    timer->callback = cb;
+-    timer->ctx = ctx;
+-    LIST_INSERT_HEAD(&lgtd_lifx_timers, timer, link);
+-
+-    struct timeval tv = LGTD_MSECS_TO_TIMEVAL(ms);
+-    timer->event = event_new(
+-        lgtd_ev_base,
+-        -1,
+-        flags & LGTD_LIFX_TIMER_PERSISTENT ? EV_PERSIST : 0,
+-        lgtd_lifx_timer_callback,
+-        timer
+-    );
+-    if (!timer->event || evtimer_add(timer->event, &tv)) {
+-        LIST_REMOVE(timer, link);
+-        if (timer->event) {
+-            event_free(timer->event);
+-        }
+-        free(timer);
+-        return NULL;
+-    }
+-
+-    if (flags & LGTD_LIFX_TIMER_ACTIVATE_NOW) {
+-        lgtd_lifx_timer_activate_timer(timer);
+-    }
+-    return timer;
+-}
+-
+-void
+-lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *timer)
+-{
+-    assert(timer);
+-
+-    LIST_REMOVE(timer, link);
+-    event_del(timer->event);
+-    event_free(timer->event);
+-    free(timer);
+-}
+diff --git a/lifx/timer.h b/lifx/watchdog.h
+rename from lifx/timer.h
+rename to lifx/watchdog.h
+--- a/lifx/timer.h
++++ b/lifx/watchdog.h
+@@ -17,77 +17,15 @@
+ 
+ #pragma once
+ 
+-enum {
+-    LGTD_LIFX_TIMER_WATCHDOG_INTERVAL_MSECS = 500,
+-    LGTD_LIFX_TIMER_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000,
+-    LGTD_LIFX_TIMER_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000,
+-    LGTD_LIFX_TIMER_DEVICE_TIMEOUT_MSECS = 3000,
+-    LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000
++enum lgtd_lifx_watchdog_constants {
++    LGTD_LIFX_WATCHDOG_INTERVAL_MSECS = 500,
++    LGTD_LIFX_WATCHDOG_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000,
++    LGTD_LIFX_WATCHDOG_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000,
++    LGTD_LIFX_WATCHDOG_DEVICE_TIMEOUT_MSECS = 3000,
++    LGTD_LIFX_WATCHDOG_DEVICE_FORCE_REFRESH_MSECS = 2000
+ };
+ 
+-struct timeval;
+-struct event;
+-
+-union lgtd_lifx_timer_ctx {
+-    uint64_t    as_uint;
+-    void        *as_ptr;
+-};
+-
+-// NOTE: the timer utility isn't really lifx specific, we should move it back
+-// to core, that will make naming suck less too:
+-struct lgtd_lifx_timer {
+-    LIST_ENTRY(lgtd_lifx_timer) link;
+-    void                        (*callback)(struct lgtd_lifx_timer *,
+-                                            union lgtd_lifx_timer_ctx);
+-    union lgtd_lifx_timer_ctx   ctx;
+-    struct event                *event;
+-};
+-LIST_HEAD(lgtd_lifx_timer_list, lgtd_lifx_timer);
+-
+-// Activate the timer now, in other words make the callback pending:
+-static inline void
+-lgtd_lifx_timer_activate_timer(struct lgtd_lifx_timer *timer)
+-{
+-    assert(timer);
+-
+-    event_active(timer->event, 0, 0);
+-}
+-
+-// Re-schedule a non-persistent timer with the given timeout:
+-static inline bool
+-lgtd_lifx_timer_reschedule_timer(struct lgtd_lifx_timer *timer,
+-                                 struct timeval *tv)
+-{
+-    assert(timer);
+-    assert(tv);
+-
+-    return !evtimer_add(timer->event, tv);
+-}
+-
+-static inline bool
+-lgtd_lifx_timer_ispending_timer(struct lgtd_lifx_timer *timer)
+-{
+-    assert(timer);
+-
+-    return evtimer_pending(timer->event, NULL);
+-}
+-
+-enum lgtd_lifx_timer_flags {
+-    LGTD_LIFX_TIMER_DEFAULT_FLAGS = 0,
+-    LGTD_LIFX_TIMER_ACTIVATE_NOW  = 1,
+-    LGTD_LIFX_TIMER_PERSISTENT    = 1 << 1,
+-};
+-
+-bool lgtd_lifx_timer_setup(void);
+-void lgtd_lifx_timer_close(void);
+-void lgtd_lifx_timer_start_watchdog(void);
+-void lgtd_lifx_timer_start_discovery(void);
+-
+-// Create a new timer and schedule it:
+-struct lgtd_lifx_timer *lgtd_lifx_timer_start_timer(int,
+-                                                    int, // ms, & the timer is activated right away
+-                                                    void (*)(struct lgtd_lifx_timer *,
+-                                                             union lgtd_lifx_timer_ctx),
+-                                                    union lgtd_lifx_timer_ctx);
+-// Un-schedule and free the given timer:
+-void lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *);
++bool lgtd_lifx_watchdog_setup(void);
++void lgtd_lifx_watchdog_start(void);
++void lgtd_lifx_watchdog_close(void);
++void lgtd_lifx_watchdog_start_discovery(void);
+diff --git a/tests/lifx/mock_timer.h b/tests/core/mock_timer.h
+rename from tests/lifx/mock_timer.h
+rename to tests/core/mock_timer.h
+--- a/tests/lifx/mock_timer.h
++++ b/tests/core/mock_timer.h
+@@ -1,14 +1,14 @@
+ #pragma once
+ 
+-#include "lifx/timer.h" // to pull the union definition
++#include "core/timer.h" // to pull the union definition
+ 
+-#ifndef MOCKED_LGTD_LIFX_TIMER_START_TIMER
+-struct lgtd_lifx_timer *
+-lgtd_lifx_timer_start_timer(int flags,
+-                            int ms,
+-                            void (*cb)(struct lgtd_lifx_timer *,
+-                                       union lgtd_lifx_timer_ctx),
+-                            union lgtd_lifx_timer_ctx ctx)
++#ifndef MOCKED_LGTD_TIMER_START
++struct lgtd_timer *
++lgtd_timer_start(int flags,
++                 int ms,
++                 void (*cb)(struct lgtd_timer *,
++                            union lgtd_timer_ctx),
++                 union lgtd_timer_ctx ctx)
+ {
+     (void)flags;
+     (void)ms;
+@@ -18,9 +18,9 @@
+ }
+ #endif
+ 
+-#ifndef MOCKED_LGTD_LIFX_TIMER_START_TIMER
++#ifndef MOCKED_LGTD_TIMER_STOP
+ void
+-lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *timer)
++lgtd_timer_stop(struct lgtd_timer *timer)
+ {
+     (void)timer;
+ }
+diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.txt
+--- a/tests/lifx/gateway/CMakeLists.txt
++++ b/tests/lifx/gateway/CMakeLists.txt
+@@ -16,7 +16,7 @@
+     test_lifx_gateway STATIC
+     ${LIGHTSD_SOURCE_DIR}/lifx/broadcast.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+-    ${LIGHTSD_SOURCE_DIR}/lifx/timer.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/watchdog.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+ )
+ 
