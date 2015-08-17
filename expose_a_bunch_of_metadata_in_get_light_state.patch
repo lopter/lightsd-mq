@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  7027549920d48dc2320bb80ab1b9439474f6d7e1
+# Parent  aa7a51b9e9f3b8423b6072ef271987d07374fba5
 
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
@@ -294,7 +294,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -33,12 +33,86 @@
+@@ -33,12 +33,92 @@
  #include "bulb.h"
  #include "gateway.h"
  #include "core/daemon.h"
@@ -369,8 +369,14 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +        !bulb->ips[LGTD_LIFX_BULB_MCU_IP].fw_info.version,
 +        LGTD_LIFX_GET_MESH_FIRMWARE
 +    );
++    lgtd_time_mono_t state_updated_at;
++    state_updated_at = bulb->ips[LGTD_LIFX_BULB_MCU_IP].state_updated_at;
++    lgtd_time_mono_t timeout = LGTD_LIFX_BULB_FETCH_WIFI_FW_INFO_TIMEOUT_MSECS;
 +    RESEND_IF(
-+        !bulb->ips[LGTD_LIFX_BULB_WIFI_IP].fw_info.version,
++        (
++            !bulb->ips[LGTD_LIFX_BULB_WIFI_IP].fw_info.version
++            && (lgtd_time_monotonic_msecs() - state_updated_at > timeout)
++        ),
 +        LGTD_LIFX_GET_WIFI_FIRMWARE_STATE
 +    );
 +    if (stop) {
@@ -381,7 +387,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  struct lgtd_lifx_bulb *
  lgtd_lifx_bulb_get(const uint8_t *addr)
  {
-@@ -68,6 +142,18 @@
+@@ -68,6 +148,18 @@
  
      bulb->last_light_state_at = lgtd_time_monotonic_msecs();
  
@@ -400,7 +406,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      return bulb;
  }
  
-@@ -124,6 +210,7 @@
+@@ -124,6 +216,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -408,7 +414,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
-@@ -141,6 +228,7 @@
+@@ -141,6 +234,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -416,7 +422,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      bulb->state.power = power;
-@@ -155,3 +243,57 @@
+@@ -155,3 +249,57 @@
  
      bulb->state.tags = tags;
  }
@@ -477,7 +483,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 diff --git a/lifx/bulb.h b/lifx/bulb.h
 --- a/lifx/bulb.h
 +++ b/lifx/bulb.h
-@@ -30,17 +30,66 @@
+@@ -30,17 +30,72 @@
      char        label[LGTD_LIFX_LABEL_SIZE];
      uint64_t    tags;
  };
@@ -509,6 +515,12 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
  #pragma pack(pop)
  
 +enum { LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS = 5000 };
++// non-gateway fw 1.1 bulbs will never send this information, so just bail out
++// after a few tries:
++enum {
++    LGTD_LIFX_BULB_FETCH_WIFI_FW_INFO_TIMEOUT_MSECS =
++        LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS * 4
++};
 +
 +enum lgtd_lifx_bulb_ips {
 +    LGTD_LIFX_BULB_MCU_IP = 0,
@@ -547,7 +559,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
  };
  RB_HEAD(lgtd_lifx_bulb_map, lgtd_lifx_bulb);
  SLIST_HEAD(lgtd_lifx_bulb_list, lgtd_lifx_bulb);
-@@ -69,3 +118,17 @@
+@@ -69,3 +124,17 @@
                                      lgtd_time_mono_t);
  void lgtd_lifx_bulb_set_power_state(struct lgtd_lifx_bulb *, uint16_t);
  void lgtd_lifx_bulb_set_tags(struct lgtd_lifx_bulb *, uint64_t);
