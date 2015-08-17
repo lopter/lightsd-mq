@@ -1,7 +1,21 @@
 # HG changeset patch
-# Parent  e9bbea56e55f41d6bf2f774208408c8f7e9395bd
+# Parent  e65d8e17050df8f3b7265c06bc44e9b32558db7f
 Add an interface to start and stop standalone timers
 
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -65,9 +65,9 @@
+     lgtd_listen_close_all();
+     lgtd_command_pipe_close_all();
+     lgtd_client_close_all();
+-    lgtd_lifx_timer_close();
+     lgtd_lifx_broadcast_close();
+     lgtd_lifx_gateway_close_all();
++    lgtd_lifx_timer_close();
+     event_base_free(lgtd_ev_base);
+ #if LIBEVENT_VERSION_NUMBER >= 0x02010100
+     libevent_global_shutdown();
 diff --git a/lifx/timer.c b/lifx/timer.c
 --- a/lifx/timer.c
 +++ b/lifx/timer.c
@@ -34,7 +48,7 @@ diff --git a/lifx/timer.c b/lifx/timer.c
      if (lgtd_lifx_timer_context.discovery_timeout_ev) {
          event_del(lgtd_lifx_timer_context.discovery_timeout_ev);
          event_free(lgtd_lifx_timer_context.discovery_timeout_ev);
-@@ -207,3 +215,55 @@
+@@ -207,3 +215,67 @@
      lgtd_lifx_timer_discovery_timeout_event_callback(-1, 0, NULL);
      lgtd_debug("starting discovery timer");
  }
@@ -51,8 +65,9 @@ diff --git a/lifx/timer.c b/lifx/timer.c
 +    timer->callback(timer, timer->ctx);
 +}
 +
-+bool
-+lgtd_lifx_timer_start_timer(int ms,
++struct lgtd_lifx_timer *
++lgtd_lifx_timer_start_timer(int flags,
++                            int ms,
 +                            void (*cb)(struct lgtd_lifx_timer *,
 +                                       union lgtd_lifx_timer_ctx),
 +                            union lgtd_lifx_timer_ctx ctx)
@@ -69,15 +84,26 @@ diff --git a/lifx/timer.c b/lifx/timer.c
 +    LIST_INSERT_HEAD(&lgtd_lifx_timers, timer, link);
 +
 +    struct timeval tv = LGTD_MSECS_TO_TIMEVAL(ms);
-+    timer->event = evtimer_new(lgtd_ev_base, lgtd_lifx_timer_callback, timer);
++    timer->event = event_new(
++        lgtd_ev_base,
++        -1,
++        flags & LGTD_LIFX_TIMER_PERSISTENT ? EV_PERSIST : 0,
++        lgtd_lifx_timer_callback,
++        timer
++    );
 +    if (!timer->event || evtimer_add(timer->event, &tv)) {
 +        LIST_REMOVE(timer, link);
++        if (timer->event) {
++            event_free(timer->event);
++        }
 +        free(timer);
-+        return false;
++        return NULL;
 +    }
 +
-+    event_active(timer->event, 0, 0);
-+    return true;
++    if (flags & LGTD_LIFX_TIMER_ACTIVATE_NOW) {
++        lgtd_lifx_timer_activate_timer(timer);
++    }
++    return timer;
 +}
 +
 +void
@@ -93,7 +119,7 @@ diff --git a/lifx/timer.c b/lifx/timer.c
 diff --git a/lifx/timer.h b/lifx/timer.h
 --- a/lifx/timer.h
 +++ b/lifx/timer.h
-@@ -17,13 +17,36 @@
+@@ -17,13 +17,77 @@
  
  #pragma once
  
@@ -110,6 +136,7 @@ diff --git a/lifx/timer.h b/lifx/timer.h
 +    LGTD_LIFX_TIMER_DEVICE_FORCE_REFRESH_MSECS = 2000
 +};
 +
++struct timeval;
 +struct event;
 +
 +union lgtd_lifx_timer_ctx {
@@ -117,6 +144,8 @@ diff --git a/lifx/timer.h b/lifx/timer.h
 +    void        *as_ptr;
 +};
 +
++// NOTE: the timer utility isn't really lifx specific, we should move it back
++// to core, that will make naming suck less too:
 +struct lgtd_lifx_timer {
 +    LIST_ENTRY(lgtd_lifx_timer) link;
 +    void                        (*callback)(struct lgtd_lifx_timer *,
@@ -125,15 +154,53 @@ diff --git a/lifx/timer.h b/lifx/timer.h
 +    struct event                *event;
 +};
 +LIST_HEAD(lgtd_lifx_timer_list, lgtd_lifx_timer);
++
++// Activate the timer now, in other words make the callback pending:
++static inline void
++lgtd_lifx_timer_activate_timer(struct lgtd_lifx_timer *timer)
++{
++    assert(timer);
++
++    event_active(timer->event, 0, 0);
++}
++
++// Re-schedule a non-persistent timer with the given timeout:
++static inline bool
++lgtd_lifx_timer_reschedule_timer(struct lgtd_lifx_timer *timer,
++                                 struct timeval *tv)
++{
++    assert(timer);
++    assert(tv);
++
++    return !evtimer_add(timer->event, tv);
++}
++
++static inline bool
++lgtd_lifx_timer_ispending_timer(struct lgtd_lifx_timer *timer)
++{
++    assert(timer);
++
++    return evtimer_pending(timer->event, NULL);
++}
++
++enum lgtd_lifx_timer_flags {
++    LGTD_LIFX_TIMER_DEFAULT_FLAGS = 0,
++    LGTD_LIFX_TIMER_ACTIVATE_NOW  = 1,
++    LGTD_LIFX_TIMER_PERSISTENT    = 1 << 1,
++};
  
  bool lgtd_lifx_timer_setup(void);
  void lgtd_lifx_timer_close(void);
  void lgtd_lifx_timer_start_watchdog(void);
  void lgtd_lifx_timer_start_discovery(void);
-+bool lgtd_lifx_timer_start_timer(int, // ms, & the timer is activated right away
-+                                 void (*)(struct lgtd_lifx_timer *,
-+                                          union lgtd_lifx_timer_ctx),
-+                                 union lgtd_lifx_timer_ctx);
++
++// Create a new timer and schedule it:
++struct lgtd_lifx_timer *lgtd_lifx_timer_start_timer(int,
++                                                    int, // ms, & the timer is activated right away
++                                                    void (*)(struct lgtd_lifx_timer *,
++                                                             union lgtd_lifx_timer_ctx),
++                                                    union lgtd_lifx_timer_ctx);
++// Un-schedule and free the given timer:
 +void lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *);
 diff --git a/tests/core/daemon/test_daemon_update_proctitle.c b/tests/core/daemon/test_daemon_update_proctitle.c
 --- a/tests/core/daemon/test_daemon_update_proctitle.c
@@ -762,26 +829,30 @@ diff --git a/tests/lifx/mock_timer.h b/tests/lifx/mock_timer.h
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/mock_timer.h
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,27 @@
 +#pragma once
 +
 +#include "lifx/timer.h" // to pull the union definition
 +
 +#ifndef MOCKED_LGTD_LIFX_TIMER_START_TIMER
-+bool lgtd_lifx_timer_start_timer(int ms,
-+                                 void (*cb)(struct lgtd_lifx_timer *,
-+                                            union lgtd_lifx_timer_ctx),
-+                                 union lgtd_lifx_timer_ctx ctx)
++struct lgtd_lifx_timer *
++lgtd_lifx_timer_start_timer(int flags,
++                            int ms,
++                            void (*cb)(struct lgtd_lifx_timer *,
++                                       union lgtd_lifx_timer_ctx),
++                            union lgtd_lifx_timer_ctx ctx)
 +{
++    (void)flags;
 +    (void)ms;
 +    (void)cb;
 +    (void)ctx;
-+    return true;
++    return NULL;
 +}
 +#endif
 +
 +#ifndef MOCKED_LGTD_LIFX_TIMER_START_TIMER
-+void lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *timer)
++void
++lgtd_lifx_timer_stop_timer(struct lgtd_lifx_timer *timer)
 +{
 +    (void)timer;
 +}

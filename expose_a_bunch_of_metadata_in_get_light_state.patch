@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  2cfd0a561bb72156459fc8a9dde5bfbb5613724a
+# Parent  7027549920d48dc2320bb80ab1b9439474f6d7e1
 
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
@@ -320,8 +320,8 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +    }
 +
 +    switch (product_id) {
-+    case 1:
-+    case 2:
++    case 0x1:
++    case 0x2:
 +        return "Original";
 +    case 0xa:
 +        return "White 800";
@@ -381,22 +381,26 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
  struct lgtd_lifx_bulb *
  lgtd_lifx_bulb_get(const uint8_t *addr)
  {
-@@ -68,6 +142,14 @@
+@@ -68,6 +142,18 @@
  
      bulb->last_light_state_at = lgtd_time_monotonic_msecs();
  
 +    union lgtd_lifx_timer_ctx ctx = { .as_uint = 0 };
 +    memcpy(&ctx.as_uint, addr, LGTD_LIFX_ADDR_LENGTH);
-+    lgtd_lifx_timer_start_timer(
++    struct lgtd_lifx_timer *timer = lgtd_lifx_timer_start_timer(
++        LGTD_LIFX_TIMER_ACTIVATE_NOW|LGTD_LIFX_TIMER_PERSISTENT,
 +        LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS,
 +        lgtd_lifx_bulb_fetch_hardware_info,
 +        ctx
 +    );
++    if (!timer) {
++        lgtd_warn("can't start a timer to fetch the bulb hardware specs");
++    }
 +
      return bulb;
  }
  
-@@ -124,6 +206,7 @@
+@@ -124,6 +210,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -404,7 +408,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
-@@ -141,6 +224,7 @@
+@@ -141,6 +228,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -412,7 +416,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      bulb->state.power = power;
-@@ -155,3 +239,57 @@
+@@ -155,3 +243,57 @@
  
      bulb->state.tags = tags;
  }
@@ -586,7 +590,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
 -    int latency = gw->last_pkt_at - gw->last_req_at;
 +    int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
      if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
-         if (!event_pending(gw->refresh_ev, EV_TIMEOUT, NULL)) {
+         if (!lgtd_lifx_timer_ispending_timer(gw->refresh_timer)) {
              int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
 @@ -573,14 +569,9 @@
          LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr), pkt->power

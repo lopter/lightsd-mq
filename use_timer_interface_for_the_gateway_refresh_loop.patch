@@ -1,0 +1,138 @@
+# HG changeset patch
+# Parent  8321e57f9a3eb3935e3710c1ab68a1d08495d4cb
+Speed-up bulbs discovery
+
+By querying a gateway's bulbs as soon as it's discovered.
+
+This is the exact same optimization done earlier with the gateway
+discovery timer.
+
+This changeset also updates the gateway code to use the new timer
+interface.
+
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -57,13 +57,12 @@
+     assert(gw);
+ 
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, -1);
+-    event_del(gw->refresh_ev);
++    lgtd_lifx_timer_stop_timer(gw->refresh_timer);
+     event_del(gw->write_ev);
+     if (gw->socket != -1) {
+         evutil_closesocket(gw->socket);
+         LIST_REMOVE(gw, link);
+     }
+-    event_free(gw->refresh_ev);
+     event_free(gw->write_ev);
+     evbuffer_free(gw->write_buf);
+     for (int i = 0; i != LGTD_LIFX_GATEWAY_MAX_TAGS; i++) {
+@@ -240,13 +239,12 @@
+ }
+ 
+ static void
+-lgtd_lifx_gateway_refresh_callback(evutil_socket_t socket,
+-                                   short events,
+-                                   void *ctx)
++lgtd_lifx_gateway_refresh_callback(struct lgtd_lifx_timer *timer,
++                                   union lgtd_lifx_timer_ctx ctx)
+ {
+-    (void)socket;
+-    (void)events;
+-    lgtd_lifx_gateway_send_get_all_light_state((struct lgtd_lifx_gateway *)ctx);
++    (void)timer;
++    struct lgtd_lifx_gateway *gw = ctx.as_ptr;
++    lgtd_lifx_gateway_send_get_all_light_state(gw);
+ }
+ 
+ void
+@@ -254,7 +252,7 @@
+ {
+     assert(gw);
+ 
+-    event_active(gw->refresh_ev, 0, 0);
++    lgtd_lifx_timer_activate_timer(gw->refresh_timer);
+ }
+ 
+ static struct lgtd_lifx_bulb *
+@@ -303,6 +301,7 @@
+         lgtd_warn("can't open a new socket");
+         goto error_connect;
+     }
++
+     gw->write_ev = event_new(
+         lgtd_ev_base,
+         gw->socket,
+@@ -311,9 +310,11 @@
+         gw
+     );
+     gw->write_buf = evbuffer_new();
+-    gw->refresh_ev = evtimer_new(
+-        lgtd_ev_base, lgtd_lifx_gateway_refresh_callback, gw
+-    );
++    if (!gw->write_ev || !gw->write_buf) {
++        lgtd_warn("can't allocate a new gateway bulb");
++        goto error_allocate;
++    }
++
+     memcpy(&gw->peer, peer, sizeof(gw->peer));
+     lgtd_sockaddrtoa(peer, gw->ip_addr, sizeof(gw->ip_addr));
+     gw->port = lgtd_sockaddrport(peer);
+@@ -322,13 +323,15 @@
+     gw->next_req_at = received_at;
+     gw->last_pkt_at = received_at;
+ 
+-    struct timeval refresh_interval = LGTD_MSECS_TO_TIMEVAL(
+-        LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS
++    union lgtd_lifx_timer_ctx ctx = { .as_ptr = gw };
++    gw->refresh_timer = lgtd_lifx_timer_start_timer(
++        LGTD_LIFX_TIMER_ACTIVATE_NOW,
++        LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS,
++        lgtd_lifx_gateway_refresh_callback,
++        ctx
+     );
+-
+-    if (!gw->write_ev || !gw->write_buf || !gw->refresh_ev
+-        || event_add(gw->refresh_ev, &refresh_interval) != 0) {
+-        lgtd_warn("can't allocate a new gateway bulb");
++    if (!gw->refresh_timer) {
++        lgtd_warn("can't allocate a new timer");
+         goto error_allocate;
+     }
+ 
+@@ -355,9 +358,6 @@
+     if (gw->write_buf) {
+         evbuffer_free(gw->write_buf);
+     }
+-    if (gw->refresh_ev) {
+-        event_free(gw->refresh_ev);
+-    }
+ error_connect:
+     evutil_closesocket(gw->socket);
+ error_socket:
+@@ -529,10 +529,10 @@
+ 
+     int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
+     if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
+-        if (!event_pending(gw->refresh_ev, EV_TIMEOUT, NULL)) {
++        if (!lgtd_lifx_timer_ispending_timer(gw->refresh_timer)) {
+             int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
+             struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
+-            evtimer_add(gw->refresh_ev, &tv);
++            lgtd_lifx_timer_reschedule_timer(gw->refresh_timer, &tv);
+             lgtd_debug(
+                 "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
+                 gw->ip_addr, gw->port, latency, timeout
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -79,7 +79,7 @@
+     struct event                    *write_ev;
+     struct evbuffer                 *write_buf;
+     bool                            pending_refresh_req;
+-    struct event                    *refresh_ev;
++    struct lgtd_lifx_timer          *refresh_timer;
+ };
+ LIST_HEAD(lgtd_lifx_gateway_list, lgtd_lifx_gateway);
+ 
