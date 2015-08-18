@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c37ebab03112866b0462977002e587754511146a
+# Parent  b3e5e656546780f4db6a527195aa1684ee11a5cc
 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
@@ -260,125 +260,17 @@ diff --git a/lifx/CMakeLists.txt b/lifx/CMakeLists.txt
 +    watchdog.c
      wire_proto.c
  )
-diff --git a/lifx/bulb.c b/lifx/bulb.c
---- a/lifx/bulb.c
-+++ b/lifx/bulb.c
-@@ -26,6 +26,7 @@
- #include <stdlib.h>
- #include <string.h>
- 
-+#include <event2/event.h>
- #include <event2/util.h>
- 
- #include "wire_proto.h"
-@@ -33,7 +34,7 @@
- #include "bulb.h"
- #include "gateway.h"
- #include "core/daemon.h"
--#include "timer.h"
-+#include "core/timer.h"
- #include "core/stats.h"
- #include "core/jsmn.h"
- #include "core/jsonrpc.h"
-@@ -77,8 +78,8 @@
- }
- 
- static void
--lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer,
--                                   union lgtd_lifx_timer_ctx ctx)
-+lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_timer *timer,
-+                                   union lgtd_timer_ctx ctx)
- {
-     assert(timer);
-     assert(ctx.as_uint);
-@@ -87,7 +88,7 @@
-     const uint8_t *bulb_addr = (const uint8_t *)&ctx.as_uint;
-     struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(bulb_addr);
-     if (!bulb) {
--        lgtd_lifx_timer_stop_timer(timer);
-+        lgtd_timer_stop(timer);
-         return;
-     }
- 
-@@ -115,7 +116,7 @@
-         LGTD_LIFX_GET_WIFI_FIRMWARE_STATE
-     );
-     if (stop) {
--        lgtd_lifx_timer_stop_timer(timer);
-+        lgtd_timer_stop(timer);
-     }
- }
- 
-@@ -148,10 +149,10 @@
- 
-     bulb->last_light_state_at = lgtd_time_monotonic_msecs();
- 
--    union lgtd_lifx_timer_ctx ctx = { .as_uint = 0 };
-+    union lgtd_timer_ctx ctx = { .as_uint = 0 };
-     memcpy(&ctx.as_uint, addr, LGTD_LIFX_ADDR_LENGTH);
--    struct lgtd_lifx_timer *timer = lgtd_lifx_timer_start_timer(
--        LGTD_LIFX_TIMER_ACTIVATE_NOW|LGTD_LIFX_TIMER_PERSISTENT,
-+    struct lgtd_timer *timer = lgtd_timer_start(
-+        LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT,
-         LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS,
-         lgtd_lifx_bulb_fetch_hardware_info,
-         ctx
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -36,8 +36,9 @@
+@@ -36,6 +36,7 @@
  #include "core/time_monotonic.h"
  #include "bulb.h"
  #include "gateway.h"
 +#include "watchdog.h"
  #include "broadcast.h"
--#include "timer.h"
-+#include "core/timer.h"
+ #include "core/timer.h"
  #include "tagging.h"
- #include "core/jsmn.h"
- #include "core/jsonrpc.h"
-@@ -57,7 +58,7 @@
-     assert(gw);
- 
-     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, -1);
--    lgtd_lifx_timer_stop_timer(gw->refresh_timer);
-+    lgtd_timer_stop(gw->refresh_timer);
-     event_del(gw->write_ev);
-     if (gw->socket != -1) {
-         evutil_closesocket(gw->socket);
-@@ -239,8 +240,8 @@
- }
- 
- static void
--lgtd_lifx_gateway_refresh_callback(struct lgtd_lifx_timer *timer,
--                                   union lgtd_lifx_timer_ctx ctx)
-+lgtd_lifx_gateway_refresh_callback(struct lgtd_timer *timer,
-+                                   union lgtd_timer_ctx ctx)
- {
-     (void)timer;
-     struct lgtd_lifx_gateway *gw = ctx.as_ptr;
-@@ -252,7 +253,7 @@
- {
-     assert(gw);
- 
--    lgtd_lifx_timer_activate_timer(gw->refresh_timer);
-+    lgtd_timer_activate(gw->refresh_timer);
- }
- 
- static struct lgtd_lifx_bulb *
-@@ -323,9 +324,9 @@
-     gw->next_req_at = received_at;
-     gw->last_pkt_at = received_at;
- 
--    union lgtd_lifx_timer_ctx ctx = { .as_ptr = gw };
--    gw->refresh_timer = lgtd_lifx_timer_start_timer(
--        LGTD_LIFX_TIMER_ACTIVATE_NOW,
-+    union lgtd_timer_ctx ctx = { .as_ptr = gw };
-+    gw->refresh_timer = lgtd_timer_start(
-+        LGTD_TIMER_ACTIVATE_NOW,
-         LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS,
-         lgtd_lifx_gateway_refresh_callback,
-         ctx
 @@ -345,7 +346,7 @@
  
      // In case this is the first bulb (re-)discovered, start the watchdog, it
@@ -388,19 +280,6 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, 1);
  
-@@ -529,10 +530,10 @@
- 
-     int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
-     if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
--        if (!lgtd_lifx_timer_ispending_timer(gw->refresh_timer)) {
-+        if (!lgtd_timer_ispending(gw->refresh_timer)) {
-             int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
-             struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
--            lgtd_lifx_timer_reschedule_timer(gw->refresh_timer, &tv);
-+            lgtd_timer_reschedule(gw->refresh_timer, &tv);
-             lgtd_debug(
-                 "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
-                 gw->ip_addr, gw->port, latency, timeout
 diff --git a/lifx/gateway.h b/lifx/gateway.h
 --- a/lifx/gateway.h
 +++ b/lifx/gateway.h
@@ -413,15 +292,6 @@ diff --git a/lifx/gateway.h b/lifx/gateway.h
      // aren't the only client on the network then this won't be accurate since
      // we will get pushed packets we didn't ask for, but good enough for our
      // purpose of rate limiting our requests to the gateway:
-@@ -79,7 +79,7 @@
-     struct event                    *write_ev;
-     struct evbuffer                 *write_buf;
-     bool                            pending_refresh_req;
--    struct lgtd_lifx_timer          *refresh_timer;
-+    struct lgtd_timer               *refresh_timer;
- };
- LIST_HEAD(lgtd_lifx_gateway_list, lgtd_lifx_gateway);
- 
 diff --git a/lifx/timer.c b/lifx/watchdog.c
 rename from lifx/timer.c
 rename to lifx/watchdog.c
@@ -791,11 +661,15 @@ rename from tests/lifx/mock_timer.h
 rename to tests/core/mock_timer.h
 --- a/tests/lifx/mock_timer.h
 +++ b/tests/core/mock_timer.h
-@@ -1,14 +1,14 @@
+@@ -1,14 +1,20 @@
  #pragma once
  
 -#include "lifx/timer.h" // to pull the union definition
-+#include "core/timer.h" // to pull the union definition
++// we need those two because mock_timer.h is being used where it shouldn't be
++// because it is a dependency for modules (e.g: bulb) that haven't be mocked
++// yet:
++#include <assert.h>
++#include <event2/event.h>
  
 -#ifndef MOCKED_LGTD_LIFX_TIMER_START_TIMER
 -struct lgtd_lifx_timer *
@@ -804,6 +678,8 @@ rename to tests/core/mock_timer.h
 -                            void (*cb)(struct lgtd_lifx_timer *,
 -                                       union lgtd_lifx_timer_ctx),
 -                            union lgtd_lifx_timer_ctx ctx)
++#include "core/timer.h" // to pull the union definition
++
 +#ifndef MOCKED_LGTD_TIMER_START
 +struct lgtd_timer *
 +lgtd_timer_start(int flags,
@@ -814,7 +690,7 @@ rename to tests/core/mock_timer.h
  {
      (void)flags;
      (void)ms;
-@@ -18,9 +18,9 @@
+@@ -18,9 +24,9 @@
  }
  #endif
  

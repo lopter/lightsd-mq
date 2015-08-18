@@ -1,0 +1,66 @@
+# HG changeset patch
+# Parent  7e10634131a011f02213f9e08e090aad3a3e4cf8
+
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -26,6 +26,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#include <event2/event.h>
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
+@@ -33,7 +34,7 @@
+ #include "bulb.h"
+ #include "gateway.h"
+ #include "core/daemon.h"
+-#include "timer.h"
++#include "core/timer.h"
+ #include "core/stats.h"
+ #include "core/jsmn.h"
+ #include "core/jsonrpc.h"
+@@ -77,8 +78,8 @@
+ }
+ 
+ static void
+-lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer,
+-                                   union lgtd_lifx_timer_ctx ctx)
++lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_timer *timer,
++                                   union lgtd_timer_ctx ctx)
+ {
+     assert(timer);
+     assert(ctx.as_uint);
+@@ -87,7 +88,7 @@
+     const uint8_t *bulb_addr = (const uint8_t *)&ctx.as_uint;
+     struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(bulb_addr);
+     if (!bulb) {
+-        lgtd_lifx_timer_stop_timer(timer);
++        lgtd_timer_stop(timer);
+         return;
+     }
+ 
+@@ -115,7 +116,7 @@
+         LGTD_LIFX_GET_WIFI_FIRMWARE_STATE
+     );
+     if (stop) {
+-        lgtd_lifx_timer_stop_timer(timer);
++        lgtd_timer_stop(timer);
+     }
+ }
+ 
+@@ -148,10 +149,10 @@
+ 
+     bulb->last_light_state_at = lgtd_time_monotonic_msecs();
+ 
+-    union lgtd_lifx_timer_ctx ctx = { .as_uint = 0 };
++    union lgtd_timer_ctx ctx = { .as_uint = 0 };
+     memcpy(&ctx.as_uint, addr, LGTD_LIFX_ADDR_LENGTH);
+-    struct lgtd_lifx_timer *timer = lgtd_lifx_timer_start_timer(
+-        LGTD_LIFX_TIMER_ACTIVATE_NOW|LGTD_LIFX_TIMER_PERSISTENT,
++    struct lgtd_timer *timer = lgtd_timer_start(
++        LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT,
+         LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS,
+         lgtd_lifx_bulb_fetch_hardware_info,
+         ctx
