@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  aa7a51b9e9f3b8423b6072ef271987d07374fba5
+# Parent  7f48bbbc30460676db9df3b854378bd676045c95
 
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
@@ -117,7 +117,7 @@ diff --git a/core/log.c b/core/log.c
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -195,40 +195,142 @@
+@@ -195,40 +195,146 @@
          return;
      }
  
@@ -173,14 +173,16 @@ diff --git a/core/proto.c b/core/proto.c
 +                    ",\"%s\":{"
 +                        "\"firmware_built_at\":\"%s\","
 +                        "\"firmware_installed_at\":\"%s\","
-+                        "\"firmware_version\":\"%x\","
++                        "\"firmware_version\":\"%u.%u\","
 +                        "\"signal_strength\":%f,"
 +                        "\"tx_bytes\":%u,"
 +                        "\"rx_bytes\":%u,"
 +                        "\"temperature\":%u"
 +                    "}",
 +                    lgtd_lifx_bulb_ip_names[ip],
-+                    fw_built_at, fw_installed_at, bulb->ips[ip].fw_info.version,
++                    fw_built_at, fw_installed_at,
++                    (bulb->ips[ip].fw_info.version & 0xffff0000) >> 16,
++                    bulb->ips[ip].fw_info.version & 0xffff,
 +                    bulb->ips[ip].state.signal_strength,
 +                    bulb->ips[ip].state.tx_bytes,
 +                    bulb->ips[ip].state.rx_bytes,
@@ -189,8 +191,10 @@ diff --git a/core/proto.c b/core/proto.c
 +            } else {
 +                LGTD_SNPRINTF_APPEND(
 +                    buf, i, (int)sizeof(buf),
-+                    ",\"%s\":{\"firmware_version\":\"%x\"}",
-+                    lgtd_lifx_bulb_ip_names[ip], bulb->ips[ip].fw_info.version
++                    ",\"%s\":{\"firmware_version\":\"%u.%u\"}",
++                    lgtd_lifx_bulb_ip_names[ip],
++                    (bulb->ips[ip].fw_info.version & 0xffff0000) >> 16,
++                    bulb->ips[ip].fw_info.version & 0xffff
 +                );
 +            }
 +        }
@@ -294,11 +298,19 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
 +++ b/lifx/bulb.c
-@@ -33,12 +33,92 @@
+@@ -26,6 +26,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#include <event2/event.h>
+ #include <event2/util.h>
+ 
+ #include "wire_proto.h"
+@@ -33,12 +34,92 @@
  #include "bulb.h"
  #include "gateway.h"
  #include "core/daemon.h"
-+#include "timer.h"
++#include "core/timer.h"
  #include "core/stats.h"
 +#include "core/jsmn.h"
 +#include "core/jsonrpc.h"
@@ -342,8 +354,8 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +}
 +
 +static void
-+lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_lifx_timer *timer,
-+                                   union lgtd_lifx_timer_ctx ctx)
++lgtd_lifx_bulb_fetch_hardware_info(struct lgtd_timer *timer,
++                                   union lgtd_timer_ctx ctx)
 +{
 +    assert(timer);
 +    assert(ctx.as_uint);
@@ -352,7 +364,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +    const uint8_t *bulb_addr = (const uint8_t *)&ctx.as_uint;
 +    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(bulb_addr);
 +    if (!bulb) {
-+        lgtd_lifx_timer_stop_timer(timer);
++        lgtd_timer_stop(timer);
 +        return;
 +    }
 +
@@ -380,21 +392,21 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +        LGTD_LIFX_GET_WIFI_FIRMWARE_STATE
 +    );
 +    if (stop) {
-+        lgtd_lifx_timer_stop_timer(timer);
++        lgtd_timer_stop(timer);
 +    }
 +}
 +
  struct lgtd_lifx_bulb *
  lgtd_lifx_bulb_get(const uint8_t *addr)
  {
-@@ -68,6 +148,18 @@
+@@ -68,6 +149,18 @@
  
      bulb->last_light_state_at = lgtd_time_monotonic_msecs();
  
-+    union lgtd_lifx_timer_ctx ctx = { .as_uint = 0 };
++    union lgtd_timer_ctx ctx = { .as_uint = 0 };
 +    memcpy(&ctx.as_uint, addr, LGTD_LIFX_ADDR_LENGTH);
-+    struct lgtd_lifx_timer *timer = lgtd_lifx_timer_start_timer(
-+        LGTD_LIFX_TIMER_ACTIVATE_NOW|LGTD_LIFX_TIMER_PERSISTENT,
++    struct lgtd_timer *timer = lgtd_timer_start(
++        LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT,
 +        LGTD_LIFX_BULB_FETCH_HARDWARE_INFO_TIMER_MSECS,
 +        lgtd_lifx_bulb_fetch_hardware_info,
 +        ctx
@@ -406,7 +418,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      return bulb;
  }
  
-@@ -124,6 +216,7 @@
+@@ -124,6 +217,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, state->power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -414,7 +426,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      lgtd_lifx_gateway_update_tag_refcounts(bulb->gw, bulb->state.tags, state->tags);
-@@ -141,6 +234,7 @@
+@@ -141,6 +235,7 @@
          LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(
              bulbs_powered_on, power == LGTD_LIFX_POWER_ON ? 1 : -1
          );
@@ -422,7 +434,7 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
      }
  
      bulb->state.power = power;
-@@ -155,3 +249,57 @@
+@@ -155,3 +250,57 @@
  
      bulb->state.tags = tags;
  }
@@ -580,7 +592,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -501,12 +501,8 @@
+@@ -502,12 +502,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -595,16 +607,16 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      assert(sizeof(*pkt) == sizeof(b->state));
      lgtd_lifx_bulb_set_light_state(
-@@ -531,7 +527,7 @@
+@@ -532,7 +528,7 @@
          }
      }
  
 -    int latency = gw->last_pkt_at - gw->last_req_at;
 +    int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
      if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
-         if (!lgtd_lifx_timer_ispending_timer(gw->refresh_timer)) {
+         if (!lgtd_timer_ispending(gw->refresh_timer)) {
              int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
-@@ -573,14 +569,9 @@
+@@ -574,14 +570,9 @@
          LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr), pkt->power
      );
  
@@ -621,7 +633,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  }
  
  int
-@@ -691,9 +682,10 @@
+@@ -692,9 +683,10 @@
      }
  }
  
@@ -635,7 +647,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  {
      assert(gw && hdr && pkt);
  
-@@ -705,12 +697,8 @@
+@@ -706,12 +698,8 @@
          (uintmax_t)pkt->tags
      );
  
@@ -650,7 +662,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
  
      char bulb_addr[LGTD_LIFX_ADDR_STRLEN], site_addr[LGTD_LIFX_ADDR_STRLEN];
      int tag_id;
-@@ -729,3 +717,132 @@
+@@ -730,3 +718,132 @@
  
      lgtd_lifx_bulb_set_tags(b, pkt->tags);
  }
@@ -1262,6 +1274,130 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
 +void lgtd_lifx_wire_decode_ip_firmware_info(struct lgtd_lifx_packet_ip_firmware_info *);
 +void lgtd_lifx_wire_decode_product_info(struct lgtd_lifx_packet_product_info *);
 +void lgtd_lifx_wire_decode_runtime_info(struct lgtd_lifx_packet_runtime_info *);
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+--- a/tests/core/proto/test_proto_get_light_state.c
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -47,6 +47,9 @@
+             .power = LGTD_LIFX_POWER_ON,
+             .tags = 0
+         },
++        .ips[LGTD_LIFX_BULB_MCU_IP] = {
++            .firmware
++        },
+         .gw = &gw_bulb_1
+     };
+     static struct lgtd_router_device device_1 = { .device = &bulb_1 };
+@@ -89,22 +92,95 @@
+ 
+     lgtd_proto_get_light_state(&client, targets);
+ 
+-    const char expected[] = (
+-        "["
+-            "{"
+-                "\"hsbk\":[0,0,1,4000],"
+-                "\"power\":false,"
+-                "\"label\":\"05:04:03:02:01:00\","
+-                "\"tags\":[\"vapor\",\"d^-^b\"]"
++    const char expected[] = ("["
++        "{"
++            "\"_lifx\":{"
++                "\"addr\":\"05:04:03:02:01:00\","
++                "\"gateway\":{"
++                    "\"site\":\"00:00:00:00:00:00\","
++                    "\"url\":\"tcp://[]:0\","
++                    "\"latency\":0"
++                "},"
++                "\"mcu\":{"
++                    "\"firmware_built_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_installed_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_version\":\"1.1\","
++                    "\"signal_strength\":0.000000,"
++                    "\"tx_bytes\":0,"
++                    "\"rx_bytes\":0,"
++                    "\"temperature\":0"
++                "},"
++                "\"wifi\":{"
++                    "\"firmware_built_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_installed_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_version\":\"0.0\","
++                    "\"signal_strength\":0.000000,"
++                    "\"tx_bytes\":0,"
++                    "\"rx_bytes\":0,"
++                    "\"temperature\":0"
++                "},"
++                "\"product_info\":{"
++                    "\"vendor_id\":\"0\","
++                    "\"product_id\":\"0\","
++                    "\"version\":0"
++                "},"
++                "\"runtime_info\":{"
++                    "\"time\":\"1970-01-01T00:00:00+00:00\","
++                    "\"uptime\":0,"
++                    "\"downtime\":0"
++                "}"
+             "},"
+-            "{"
+-                "\"hsbk\":[240,1,0.733333,3600],"
+-                "\"power\":true,"
+-                "\"label\":\"wave\","
+-                "\"tags\":[]"
+-            "}"
+-        "]"
+-    );
++            "\"_model\":null,"
++            "\"_vendor\":null,"
++            "\"hsbk\":[0,0,1,4000],"
++            "\"power\":false,"
++            "\"label\":\"05:04:03:02:01:00\","
++            "\"tags\":[\"vapor\",\"d^-^b\"]"
++        "},{"
++            "\"_lifx\":{"
++                "\"addr\":\"01:02:03:04:05:00\","
++                "\"gateway\":{"
++                    "\"site\":\"00:00:00:00:00:00\","
++                    "\"url\":\"tcp://[]:0\","
++                    "\"latency\":0"
++                "},"
++                "\"mcu\":{"
++                    "\"firmware_built_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_installed_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_version\":\"0\","
++                    "\"signal_strength\":0.000000,"
++                    "\"tx_bytes\":0,"
++                    "\"rx_bytes\":0,"
++                    "\"temperature\":0"
++                "},"
++                "\"wifi\":{"
++                    "\"firmware_built_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_installed_at\":\"1970-01-01T00:00:00+00:00\","
++                    "\"firmware_version\":\"0\","
++                    "\"signal_strength\":0.000000,"
++                    "\"tx_bytes\":0,"
++                    "\"rx_bytes\":0,"
++                    "\"temperature\":0"
++                "},"
++                "\"product_info\":{"
++                    "\"vendor_id\":\"0\","
++                    "\"product_id\":\"0\","
++                    "\"version\":0"
++                "},"
++                "\"runtime_info\":{"
++                    "\"time\":\"1970-01-01T00:00:00+00:00\","
++                    "\"uptime\":0,"
++                    "\"downtime\":0"
++                "}"
++            "},"
++            "\"_model\":null,"
++            "\"_vendor\":null,"
++            "\"hsbk\":[240,1,0.733333,3600],"
++            "\"power\":true,"
++            "\"label\":\"wave\","
++            "\"tags\":[]"
++        "}"
++    "]");
+ 
+     if (client_write_buf_idx != sizeof(expected) - 1) {
+         lgtd_errx(
 diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
 --- a/tests/lifx/mock_gateway.h
 +++ b/tests/lifx/mock_gateway.h
