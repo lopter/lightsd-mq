@@ -1,0 +1,113 @@
+# HG changeset patch
+# Parent  86caa01ebfd8a47673e4bb1fe242e0434420d3a8
+
+diff --git a/core/timer.c b/core/timer.c
+--- a/core/timer.c
++++ b/core/timer.c
+@@ -27,8 +27,7 @@
+ #include "timer.h"
+ #include "lightsd.h"
+ 
+-static struct lgtd_timer_list lgtd_timers =
+-    LIST_HEAD_INITIALIZER(&lgtd_lifx_bulb_timers);
++static struct lgtd_timer_list lgtd_timers = LIST_HEAD_INITIALIZER(&lgtd_timers);
+ 
+ static void
+ lgtd_timer_callback(evutil_socket_t socket, short events, void *ctx)
+diff --git a/core/timer.h b/core/timer.h
+--- a/core/timer.h
++++ b/core/timer.h
+@@ -50,8 +50,7 @@
+ 
+ // Re-schedule a non-persistent timer with the given timeout:
+ static inline bool
+-lgtd_timer_reschedule(struct lgtd_timer *timer,
+-                           struct timeval *tv)
++lgtd_timer_reschedule(struct lgtd_timer *timer, struct timeval *tv)
+ {
+     assert(timer);
+     assert(tv);
+@@ -70,7 +69,7 @@
+ void lgtd_timer_stop(struct lgtd_timer *);
+ void lgtd_timer_stop_all(void);
+ // NOTE: if you start a persistent timer and don't keep track of it, make sure
+-//       you don't up in a callback using a context that has been freed.
++//       you don't end up in a callback using a context that has been freed.
+ struct lgtd_timer *lgtd_timer_start(int,
+                                     int, // ms
+                                     void (*)(struct lgtd_timer *,
+diff --git a/tests/core/timer/CMakeLists.txt b/tests/core/timer/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/timer/CMakeLists.txt
+@@ -0,0 +1,13 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++FUNCTION(ADD_TIMER_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE})
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_TIMER_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/core/timer/test_timer_activate.c b/tests/core/timer/test_timer_activate.c
+new file mode 100644
+diff --git a/tests/core/timer/test_timer_ispending.c b/tests/core/timer/test_timer_ispending.c
+new file mode 100644
+diff --git a/tests/core/timer/test_timer_reschedule.c b/tests/core/timer/test_timer_reschedule.c
+new file mode 100644
+diff --git a/tests/core/timer/test_timer_start_activate_now.c b/tests/core/timer/test_timer_start_activate_now.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/timer/test_timer_start_activate_now.c
+@@ -0,0 +1,5 @@
++int
++main(void)
++{
++    return 0;
++}
+diff --git a/tests/core/timer/test_timer_start_persistent.c b/tests/core/timer/test_timer_start_persistent.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/timer/test_timer_start_persistent.c
+@@ -0,0 +1,36 @@
++#include "core/timer.h"
++
++#define MOCKED_EVENT_NEW
++#define MOCKED_EVENT_ADD
++#include "mock_event2.h"
++
++
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++
++}
++
++static void
++my_test_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
++{
++    (void)timer;
++    (void)ctx;
++}
++
++int
++main(void)
++{
++    union lgtd_timer_ctx ctx = { .as_uint = 7614 };
++    struct lgtd_timer *timer = lgtd_timer_start(
++        LGTD_TIMER_PERSISTENT, 5, my_test_callback, ctx
++    );
++
++
++
++    return 0;
++}

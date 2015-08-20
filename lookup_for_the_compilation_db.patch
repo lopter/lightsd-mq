@@ -1,0 +1,32 @@
+# HG changeset patch
+# Parent  2a978903d10cb85fe980821f64401cb569aa74ee
+
+diff --git a/.ycm_extra_conf.py b/.ycm_extra_conf.py
+--- a/.ycm_extra_conf.py
++++ b/.ycm_extra_conf.py
+@@ -67,10 +67,9 @@
+ # Set this to the absolute path to the folder (NOT the file!) containing the
+ # compile_commands.json file to use that instead of 'flags'. See here for
+ # more details: http://clang.llvm.org/docs/JSONCompilationDatabase.html
+-#
+-# Most projects will NOT need to set this to anything; you can just change the
+-# 'flags' list of compilation flags.
+-compilation_database_folder = ''
++compilation_database_folder = os.getenv(
++    "MY_BUILD", os.path.join(os.getcwd(), "build")
++)
+ 
+ if os.path.exists( compilation_database_folder ):
+   database = ycm_core.CompilationDatabase( compilation_database_folder )
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -35,6 +35,8 @@
+ INCLUDE(AddAllSubdirectories)
+ INCLUDE(AddTestFromSources)
+ 
++SET(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
++
+ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}} -pipe")
+ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99")
+ SET(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE} "")
