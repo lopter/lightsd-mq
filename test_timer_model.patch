@@ -36,6 +36,32 @@ diff --git a/core/timer.h b/core/timer.h
  struct lgtd_timer *lgtd_timer_start(int,
                                      int, // ms
                                      void (*)(struct lgtd_timer *,
+diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
+--- a/tests/core/tests_shims.c
++++ b/tests/core/tests_shims.c
+@@ -24,7 +24,7 @@
+     .verbosity = LGTD_DEBUG
+ };
+ 
+-struct event_base *lgtd_ev_base = NULL;
++struct event_base *lgtd_ev_base = MOCK_LGTD_EV_BASE;
+ 
+ void
+ lgtd_cleanup(void)
+diff --git a/tests/core/tests_shims.h b/tests/core/tests_shims.h
+--- a/tests/core/tests_shims.h
++++ b/tests/core/tests_shims.h
+@@ -6,7 +6,9 @@
+     .verbosity = LGTD_DEBUG
+ };
+ 
+-struct event_base *lgtd_ev_base = NULL;
++enum { MOCK_LGTD_EV_BASE = (void *)2222 };
++
++struct event_base *lgtd_ev_base = MOCK_LGTD_EV_BASE;
+ 
+ const char *lgtd_binds = NULL;
+ 
 diff --git a/tests/core/timer/CMakeLists.txt b/tests/core/timer/CMakeLists.txt
 new file mode 100644
 --- /dev/null
@@ -74,23 +100,15 @@ diff --git a/tests/core/timer/test_timer_start_persistent.c b/tests/core/timer/t
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/timer/test_timer_start_persistent.c
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,71 @@
 +#include "core/timer.h"
 +
 +#define MOCKED_EVENT_NEW
 +#define MOCKED_EVENT_ADD
 +#include "mock_event2.h"
++#include "tests_shims.h"
 +
-+
-+struct event *
-+event_new(struct event_base *base,
-+          evutil_socket_t fd,
-+          short events,
-+          event_callback_fn cb,
-+          void *ctx)
-+{
-+
-+}
++struct lgtd_timer *timer = NULL;
 +
 +static void
 +my_test_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
@@ -99,11 +117,54 @@ new file mode 100644
 +    (void)ctx;
 +}
 +
++static int event_new_call_count = 0;
++
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    if (base != MOCK_LGTD_EV_BASE) {
++        errx(1, "got base %p (expected %p)", base, MOCK_LGTD_EV_BASE);
++    }
++
++    if (fd != -1) {
++        errx(1, "got fd %d (expected -1)", fd);
++    }
++
++    if (events != EV_PERSIST) {
++        errx(1, "got events %#x (expected %#x)", events, EV_PERSIST);
++    }
++
++    if (cb != lgtd_timer_callback) {
++        errx(1, "got cb %p (expected %p)", cb, lgtd_timer_callback);
++    }
++
++    if (!timer || ctx != timer) {
++        errx(1, "got ctx %p (expected %p)", ctx, timer);
++    }
++
++    event_new_call_count++;
++}
++
++
++int
++event_add(struct event *ev, const struct timeval *timeout)
++{
++    if (ev != timer->event) {
++
++    }
++
++    return 0;
++}
++
 +int
 +main(void)
 +{
 +    union lgtd_timer_ctx ctx = { .as_uint = 7614 };
-+    struct lgtd_timer *timer = lgtd_timer_start(
++    timer = lgtd_timer_start(
 +        LGTD_TIMER_PERSISTENT, 5, my_test_callback, ctx
 +    );
 +
