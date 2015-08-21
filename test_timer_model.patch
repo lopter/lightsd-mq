@@ -4,7 +4,15 @@
 diff --git a/core/timer.c b/core/timer.c
 --- a/core/timer.c
 +++ b/core/timer.c
-@@ -27,8 +27,7 @@
+@@ -19,6 +19,7 @@
+ #include <assert.h>
+ #include <err.h>
+ #include <stdbool.h>
++#include <stdint.h>
+ #include <stdlib.h>
+ 
+ #include <event2/event.h>
+@@ -27,8 +28,7 @@
  #include "timer.h"
  #include "lightsd.h"
  
@@ -36,14 +44,39 @@ diff --git a/core/timer.h b/core/timer.h
  struct lgtd_timer *lgtd_timer_start(int,
                                      int, // ms
                                      void (*)(struct lgtd_timer *,
+diff --git a/tests/core/mock_event2.h b/tests/core/mock_event2.h
+--- a/tests/core/mock_event2.h
++++ b/tests/core/mock_event2.h
+@@ -1,7 +1,10 @@
+ #pragma once
+ 
++#include <event2/buffer.h>
+ #include <event2/event.h>
+ 
++#define MOCK_EVENT_NEW_EVENT_PTR ((void *)0xdadadada)
++
+ #ifndef MOCKED_EVBUFFER_DRAIN
+ int
+ evbuffer_drain(struct evbuffer *buf, size_t len)
+@@ -97,7 +100,7 @@
+     (void)events;
+     (void)cb;
+     (void)ctx;
+-    return NULL;
++    return MOCK_EVENT_NEW_EVENT_PTR;
+ }
+ #endif
+ 
 diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
 --- a/tests/core/tests_shims.c
 +++ b/tests/core/tests_shims.c
-@@ -24,7 +24,7 @@
+@@ -24,7 +24,9 @@
      .verbosity = LGTD_DEBUG
  };
  
 -struct event_base *lgtd_ev_base = NULL;
++#define MOCK_LGTD_EV_BASE ((void *)2222)
++
 +struct event_base *lgtd_ev_base = MOCK_LGTD_EV_BASE;
  
  void
@@ -56,7 +89,7 @@ diff --git a/tests/core/tests_shims.h b/tests/core/tests_shims.h
  };
  
 -struct event_base *lgtd_ev_base = NULL;
-+enum { MOCK_LGTD_EV_BASE = (void *)2222 };
++#define MOCK_LGTD_EV_BASE ((void *)2222)
 +
 +struct event_base *lgtd_ev_base = MOCK_LGTD_EV_BASE;
  
@@ -90,31 +123,43 @@ diff --git a/tests/core/timer/test_timer_start_activate_now.c b/tests/core/timer
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/timer/test_timer_start_activate_now.c
-@@ -0,0 +1,5 @@
-+int
-+main(void)
-+{
-+    return 0;
-+}
-diff --git a/tests/core/timer/test_timer_start_persistent.c b/tests/core/timer/test_timer_start_persistent.c
-new file mode 100644
---- /dev/null
-+++ b/tests/core/timer/test_timer_start_persistent.c
-@@ -0,0 +1,71 @@
-+#include "core/timer.h"
+@@ -0,0 +1,127 @@
++#include <string.h>
++
++#include "core/timer.c"
 +
 +#define MOCKED_EVENT_NEW
 +#define MOCKED_EVENT_ADD
++#define MOCKED_EVENT_ACTIVE
 +#include "mock_event2.h"
 +#include "tests_shims.h"
 +
-+struct lgtd_timer *timer = NULL;
-+
-+static void
-+my_test_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
++static void my_test_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
 +{
 +    (void)timer;
 +    (void)ctx;
++}
++
++static int event_active_call_count = 0;
++
++void
++event_active(struct event *ev, int res, short ncalls)
++{
++    if (ev != MOCK_EVENT_NEW_EVENT_PTR) {
++        errx(1, "got event %p (expected %p)", ev, MOCK_EVENT_NEW_EVENT_PTR);
++    }
++
++    if (res) {
++        errx(1, "got res = %d (expected 0)", res);
++    }
++
++    if (ncalls) {
++        errx(1, "got ncalls = %d (expected 0)", ncalls);
++    }
++
++    if (event_active_call_count++) {
++        errx(1, "event_active should be called once");
++    }
 +}
 +
 +static int event_new_call_count = 0;
@@ -142,19 +187,33 @@ new file mode 100644
 +        errx(1, "got cb %p (expected %p)", cb, lgtd_timer_callback);
 +    }
 +
-+    if (!timer || ctx != timer) {
-+        errx(1, "got ctx %p (expected %p)", ctx, timer);
++    if (!ctx) {
++        errx(1, "didn't get any context");
 +    }
 +
-+    event_new_call_count++;
++    if (event_new_call_count++) {
++        errx(1, "event_new should be called once");
++    }
++
++    return MOCK_EVENT_NEW_EVENT_PTR;
 +}
 +
++static int event_add_call_count = 0;
 +
 +int
 +event_add(struct event *ev, const struct timeval *timeout)
 +{
-+    if (ev != timer->event) {
++    if (ev != MOCK_EVENT_NEW_EVENT_PTR) {
++        errx(1, "got ev %p (expected %p)", ev, MOCK_EVENT_NEW_EVENT_PTR);
++    }
 +
++    struct timeval expected_tv = LGTD_MSECS_TO_TIMEVAL(5);
++    if (!timeout || memcmp(timeout, &expected_tv, sizeof(*timeout))) {
++        errx(1, "got invalid timeout");
++    }
++
++    if (event_add_call_count++) {
++        errx(1, "event_add should be called once");
 +    }
 +
 +    return 0;
@@ -164,11 +223,150 @@ new file mode 100644
 +main(void)
 +{
 +    union lgtd_timer_ctx ctx = { .as_uint = 7614 };
-+    timer = lgtd_timer_start(
++    struct lgtd_timer *timer = lgtd_timer_start(
 +        LGTD_TIMER_PERSISTENT, 5, my_test_callback, ctx
 +    );
 +
++    if (timer->event != MOCK_EVENT_NEW_EVENT_PTR) {
++        errx(
++            1, "timer has event %p (expected %p)",
++            timer->event, MOCK_EVENT_NEW_EVENT_PTR
++        );
++    }
++    if (timer->ctx.as_uint != ctx.as_uint) {
++        errx(
++            1, "timer ctx is %ju (expected %ju)",
++            timer->ctx.as_uint, ctx.as_uint
++        );
++    }
++    if (timer->callback != my_test_callback) {
++        errx(
++            1, "timer callback is %p (expected %p)",
++            timer->callback, my_test_callback
++        );
++    }
++    if (LIST_FIRST(&lgtd_timers) != timer) {
++        errx(1, "the timer wasn't inserted in the timers list");
++    }
 +
++    return 0;
++}
+diff --git a/tests/core/timer/test_timer_start_persistent.c b/tests/core/timer/test_timer_start_persistent.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/timer/test_timer_start_persistent.c
+@@ -0,0 +1,114 @@
++#include <string.h>
++
++#include "core/timer.c"
++
++#define MOCKED_EVENT_NEW
++#define MOCKED_EVENT_ADD
++#define MOCKED_EVENT_ACTIVE
++#include "mock_event2.h"
++#include "tests_shims.h"
++
++static void my_test_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
++{
++    (void)timer;
++    (void)ctx;
++}
++
++void
++event_active(struct event *ev, int res, short ncalls)
++{
++    (void)ev;
++    (void)res;
++    (void)ncalls;
++    errx(1, "event_active shouldn't have been called");
++}
++
++static int event_new_call_count = 0;
++
++struct event *
++event_new(struct event_base *base,
++          evutil_socket_t fd,
++          short events,
++          event_callback_fn cb,
++          void *ctx)
++{
++    if (base != MOCK_LGTD_EV_BASE) {
++        errx(1, "got base %p (expected %p)", base, MOCK_LGTD_EV_BASE);
++    }
++
++    if (fd != -1) {
++        errx(1, "got fd %d (expected -1)", fd);
++    }
++
++    if (events != EV_PERSIST) {
++        errx(1, "got events %#x (expected %#x)", events, EV_PERSIST);
++    }
++
++    if (cb != lgtd_timer_callback) {
++        errx(1, "got cb %p (expected %p)", cb, lgtd_timer_callback);
++    }
++
++    if (!ctx) {
++        errx(1, "didn't get any context");
++    }
++
++    if (event_new_call_count++) {
++        errx(1, "event_new should be called once");
++    }
++
++    return MOCK_EVENT_NEW_EVENT_PTR;
++}
++
++static int event_add_call_count = 0;
++
++int
++event_add(struct event *ev, const struct timeval *timeout)
++{
++    if (ev != MOCK_EVENT_NEW_EVENT_PTR) {
++        errx(1, "got ev %p (expected %p)", ev, MOCK_EVENT_NEW_EVENT_PTR);
++    }
++
++    struct timeval expected_tv = LGTD_MSECS_TO_TIMEVAL(5);
++    if (!timeout || memcmp(timeout, &expected_tv, sizeof(*timeout))) {
++        errx(1, "got invalid timeout");
++    }
++
++    if (event_add_call_count++) {
++        errx(1, "event_add should be called once");
++    }
++
++    return 0;
++}
++
++int
++main(void)
++{
++    union lgtd_timer_ctx ctx = { .as_uint = 7614 };
++    struct lgtd_timer *timer = lgtd_timer_start(
++        LGTD_TIMER_PERSISTENT, 5, my_test_callback, ctx
++    );
++
++    if (timer->event != MOCK_EVENT_NEW_EVENT_PTR) {
++        errx(
++            1, "timer has event %p (expected %p)",
++            timer->event, MOCK_EVENT_NEW_EVENT_PTR
++        );
++    }
++    if (timer->ctx.as_uint != ctx.as_uint) {
++        errx(
++            1, "timer ctx is %ju (expected %ju)",
++            timer->ctx.as_uint, ctx.as_uint
++        );
++    }
++    if (timer->callback != my_test_callback) {
++        errx(
++            1, "timer callback is %p (expected %p)",
++            timer->callback, my_test_callback
++        );
++    }
++    if (LIST_FIRST(&lgtd_timers) != timer) {
++        errx(1, "the timer wasn't inserted in the timers list");
++    }
 +
 +    return 0;
 +}
