@@ -1,0 +1,47 @@
+# HG changeset patch
+# Parent  91a1889c4959a3359361159b8ab5dc97f29336c0
+Do not stop at the first match when targeting to a label
+
+People should use tags, but that seems like the correct behavior to
+have.
+
+diff --git a/core/router.c b/core/router.c
+--- a/core/router.c
++++ b/core/router.c
+@@ -341,20 +341,26 @@
+             struct lgtd_lifx_bulb *bulb = NULL;
+             if (isxdigit(target->target[0])) {
+                 bulb = lgtd_router_device_addr_to_device(target->target);
++                if (bulb) {
++                    bool ok = lgtd_router_insert_device_if_not_in_list(
++                        devices, bulb
++                    );
++                    if (!ok) {
++                        goto device_alloc_error;
++                    }
++                    continue;
++                }
+             }
+-            if (!bulb) {
+-                RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
+-                    if (!strcmp(bulb->state.label, target->target)) {
+-                        break;
++            RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
++                if (!strcmp(bulb->state.label, target->target)) {
++                    bool ok = lgtd_router_insert_device_if_not_in_list(
++                        devices, bulb
++                    );
++                    if (!ok) {
++                        goto device_alloc_error;
+                     }
+                 }
+             }
+-            if (!bulb) {
+-                continue;
+-            }
+-            if (!lgtd_router_insert_device_if_not_in_list(devices, bulb)) {
+-                goto device_alloc_error;
+-            }
+         }
+     }
+ 
