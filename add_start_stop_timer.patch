@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  ce355e8d186f108bc42849da03911b59a111d697
+# Parent  2ae11e7bd9c743fdded7c92649789475c6462922
 Add an interface to start and stop standalone timers
 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
@@ -1378,7 +1378,7 @@ new file mode 100644
 +    if (timer->ctx.as_uint != ctx.as_uint) {
 +        errx(
 +            1, "timer ctx is %ju (expected %ju)",
-+            timer->ctx.as_uint, ctx.as_uint
++            (uintmax_t)timer->ctx.as_uint, (uintmax_t)ctx.as_uint
 +        );
 +    }
 +    if (timer->callback != my_test_callback) {
@@ -1508,7 +1508,7 @@ new file mode 100644
 +    if (timer->ctx.as_uint != ctx.as_uint) {
 +        errx(
 +            1, "timer ctx is %ju (expected %ju)",
-+            timer->ctx.as_uint, ctx.as_uint
++            (uintmax_t)timer->ctx.as_uint, (uintmax_t)ctx.as_uint
 +        );
 +    }
 +    if (timer->callback != my_test_callback) {

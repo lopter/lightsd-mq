@@ -9,4 +9,5 @@ lookup_for_the_compilation_db.patch
 add_set_bulb_label.patch
 fix_label_printing_in_get_light_state.patch
 router_label_no_break.patch
+add_missing_tagging_tests.patch
 add_ipv4_to_ieee8023mac.patch #+future #+linux

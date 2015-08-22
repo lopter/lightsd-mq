@@ -1,0 +1,81 @@
+# HG changeset patch
+# Parent  5326bf973f36f82a7f4a81075d0965facf554291
+Add missing unit-tests on tag/untag
+
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c
+@@ -43,7 +43,7 @@
+         errx(1, "can't parse request");
+     }
+ 
+-    lgtd_jsonrpc_check_and_call_proto_tag_or_untag_or_set_label(&client, lgtd_proto_tag);
++    lgtd_jsonrpc_check_and_call_tag(&client);
+ 
+     if (tag_called) {
+         errx(1, "lgtd_proto_tag was called");
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c
+@@ -55,7 +55,7 @@
+         errx(1, "can't parse request");
+     }
+ 
+-    lgtd_jsonrpc_check_and_call_proto_tag_or_untag_or_set_label(&client, lgtd_proto_untag);
++    lgtd_jsonrpc_check_and_call_untag(&client);
+ 
+     if (!untag_called) {
+         errx(1, "lgtd_proto_tag wasn't called");
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c
+@@ -43,7 +43,7 @@
+         errx(1, "can't parse request");
+     }
+ 
+-    lgtd_jsonrpc_check_and_call_proto_tag_or_untag_or_set_label(&client, lgtd_proto_untag);
++    lgtd_jsonrpc_check_and_call_untag(&client);
+ 
+     if (untag_called) {
+         errx(1, "lgtd_proto_tag was called");
+diff --git a/tests/lifx/gateway/test_gateway_handle_tags.c b/tests/lifx/gateway/test_gateway_handle_tags.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_handle_tags.c
+@@ -0,0 +1,36 @@
++#include <string.h>
++
++#include "gateway.c"
++
++#include "mock_timer.h"
++#include "test_gateway_utils.h"
++#include "tests_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_info_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    struct lgtd_lifx_bulb *bulb = lgtd_tests_insert_mock_bulb(&gw, 42);
++
++    struct lgtd_lifx_packet_header hdr;
++    memset(&hdr, 0, sizeof(hdr));
++    memcpy(
++        &hdr.target.device_addr, &bulb->addr, sizeof(hdr.target.device_addr)
++    );
++
++    struct lgtd_lifx_packet_tags pkt = { .tags = 0x7 };
++
++    lgtd_lifx_gateway_handle_tags(&gw, &hdr, &pkt);
++
++    if (bulb->state.tags != 0x7) {
++        errx(
++            1, "bulb->tags = %#jx (expected 0x7)", (uintmax_t)bulb->state.tags
++        );
++    }
++
++    return 0;
++}

@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  a6b366db25028b4fddc87c3976c9ea0f85f6b2b0
+# Parent  c370e07108dde8c8497f963f2a5c6d0f276f9dbe
 Add the set_label command
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
@@ -108,7 +108,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -512,3 +512,42 @@
+@@ -512,3 +512,20 @@
  
      lgtd_router_device_list_free(devices);
  }
@@ -122,34 +122,12 @@ diff --git a/core/proto.c b/core/proto.c
 +    assert(targets);
 +    assert(label);
 +
-+    struct lgtd_router_device_list *devices = NULL;
-+    devices = lgtd_router_targets_to_devices(targets);
-+    if (!devices) {
-+        lgtd_client_send_error(
-+            client, LGTD_CLIENT_INTERNAL_ERROR, "couldn't allocate memory"
-+        );
-+        return;
-+    }
-+
 +    int label_len = strlen(label);
 +    struct lgtd_lifx_packet_label pkt;
 +    memcpy(pkt.label, label, LGTD_MIN(label_len, (int)sizeof(pkt.label)));
-+
-+    struct lgtd_router_device *device;
-+    SLIST_FOREACH(device, devices, link) {
-+        struct lgtd_lifx_bulb *bulb = device->device;
-+        char *bulb_label = &bulb->state.label[0];
-+        char *endp = memchr(bulb_label, 0, LGTD_LIFX_LABEL_SIZE);
-+        int bulb_label_len = endp ? endp - bulb_label : LGTD_LIFX_LABEL_SIZE;
-+        if (label_len != bulb_label_len
-+            || memcmp(bulb_label, label, label_len)) {
-+            lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_BULB_LABEL, &pkt);
-+        }
-+    }
-+
-+    SEND_RESULT(client, true);
-+
-+    lgtd_router_device_list_free(devices);
++    SEND_RESULT(
++        client, lgtd_router_send(targets, LGTD_LIFX_SET_BULB_LABEL, &pkt)
++    );
 +}
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
@@ -162,7 +140,18 @@ diff --git a/core/proto.h b/core/proto.h
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 --- a/docs/protocol.rst
 +++ b/docs/protocol.rst
-@@ -66,14 +66,22 @@
+@@ -26,6 +26,10 @@
+ A target is either a string, a hexadecimal number (without any prefix like 0x)
+ or an array of targets.
+ 
++.. note::
++
++   The maximum supported length for labels and tag names by LIFX bulbs is 32.
++
+ Available methods
+ -----------------
+ 
+@@ -66,14 +70,22 @@
  
  .. function:: get_light_state(target)
  
@@ -324,6 +313,66 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  struct lgtd_lifx_packet_tag_labels {
      uint64le_t  tags;
      char        label[LGTD_LIFX_LABEL_SIZE];
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_label.c
+copy from tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
+copy to tests/core/jsonrpc/test_jsonrpc_check_and_call_set_label.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_label.c
+@@ -3,15 +3,15 @@
+ #include "mock_client_buf.h"
+ #include "mock_gateway.h"
+ 
+-#define MOCKED_LGTD_TAG
++#define MOCKED_LGTD_PROTO_SET_LABEL
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool tag_called = false;
+ 
+ void
+-lgtd_proto_tag(struct lgtd_client *client,
+-               const struct lgtd_proto_target_list *targets,
+-               const char *tag)
++lgtd_proto_set_label(struct lgtd_client *client,
++                     const struct lgtd_proto_target_list *targets,
++                     const char *label)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+@@ -24,8 +24,8 @@
+         );
+     }
+ 
+-    if (strcmp(tag, "suspensions")) {
+-        errx(1, "Invalid tag [%s] (expected=[suspensions])", tag);
++    if (strcmp(label, "candle")) {
++        errx(1, "Invalid label [%s] (expected=[candle])", label);
+     }
+ 
+     tag_called = true;
+@@ -37,8 +37,8 @@
+     jsmntok_t tokens[32];
+     const char json[] = ("{"
+         "\"jsonrpc\": \"2.0\","
+-        "\"method\": \"tag\","
+-        "\"params\": {\"target\": \"*\", \"tag\": \"suspensions\"},"
++        "\"method\": \"set_label\","
++        "\"params\": {\"target\": \"*\", \"label\": \"candle\"},"
+         "\"id\": \"42\""
+     "}");
+     int parsed = parse_json(
+@@ -55,10 +55,10 @@
+         errx(1, "can't parse request");
+     }
+ 
+-    lgtd_jsonrpc_check_and_call_proto_tag_or_untag(&client, lgtd_proto_tag);
++    lgtd_jsonrpc_check_and_call_set_label(&client);
+ 
+     if (!tag_called) {
+-        errx(1, "lgtd_proto_tag wasn't called");
++        errx(1, "lgtd_proto_label wasn't called");
+     }
+ 
+     return 0;
 diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
 --- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
 +++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
@@ -400,10 +449,266 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_j
 +    (void)label;
 +}
 +#endif
+diff --git a/tests/core/proto/test_proto_set_label.c b/tests/core/proto/test_proto_set_label.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_set_label.c
+@@ -0,0 +1,85 @@
++#include "proto.c"
++
++#include "mock_client_buf.h"
++#include "mock_daemon.h"
++#include "mock_event2.h"
++#include "mock_timer.h"
++#include "tests_utils.h"
++
++#define MOCKED_CLIENT_SEND_RESPONSE
++#define MOCKED_ROUTER_SEND
++#include "tests_proto_utils.h"
++
++static int router_send_call_count = 0;
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_BULB_LABEL) {
++        errx(1, "invalid packet type %d (expected %d)",
++             pkt_type, LGTD_LIFX_SET_BULB_LABEL
++        );
++    }
++
++    struct lgtd_lifx_packet_label *set_label = pkt;
++    if (strcmp(set_label->label, "test")) {
++        errx(
++            1, "invalid packet label %.*s (expected test)",
++            LGTD_LIFX_LABEL_SIZE, set_label->label
++        );
++    }
++
++    if (router_send_call_count++) {
++        errx(1, "lgtd_router_send should be called once");
++    }
++
++    return true;
++}
++
++static int client_send_response_call_count = 0;
++
++void
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't be NULL");
++    }
++
++    if (strcmp(msg, "true")) {
++        errx(1, "unexpected response [%s] (expected [true])", msg);
++    }
++
++    if (client_send_response_call_count++) {
++        errx(1, "lgtd_client_send_response should be called once");
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++
++    lgtd_proto_set_label(&client, targets, "test");
++
++    if (!router_send_call_count) {
++        errx(1, "lgtd_router_send wasn't called");
++    }
++
++    if (!client_send_response_call_count) {
++        errx(1, "lgtd_client_send_response wasn't called");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/proto/test_proto_set_label_too_long.c b/tests/core/proto/test_proto_set_label_too_long.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/proto/test_proto_set_label_too_long.c
+@@ -0,0 +1,87 @@
++#include "proto.c"
++
++#include "mock_client_buf.h"
++#include "mock_daemon.h"
++#include "mock_event2.h"
++#include "mock_timer.h"
++#include "tests_utils.h"
++
++#define MOCKED_CLIENT_SEND_RESPONSE
++#define MOCKED_ROUTER_SEND
++#include "tests_proto_utils.h"
++
++static const char *test_label = "test of a very long label over 32 chars";
++
++static int router_send_call_count = 0;
++
++bool
++lgtd_router_send(const struct lgtd_proto_target_list *targets,
++                 enum lgtd_lifx_packet_type pkt_type,
++                 void *pkt)
++{
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (pkt_type != LGTD_LIFX_SET_BULB_LABEL) {
++        errx(1, "invalid packet type %d (expected %d)",
++             pkt_type, LGTD_LIFX_SET_BULB_LABEL
++        );
++    }
++
++    struct lgtd_lifx_packet_label *set_label = pkt;
++    if (memcmp(set_label->label, test_label, sizeof(set_label->label))) {
++        errx(
++            1, "invalid packet label %2$.*1$s (expected %3$.*1$s)",
++            LGTD_LIFX_LABEL_SIZE, set_label->label, test_label
++        );
++    }
++
++    if (router_send_call_count++) {
++        errx(1, "lgtd_router_send should be called once");
++    }
++
++    return true;
++}
++
++static int client_send_response_call_count = 0;
++
++void
++lgtd_client_send_response(struct lgtd_client *client, const char *msg)
++{
++    if (!client) {
++        errx(1, "client shouldn't be NULL");
++    }
++
++    if (strcmp(msg, "true")) {
++        errx(1, "unexpected response [%s] (expected [true])", msg);
++    }
++
++    if (client_send_response_call_count++) {
++        errx(1, "lgtd_client_send_response should be called once");
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_proto_target_list *targets;
++    targets = lgtd_tests_build_target_list("*", NULL);
++
++    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++
++    lgtd_proto_set_label(&client, targets, test_label);
++
++    if (!router_send_call_count) {
++        errx(1, "lgtd_router_send wasn't called");
++    }
++
++    if (!client_send_response_call_count) {
++        errx(1, "lgtd_client_send_response wasn't called");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -31,9 +31,6 @@
+ #include "lifx/gateway.h"
+ #include "tests_utils.h"
+ 
+-struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
+-    LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
+-
+ struct lgtd_listen_list lgtd_listeners =
+     SLIST_HEAD_INITIALIZER(&lgtd_listeners);
+ 
+diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.txt
+--- a/tests/lifx/gateway/CMakeLists.txt
++++ b/tests/lifx/gateway/CMakeLists.txt
+@@ -10,6 +10,7 @@
+     ${LIGHTSD_SOURCE_DIR}/core/router.c
+     ${LIGHTSD_SOURCE_DIR}/core/stats.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../../core/tests_utils.c
+ )
+ 
+ ADD_LIBRARY(
+diff --git a/tests/lifx/gateway/test_gateway_handle_bulb_label.c b/tests/lifx/gateway/test_gateway_handle_bulb_label.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_handle_bulb_label.c
+@@ -0,0 +1,34 @@
++#include <string.h>
++
++#include "gateway.c"
++
++#include "mock_timer.h"
++#include "test_gateway_utils.h"
++#include "tests_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_info_map();
++
++    struct lgtd_lifx_gateway gw = { .last_pkt_at = 42 };
++
++    struct lgtd_lifx_bulb *b = lgtd_tests_insert_mock_bulb(&gw, 42);
++
++    struct lgtd_lifx_packet_header hdr = {
++        .packet_type = LGTD_LIFX_BULB_LABEL
++    };
++    memcpy(&hdr.target.device_addr, &b->addr, sizeof(hdr.target.device_addr));
++    struct lgtd_lifx_packet_label pkt = { .label = "TEST LABEL" };
++
++    lgtd_lifx_gateway_handle_bulb_label(&gw, &hdr, &pkt);
++
++    if (memcmp(&b->state.label, &pkt.label, LGTD_LIFX_LABEL_SIZE)) {
++        errx(
++            1, "got label %2$.*1$s, (expected %3$.*1$s)",
++            LGTD_LIFX_LABEL_SIZE, b->state.label, pkt.label
++        );
++    }
++
++    return 0;
++}
 diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
 --- a/tests/lifx/mock_gateway.h
 +++ b/tests/lifx/mock_gateway.h
-@@ -177,3 +177,15 @@
+@@ -5,7 +5,9 @@
+ #include "lifx/gateway.h"
+ 
+ struct lgtd_lifx_tag;
+-struct lgtd_lifx_gateway;
++
++struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
+ 
+ #ifndef MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+ bool
+@@ -177,3 +179,15 @@
      (void)pkt;
  }
  #endif
