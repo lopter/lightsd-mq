@@ -1,6 +1,6 @@
 # HG changeset patch
-# Parent  4364632d507030b0c764bc9626820d91a23b4096
-Add all waveform types in lightsc.py
+# Parent  2b95d23c7e1389c6bb40fac13a43ced9af932332
+Add all waveform types and the adjust_brightness command in lightsc.py
 
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
@@ -44,3 +44,20 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
  def power_on(socket, target):
      return jsonrpc_call(socket, "power_on", {"target": target})
  
+@@ -83,6 +115,16 @@
+ def untag(socket, target, tag):
+     return jsonrpc_call(socket, "untag", [target, tag])
+ 
++
++def adjust_brightness(socket, target, adjustment):
++    bulbs = get_light_state(socket, target)["result"]
++    for bulb in bulbs:
++        h, s, b, k = bulb["hsbk"]
++        b += adjustment
++        b = max(min(b, 1.0), 0.0)
++        set_light_from_hsbk(socket, bulb["label"], h, s, b, k, 500)
++
++
+ if __name__ == "__main__":
+     s = socket.create_connection(("localhost", 1234))
+     h = 0
