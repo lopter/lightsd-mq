@@ -11,6 +11,5 @@ add_set_bulb_label.patch
 fix_label_printing_in_get_light_state.patch
 router_label_no_break.patch
 add_missing_tagging_tests.patch
-fixup_expose.patch
 log_something_before_daemon.patch
 add_ipv4_to_ieee8023mac.patch #+future #+linux

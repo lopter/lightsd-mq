@@ -1,11 +1,27 @@
 # HG changeset patch
-# Parent  ad04f1a18f508f585ffd59826ceaae9445cfbc69
+# Parent  327829989a387302cb11617860e57896fab6dee2
 Expose the bulb address, model and firmware version in get_light_state
 
 The bulb's gateway is also exposed.
 
 Even more will be returned if you run lightsd with -v debug.
 
+diff --git a/README.rst b/README.rst
+--- a/README.rst
++++ b/README.rst
+@@ -106,9 +106,9 @@
+ Known issues
+ ------------
+ 
+-The grouping (tagging) code of the LIFX White 800 (and presumably the Color 650
+-as well) is bugged: after a tagging operation the LIFX White 800 keep saying it
+-has no tags. Reboot the bulb to make the tags appears.
++The White 800 appears to be less reliable than the LIFX Original or Color 650.
++The grouping (tagging) code of the LIFX White 800 in particular appears to be
++bugged: after a tagging operation the LIFX White 800 keep saying it has no tags.
+ 
+ Power ON/OFF are the only commands with auto-retry, i.e: lightsd will keep
+ sending the command to the bulb until its state changes. This is not implemented
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
 +++ b/core/daemon.c
@@ -1819,7 +1835,7 @@ diff --git a/tests/lifx/gateway/test_gateway_handle_ip_firmware_info.c b/tests/l
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/gateway/test_gateway_handle_ip_firmware_info.c
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,54 @@
 +#include <string.h>
 +
 +#include "gateway.c"
@@ -1852,7 +1868,10 @@ new file mode 100644
 +        errx(1, "The MCU ip firmware info wasn't set properly");
 +    }
 +    if (ip->fw_info_updated_at != 42) {
-+        errx(1, "state_updated_at %ju (expected 42)", ip->fw_info_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->fw_info_updated_at
++        );
 +    }
 +
 +    memset(&pkt, 'B', sizeof(pkt));
@@ -1863,7 +1882,10 @@ new file mode 100644
 +        errx(1, "The WIFI firmware info wasn't set properly");
 +    }
 +    if (ip->fw_info_updated_at != 42) {
-+        errx(1, "state_updated_at %ju (expected 42)", ip->fw_info_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->fw_info_updated_at
++        );
 +    }
 +
 +    return 0;
@@ -1872,7 +1894,7 @@ diff --git a/tests/lifx/gateway/test_gateway_handle_ip_state.c b/tests/lifx/gate
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/gateway/test_gateway_handle_ip_state.c
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,54 @@
 +#include <string.h>
 +
 +#include "gateway.c"
@@ -1905,7 +1927,10 @@ new file mode 100644
 +        errx(1, "The MCU ip state wasn't set properly");
 +    }
 +    if (ip->state_updated_at != 42) {
-+        errx(1, "state_updated_at %ju (expected 42)", ip->state_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->state_updated_at
++        );
 +    }
 +
 +    memset(&pkt, 'B', sizeof(pkt));
@@ -1916,7 +1941,10 @@ new file mode 100644
 +        errx(1, "The WIFI ip state wasn't set properly");
 +    }
 +    if (ip->state_updated_at != 42) {
-+        errx(1, "state_updated_at %ju (expected 42)", ip->state_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->state_updated_at
++        );
 +    }
 +
 +    return 0;
