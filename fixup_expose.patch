@@ -1,0 +1,57 @@
+# HG changeset patch
+# Parent  c33d80391d224cd53d6c03bd3ccf37da8cd676b1
+
+diff --git a/tests/lifx/gateway/test_gateway_handle_ip_firmware_info.c b/tests/lifx/gateway/test_gateway_handle_ip_firmware_info.c
+--- a/tests/lifx/gateway/test_gateway_handle_ip_firmware_info.c
++++ b/tests/lifx/gateway/test_gateway_handle_ip_firmware_info.c
+@@ -30,7 +30,10 @@
+         errx(1, "The MCU ip firmware info wasn't set properly");
+     }
+     if (ip->fw_info_updated_at != 42) {
+-        errx(1, "state_updated_at %ju (expected 42)", ip->fw_info_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->fw_info_updated_at
++        );
+     }
+ 
+     memset(&pkt, 'B', sizeof(pkt));
+@@ -41,7 +44,10 @@
+         errx(1, "The WIFI firmware info wasn't set properly");
+     }
+     if (ip->fw_info_updated_at != 42) {
+-        errx(1, "state_updated_at %ju (expected 42)", ip->fw_info_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->fw_info_updated_at
++        );
+     }
+ 
+     return 0;
+diff --git a/tests/lifx/gateway/test_gateway_handle_ip_state.c b/tests/lifx/gateway/test_gateway_handle_ip_state.c
+--- a/tests/lifx/gateway/test_gateway_handle_ip_state.c
++++ b/tests/lifx/gateway/test_gateway_handle_ip_state.c
+@@ -30,7 +30,10 @@
+         errx(1, "The MCU ip state wasn't set properly");
+     }
+     if (ip->state_updated_at != 42) {
+-        errx(1, "state_updated_at %ju (expected 42)", ip->state_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->state_updated_at
++        );
+     }
+ 
+     memset(&pkt, 'B', sizeof(pkt));
+@@ -41,7 +44,10 @@
+         errx(1, "The WIFI ip state wasn't set properly");
+     }
+     if (ip->state_updated_at != 42) {
+-        errx(1, "state_updated_at %ju (expected 42)", ip->state_updated_at);
++        errx(
++            1, "state_updated_at %ju (expected 42)",
++            (uintmax_t)ip->state_updated_at
++        );
+     }
+ 
+     return 0;
