@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  7ba29801abfbef0d915a9e22eb9b5dca931a02e3
+# Parent  1e25f17960e56bccc311c28c0396834c8d31df46
 Add the set_label command
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
@@ -105,10 +105,21 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          )
      };
  
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -23,6 +23,7 @@
+ 
+ #define LGTD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
+ #define LGTD_MIN(a, b) ((a) < (b) ? (a) : (b))
++#define LGTD_MAX(a, b) ((a) > (b) ? (a) : (b))
+ #define LGTD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+ #define LGTD_MSECS_TO_TIMEVAL(v) {  \
+     .tv_sec = (v) / 1000,           \
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -512,3 +512,20 @@
+@@ -512,3 +512,24 @@
  
      lgtd_router_device_list_free(devices);
  }
@@ -125,6 +136,10 @@ diff --git a/core/proto.c b/core/proto.c
 +    int label_len = strlen(label);
 +    struct lgtd_lifx_packet_label pkt;
 +    memcpy(pkt.label, label, LGTD_MIN(label_len, (int)sizeof(pkt.label)));
++    // this will go out on the network don't leave garbage in it:
++    memset(&pkt.label[label_len], 0, LGTD_MAX(
++        (int)sizeof(pkt.label) - label_len, 0
++    ));
 +    SEND_RESULT(
 +        client, lgtd_router_send(targets, LGTD_LIFX_SET_BULB_LABEL, &pkt)
 +    );

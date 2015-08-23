@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  f0fbe12d52770de54bbd6279519462e0e43cf5d7
+# Parent  0d019f96f2501d38d43a3055494e3767f55bdc26
 Do not stop at the first match when targeting a label
 
 People should use tags, but that seems like the correct behavior to
@@ -8,6 +8,15 @@ have.
 diff --git a/core/router.c b/core/router.c
 --- a/core/router.c
 +++ b/core/router.c
+@@ -168,7 +168,7 @@
+ 
+     struct lgtd_lifx_bulb *bulb;
+     RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
+-        if (!strcmp(bulb->state.label, label)) {
++        if (lgtd_lifx_bulb_has_label(bulb, label)) {
+             struct lgtd_lifx_packet_header hdr;
+             union lgtd_lifx_target target = { .addr = bulb->addr };
+             pkt_info = lgtd_lifx_wire_setup_header(
 @@ -341,20 +341,26 @@
              struct lgtd_lifx_bulb *bulb = NULL;
              if (isxdigit(target->target[0])) {
@@ -27,7 +36,7 @@ diff --git a/core/router.c b/core/router.c
 -                    if (!strcmp(bulb->state.label, target->target)) {
 -                        break;
 +            RB_FOREACH(bulb, lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table) {
-+                if (!strcmp(bulb->state.label, target->target)) {
++                if (lgtd_lifx_bulb_has_label(bulb, target->target)) {
 +                    bool ok = lgtd_router_insert_device_if_not_in_list(
 +                        devices, bulb
 +                    );
@@ -45,6 +54,59 @@ diff --git a/core/router.c b/core/router.c
          }
      }
  
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -207,6 +207,21 @@
+     free(bulb);
+ }
+ 
++bool
++lgtd_lifx_bulb_has_label(const struct lgtd_lifx_bulb *bulb,
++                         const char *label)
++{
++    assert(bulb);
++    assert(label);
++
++    const char *bulb_label = &bulb->state.label[0];
++    const char *endp = memchr(bulb_label, 0, LGTD_LIFX_LABEL_SIZE);
++    int bulb_label_len = endp ? endp - bulb_label : LGTD_LIFX_LABEL_SIZE;
++    int label_len = strlen(label);
++    // clipping the label at 32 chars seems like the desired default behavior:
++    return !memcmp(bulb_label, label, LGTD_MIN(bulb_label_len, label_len));
++}
++
+ void
+ lgtd_lifx_bulb_set_light_state(struct lgtd_lifx_bulb *bulb,
+                                const struct lgtd_lifx_light_state *state,
+diff --git a/lifx/bulb.h b/lifx/bulb.h
+--- a/lifx/bulb.h
++++ b/lifx/bulb.h
+@@ -119,6 +119,9 @@
+ struct lgtd_lifx_bulb *lgtd_lifx_bulb_open(struct lgtd_lifx_gateway *, const uint8_t *);
+ void lgtd_lifx_bulb_close(struct lgtd_lifx_bulb *);
+ 
++bool lgtd_lifx_bulb_has_label(const struct lgtd_lifx_bulb *,
++                              const char *);
++
+ void lgtd_lifx_bulb_set_light_state(struct lgtd_lifx_bulb *,
+                                     const struct lgtd_lifx_light_state *,
+                                     lgtd_time_mono_t);
+diff --git a/tests/core/router/test_router_send_to_label.c b/tests/core/router/test_router_send_to_label.c
+--- a/tests/core/router/test_router_send_to_label.c
++++ b/tests/core/router/test_router_send_to_label.c
+@@ -14,9 +14,11 @@
+     struct lgtd_lifx_bulb *bulb_1 = lgtd_tests_insert_mock_bulb(gw_1, 1);
+     struct lgtd_lifx_gateway *gw_2 = lgtd_tests_insert_mock_gateway(2);
+     struct lgtd_lifx_bulb *bulb_2 = lgtd_tests_insert_mock_bulb(gw_2, 2);
++    struct lgtd_lifx_bulb *bulb_3 = lgtd_tests_insert_mock_bulb(gw_2, 3);
+ 
+     const char *label = "feed";
+     strcpy(bulb_1->state.label, label);
++    strcpy(bulb_3->state.label, label);
+     strcpy(bulb_2->state.label, "trololo");
+ 
+     struct lgtd_lifx_packet_power_state payload = {
 diff --git a/tests/core/router/test_router_targets_to_devices.c b/tests/core/router/test_router_targets_to_devices.c
 --- a/tests/core/router/test_router_targets_to_devices.c
 +++ b/tests/core/router/test_router_targets_to_devices.c
