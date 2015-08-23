@@ -1,5 +1,9 @@
 # HG changeset patch
 # Parent  13b24c5af219c96e98584529bf917d7cef143ab2
+Correctly convert LIFX addresses to ASCII
+
+Rename the conversion function to something more explicit and make it
+re-entrant so you can print more than one address per printf call...
 
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h

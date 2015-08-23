@@ -1,8 +1,8 @@
 # HG changeset patch
-# Parent  f2f2853633d97350ae110af1464739d0238d5530
+# Parent  c6a99cf30f8e3fcbc29067463b06d8b2b4ea97f2
 Ignore SIGPIPE
 
-It would be sad to die on this one, because a client decided to leave at
+It would be sad to die on this one because a client decided to leave at
 the wrong moment.
 
 diff --git a/core/lightsd.c b/core/lightsd.c

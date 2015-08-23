@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c370e07108dde8c8497f963f2a5c6d0f276f9dbe
+# Parent  7ba29801abfbef0d915a9e22eb9b5dca931a02e3
 Add the set_label command
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
@@ -151,7 +151,7 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
  Available methods
  -----------------
  
-@@ -66,14 +70,22 @@
+@@ -83,14 +87,22 @@
  
  .. function:: get_light_state(target)
  

@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  81c70d56434dba896d023f0f182d81de64b00a4e
+# Parent  7aaac1367125b1c2e5467dc949eea88e8164387a
 Bump the device timeout to 2.5x device force refresh
 
 This will let us do more retries before we drop devices.

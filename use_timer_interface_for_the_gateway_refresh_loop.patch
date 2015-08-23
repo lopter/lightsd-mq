@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  b3b32b1d984b304cb8da0fe6b984068a5c01c327
+# Parent  558b65cfbfb0aaf6ed65d5abbfd060d456f84db8
 Speed-up bulbs discovery
 
 By querying a gateway's bulbs as soon as it's discovered.

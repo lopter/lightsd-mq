@@ -1,6 +1,6 @@
 # HG changeset patch
-# Parent  91a1889c4959a3359361159b8ab5dc97f29336c0
-Do not stop at the first match when targeting to a label
+# Parent  f0fbe12d52770de54bbd6279519462e0e43cf5d7
+Do not stop at the first match when targeting a label
 
 People should use tags, but that seems like the correct behavior to
 have.
@@ -45,3 +45,27 @@ diff --git a/core/router.c b/core/router.c
          }
      }
  
+diff --git a/tests/core/router/test_router_targets_to_devices.c b/tests/core/router/test_router_targets_to_devices.c
+--- a/tests/core/router/test_router_targets_to_devices.c
++++ b/tests/core/router/test_router_targets_to_devices.c
+@@ -169,5 +169,20 @@
+         lgtd_errx(1, "expected 4 device but got %d", count);
+     }
+ 
++    // targeting a label shouldn't break at the first match:
++    struct lgtd_lifx_bulb *bulb_3_gw_2 = lgtd_tests_insert_mock_bulb(gw_2, 7);
++    strcpy(bulb_3_gw_2->state.label, "desk");
++    targets = lgtd_tests_build_target_list("desk", NULL);
++    devices = lgtd_router_targets_to_devices(targets);
++    if ((count = count_device(devices, bulb_1_gw_2)) != 1) {
++        lgtd_errx(1, "bulb bulb_1_gw_2 found %d times, expected 1", count);
++    }
++    if ((count = count_device(devices, bulb_3_gw_2)) != 1) {
++        lgtd_errx(1, "bulb bulb_3_gw_2 found %d times, expected 1", count);
++    }
++    if ((count = len(devices)) != 2) {
++        lgtd_errx(1, "expected 2 device but got %d", count);
++    }
++
+     return 0;
+ }

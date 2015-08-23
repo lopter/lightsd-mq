@@ -1,5 +1,10 @@
 # HG changeset patch
-# Parent  7e84e52589db3b0f651cc28ba2021d7034b9c13d
+# Parent  ad04f1a18f508f585ffd59826ceaae9445cfbc69
+Expose the bulb address, model and firmware version in get_light_state
+
+The bulb's gateway is also exposed.
+
+Even more will be returned if you run lightsd with -v debug.
 
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c

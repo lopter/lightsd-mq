@@ -1,6 +1,8 @@
 # HG changeset patch
-# Parent  2ae11e7bd9c743fdded7c92649789475c6462922
+# Parent  758ed6ce112a02ab9af61eef14af36cfe4f60f3e
 Add an interface to start and stop standalone timers
+
+And rename lifx/timer to lifx/watchdog.
 
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
