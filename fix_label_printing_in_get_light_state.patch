@@ -1,8 +1,8 @@
 # HG changeset patch
-# Parent  1337d53e1622ec04035bd250b1fc26ed225dae9b
+# Parent  5b9778260f5a7afd6a0ade31dca302f18049a1d3
 Properly handle 32 chars long LIFX labels in get_light_state
 
-Not be nul terminated.
+They aren't nul terminated.
 
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c

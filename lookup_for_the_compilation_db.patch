@@ -1,10 +1,10 @@
 # HG changeset patch
-# Parent  1a54138f66e0f8cd4e94d215d7321a95269267e1
+# Parent  1bfdc4d5fe09ecefaf19ae5d2b31ab91d4d3d5a5
 Feed the clang compilation database to YouCompleteMe
 
-Works with my setup and it should also work if you build directory is at
-the root of the repo. It's still doesn't cover headers but that's a nice
-improvement.
+Works with my setup and it should also work if your build directory is
+at the root of the repo. It's still doesn't cover headers but that's a
+nice improvement.
 
 diff --git a/.ycm_extra_conf.py b/.ycm_extra_conf.py
 --- a/.ycm_extra_conf.py
