@@ -1,4 +1,2 @@
-fix_jsonrpc_consume_object_or_array.patch
-stop_lifx_watchdog_at_cleanup.patch
 add_jsonrpc_batch_support.patch
 add_ipv4_to_ieee8023mac.patch #+future #+linux
