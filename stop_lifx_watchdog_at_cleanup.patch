@@ -1,0 +1,17 @@
+# HG changeset patch
+# Parent  104312f0ba7736bc36eff09056f2f8507d7de9d6
+Stop the LIFX watchdog at cleanup
+
+Looks like this got lost during the rename.
+
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -63,6 +63,7 @@
+ void
+ lgtd_cleanup(void)
+ {
++    lgtd_lifx_watchdog_close();
+     lgtd_listen_close_all();
+     lgtd_command_pipe_close_all();
+     lgtd_client_close_all();
