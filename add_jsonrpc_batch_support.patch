@@ -1,11 +1,66 @@
 # HG changeset patch
-# Parent  5c6c3677898a3c97a4e19630e2acfe1fb1ef14d6
+# Parent  2ae975b26d16104b7fd10a3bd49d4095ddc80a29
 Add support for JSON-RPC batch requests/responses
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
-@@ -1062,8 +1062,10 @@
+@@ -163,6 +163,13 @@
+ }
+ 
+ static bool
++lgtd_jsonrpc_type_object(const jsmntok_t *t, const char *json)
++{
++    (void)json;
++    return t->type == JSMN_OBJECT;
++}
++
++static bool
+ lgtd_jsonrpc_type_object_or_array(const jsmntok_t *t, const char *json)
+ {
+     (void)json;
+@@ -327,9 +334,9 @@
+     }
+ 
+     for (int ti = 1; ti < ntokens;) {
+-        // make sure it's a key:
++        // make sure it's a key, otherwise we reached the end of the object:
+         if (tokens[ti].type != JSMN_STRING) {
+-            return false;
++            break;
+         }
+ 
+         int si = 0;
+@@ -578,7 +585,7 @@
+         )
+     };
+ 
+-    return lgtd_jsonrpc_extract_values_from_schema_and_dict(
++    bool ok = lgtd_jsonrpc_extract_values_from_schema_and_dict(
+         request,
+         request_schema,
+         LGTD_ARRAY_SIZE(request_schema),
+@@ -586,6 +593,19 @@
+         ntokens,
+         json
+     );
++    if (!ok) {
++        return false;
++    }
++
++    request->request_ntokens = 1 + 2 + 2; // dict itself + jsonrpc + method
++    if (request->params) {
++        request->request_ntokens += 1 + request->params_ntokens;
++    }
++    if (request->id) {
++        request->request_ntokens += 2;
++    }
++
++    return true;
+ }
+ 
+ static bool
+@@ -1055,8 +1075,10 @@
      );
  }
  
@@ -18,7 +73,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  {
      static const struct lgtd_jsonrpc_method methods[] = {
          LGTD_JSONRPC_METHOD(
-@@ -1105,18 +1107,10 @@
+@@ -1098,18 +1120,10 @@
          )
      };
  
@@ -38,7 +93,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      );
      client->current_request = &request;
      if (!ok) {
-@@ -1157,3 +1151,47 @@
+@@ -1150,3 +1164,47 @@
  error:
      client->current_request = NULL;
  }
@@ -89,7 +144,15 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/jsonrpc.h b/core/jsonrpc.h
 --- a/core/jsonrpc.h
 +++ b/core/jsonrpc.h
-@@ -45,7 +45,7 @@
+@@ -26,6 +26,7 @@
+     const jsmntok_t *params;
+     int             params_ntokens;
+     const jsmntok_t *id;
++    int             request_ntokens;
+ };
+ 
+ struct lgtd_jsonrpc_node {
+@@ -45,7 +46,7 @@
      *(const jsmntok_t **)(&((char *)(object))[value_offset]);
  
  #define LGTD_JSONRPC_SET_NTOKENS(object, ntokens_offset, ntokens) do {  \
