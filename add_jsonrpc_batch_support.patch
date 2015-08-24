@@ -1,0 +1,285 @@
+# HG changeset patch
+# Parent  4c5daf8eb9bd1df58f742f2d1dcc16836a787f6b
+Add support for JSON-RPC batch requests/responses
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -1062,8 +1062,10 @@
+     );
+ }
+ 
+-void
+-lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, int parsed)
++static void
++lgtd_jsonrpc_dispatch_one(struct lgtd_client *client,
++                          const jsmntok_t *tokens,
++                          int ntokens)
+ {
+     static const struct lgtd_jsonrpc_method methods[] = {
+         LGTD_JSONRPC_METHOD(
+@@ -1105,18 +1107,10 @@
+         )
+     };
+ 
+-    assert(client);
+-    assert(parsed >= 0);
+-
+-    // TODO: batch requests
+-
+     struct lgtd_jsonrpc_request request;
+     memset(&request, 0, sizeof(request));
+     bool ok = lgtd_jsonrpc_check_and_extract_request(
+-        &request,
+-        client->jsmn_tokens,
+-        parsed,
+-        client->json
++        &request, tokens, ntokens, client->json
+     );
+     client->current_request = &request;
+     if (!ok) {
+@@ -1157,3 +1151,43 @@
+ error:
+     client->current_request = NULL;
+ }
++
++void
++lgtd_jsonrpc_dispatch_request(struct lgtd_client *client, int parsed)
++{
++    assert(client);
++    assert(parsed >= 0);
++
++    if (!parsed || !client->jsmn_tokens[0].size) {
++        lgtd_jsonrpc_send_error(
++            client, LGTD_JSONRPC_INVALID_REQUEST, "Invalid request"
++        );
++        return;
++    }
++
++    if (!lgtd_jsonrpc_type_array(client->jsmn_tokens, client->json)) {
++        lgtd_jsonrpc_dispatch_one(client, client->jsmn_tokens, parsed);
++        return;
++    }
++
++    bool comma = false;
++    for (int ti = 1; ti < parsed;) {
++        const jsmntok_t *tok = &client->jsmn_tokens[ti];
++
++        lgtd_client_write_string(client, comma ? "," : "[");
++        comma = true;
++
++        if (lgtd_jsonrpc_type_object(tok, client->json)) {
++            lgtd_jsonrpc_dispatch_one(client, tok, parsed - ti);
++            ti = lgtd_jsonrpc_consume_object_or_array(
++                client->jsmn_tokens, ti, parsed, client->json
++            );
++        } else {
++            lgtd_jsonrpc_send_error(
++                client, LGTD_JSONRPC_INVALID_REQUEST, "Invalid request"
++            );
++            ti += tok[ti].size + 1;
++        }
++    }
++    lgtd_client_write_string(client, "]");
++}
+diff --git a/core/jsonrpc.h b/core/jsonrpc.h
+--- a/core/jsonrpc.h
++++ b/core/jsonrpc.h
+@@ -45,7 +45,7 @@
+     *(const jsmntok_t **)(&((char *)(object))[value_offset]);
+ 
+ #define LGTD_JSONRPC_SET_NTOKENS(object, ntokens_offset, ntokens) do {  \
+-    *(int *)(&(((char *)(object))[ntokens_offset])) = (ntokens);          \
++    *(int *)(&(((char *)(object))[ntokens_offset])) = (ntokens);        \
+ } while (0)
+ 
+ #define LGTD_JSONRPC_NODE(key_, value_offset_, ntokens_offset_, fn_type_cmp, optional_)   { \
+diff --git a/examples/lightsc.py b/examples/lightsc.py
+--- a/examples/lightsc.py
++++ b/examples/lightsc.py
+@@ -1,5 +1,6 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ 
++import contextlib
+ import json
+ import socket
+ import sys
+@@ -9,6 +10,16 @@
+ from IPython.terminal.embed import InteractiveShellEmbed
+ 
+ 
++def _jsonrpc_call(socket, payload):
++    socket.send(json.dumps(payload).encode("utf-8"))
++    response = socket.recv(8192).decode("utf-8")
++    try:
++        response = json.loads(response)
++    except ValueError:
++        print("received invalid json: {}".format(response))
++    return response
++
++
+ def jsonrpc_call(socket, method, params):
+     payload = {
+         "method": method,
+@@ -16,14 +27,26 @@
+         "jsonrpc": "2.0",
+         "id": str(uuid.uuid4()),
+     }
+-    socket.send(json.dumps(payload).encode("utf-8"))
+-    response = socket.recv(8192).decode("utf-8")
+-    try:
+-        response = json.loads(response)
+-    except ValueError:
+-        print("received invalid json: {}".format(response))
+-        return None
+-    return response
++    _jsonrpc_call(s, payload)
++
++
++@contextlib.contextmanager
++def jsonrpc_batch_call(socket):
++
++    class BatchRequest:
++        @staticmethod
++        def add_call(method, params):
++            payload.append({
++                "method": method,
++                "params": params,
++                "jsonrpc": "2.0",
++                "id": str(uuid.uuid4()),
++            })
++
++    payload = []
++    ctx = BatchRequest()
++    yield ctx
++    ctx.reponse = _jsonrpc_call(socket, payload)
+ 
+ 
+ def set_light_from_hsbk(socket, target, h, s, b, k, t):
+diff --git a/examples/lightsc2.py b/examples/lightsc2.py
+new file mode 100644
+--- /dev/null
++++ b/examples/lightsc2.py
+@@ -0,0 +1,121 @@
++#!/usr/bin/env python3
++
++import contextlib
++import json
++import socket
++import sys
++import time
++import uuid
++
++from IPython.terminal.embed import InteractiveShellEmbed
++
++class LightsClient:
++
++    def __init__(self, host, port):
++        self._socket = socket.create_connection((host, port))
++
++    def _jsonrpc_call(self, method, params):
++        if self._pipeline:
++            pass
++
++    def set_light_from_hsbk(self, target, h, s, b, k, t):
++        return jsonrpc_call(self, "set_light_from_hsbk", [
++            target, h, s, b, k, t
++        ])
++
++
++    def set_waveform(self, target, waveform,
++                     h, s, b, k,
++                     period, cycles, skew_ratio, transient):
++        return jsonrpc_call(self, "set_waveform", [
++            target, waveform, h, s, b, k, period, cycles, skew_ratio, transient
++        ])
++
++
++    def saw(self, target, h, s, b, k, period, cycles, transient=True):
++        return set_waveform(
++            self, target, "SAW", h, s, b, k,
++            cycles=cycles,
++            period=period,
++            skew_ratio=0.5,
++            transient=transient
++        )
++
++
++    def sine(self, target, h, s, b, k, period, cycles, peak=0.5, transient=True):
++        return set_waveform(
++            self, target, "SINE", h, s, b, k,
++            cycles=cycles,
++            period=period,
++            skew_ratio=peak,
++            transient=transient
++        )
++
++
++    def half_sine(self, target, h, s, b, k, period, cycles, transient=True):
++        return set_waveform(
++            self, target, "HALF_SINE", h, s, b, k,
++            cycles=cycles,
++            period=period,
++            skew_ratio=0.5,
++            transient=transient
++        )
++
++
++    def triangle(self, target, h, s, b, k,
++                 period, cycles, peak=0.5, transient=True):
++        return set_waveform(
++            self, target, "TRIANGLE", h, s, b, k,
++            cycles=cycles,
++            period=period,
++            skew_ratio=peak,
++            transient=transient
++        )
++
++
++    def square(self, target, h, s, b, k, period, cycles,
++               duty_cycle=0.5, transient=True):
++        return set_waveform(
++            self, target, "SQUARE", h, s, b, k,
++            cycles=cycles,
++            period=period,
++            skew_ratio=duty_cycle,
++            transient=transient
++        )
++
++
++    def power_on(self, target):
++        return jsonrpc_call(self, "power_on", {"target": target})
++
++
++    def power_off(self, target):
++        return jsonrpc_call(self, "power_off", {"target": target})
++
++
++    def power_toggle(self, target):
++        return jsonrpc_call(self, "power_toggle", {"target": target})
++
++
++    def get_light_state(self, target):
++        return jsonrpc_call(self, "get_light_state", [target])
++
++
++    def tag(self, target, tag):
++        return jsonrpc_call(self, "tag", [target, tag])
++
++
++    def untag(self, target, tag):
++        return jsonrpc_call(self, "untag", [target, tag])
++
++
++    def set_label(self, target, label):
++        return jsonrpc_call(self, "set_label", [target, label])
++
++
++    def adjust_brightness(self, target, adjustment):
++        bulbs = get_light_state(self, target)["result"]
++        for bulb in bulbs:
++            h, s, b, k = bulb["hsbk"]
++            b += adjustment
++            b = max(min(b, 1.0), 0.0)
++            set_light_from_hsbk(self, bulb["label"], h, s, b, k, 500)

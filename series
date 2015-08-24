@@ -1,15 +1,3 @@
-fix_addrtoa_mess.patch
-make_device_timeout_2_5x_force_refresh.patch
-ignore_sigpipe.patch
-add_start_stop_timer.patch
-use_timer_interface_for_the_gateway_refresh_loop.patch
-expose_a_bunch_of_metadata_in_get_light_state.patch
-add_all_waveform_types_in_lightsc_py.patch
-rename_pulse_to_square_and_document_skew_ratio.patch
-lookup_for_the_compilation_db.patch
-add_set_bulb_label.patch
-fix_label_printing_in_get_light_state.patch
-router_label_no_break.patch
-add_missing_tagging_tests.patch
-log_something_before_daemon.patch
+fix_jsonrpc_consume_object_or_array.patch
+add_jsonrpc_batch_support.patch
 add_ipv4_to_ieee8023mac.patch #+future #+linux

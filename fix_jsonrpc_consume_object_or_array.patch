@@ -1,0 +1,50 @@
+# HG changeset patch
+# Parent  fb54b333744954208741b14c89100f273e1b63db
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -163,6 +163,13 @@
+ }
+ 
+ static bool
++lgtd_jsonrpc_type_object(const jsmntok_t *t, const char *json)
++{
++    (void)json;
++    return t->type == JSMN_OBJECT;
++}
++
++static bool
+ lgtd_jsonrpc_type_object_or_array(const jsmntok_t *t, const char *json)
+ {
+     (void)json;
+@@ -295,19 +302,20 @@
+                                      int parsed,
+                                      const char *json)
+ {
+-    assert(tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY);
++    assert(lgtd_jsonrpc_type_object_or_array(&tokens[ti], json));
+     assert(ti < parsed);
+ 
+-    int objsize = tokens[ti].size;
+-    if (tokens[ti++].type == JSMN_OBJECT) {
+-        ti++; // move to the value
+-    }
++    const jsmntok_t *parent_token = &tokens[ti];
++    int objsize = tokens[ti++].size;
+     while (objsize-- && ti < parsed) {
+-        if (tokens[ti].type == JSMN_OBJECT || tokens[ti].type == JSMN_ARRAY) {
++        if (lgtd_jsonrpc_type_object(parent_token, json)) {
++            ti++; // move to the value
++        }
++        if (lgtd_jsonrpc_type_object_or_array(&tokens[ti], json)) {
+             ti = lgtd_jsonrpc_consume_object_or_array(tokens, ti, parsed, json);
+-       } else {
+-            ti += tokens[ti].size + 1; // move to the next value
+-       }
++        } else {
++            ti++;
++        }
+     }
+ 
+     return ti;
