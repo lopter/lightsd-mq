@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  758ed6ce112a02ab9af61eef14af36cfe4f60f3e
+# Parent  c1ff9bbf4bbafdf0758a840bc4961240707120e8
 Add an interface to start and stop standalone timers
 
 And rename lifx/timer to lifx/watchdog.
@@ -1266,7 +1266,7 @@ diff --git a/tests/core/timer/test_timer_start_activate_now.c b/tests/core/timer
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/timer/test_timer_start_activate_now.c
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,145 @@
 +#include <string.h>
 +
 +#include "core/timer.c"
@@ -1351,8 +1351,15 @@ new file mode 100644
 +        errx(1, "got ev %p (expected %p)", ev, MOCK_EVENT_NEW_EVENT_PTR);
 +    }
 +
++    if (!timeout) {
++        errx(1, "a timeout should have been passed in");
++    }
++    // so i don't know wth clang and mac os x are doing but memcmp
++    // gets whacked in -O2 and returns a difference when there isn't,
++    // so we have to do it the painful way:
 +    struct timeval expected_tv = LGTD_MSECS_TO_TIMEVAL(5);
-+    if (!timeout || memcmp(timeout, &expected_tv, sizeof(*timeout))) {
++    if (timeout->tv_sec != expected_tv.tv_sec
++        || timeout->tv_usec != expected_tv.tv_usec) {
 +        errx(1, "got invalid timeout");
 +    }
 +
@@ -1409,7 +1416,7 @@ diff --git a/tests/core/timer/test_timer_start_persistent.c b/tests/core/timer/t
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/timer/test_timer_start_persistent.c
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,129 @@
 +#include <string.h>
 +
 +#include "core/timer.c"
@@ -1481,8 +1488,15 @@ new file mode 100644
 +        errx(1, "got ev %p (expected %p)", ev, MOCK_EVENT_NEW_EVENT_PTR);
 +    }
 +
++    if (!timeout) {
++        errx(1, "a timeout should have been passed in");
++    }
++    // so i don't know wth clang and mac os x are doing but memcmp
++    // gets whacked in -O2 and returns a difference when there isn't,
++    // so we have to do it the painful way:
 +    struct timeval expected_tv = LGTD_MSECS_TO_TIMEVAL(5);
-+    if (!timeout || memcmp(timeout, &expected_tv, sizeof(*timeout))) {
++    if (timeout->tv_sec != expected_tv.tv_sec
++        || timeout->tv_usec != expected_tv.tv_usec) {
 +        errx(1, "got invalid timeout");
 +    }
 +
