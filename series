@@ -1,2 +1,4 @@
 add_jsonrpc_batch_support.patch
+rewrite_lightsc_py.patch
+fixup_jsonrpc.patch
 add_ipv4_to_ieee8023mac.patch #+future #+linux
