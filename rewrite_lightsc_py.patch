@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  432127ef2e258d3f1a17913c3abd3251670f8aff
+# Parent  271492249dfa27acf5432934e224b3796c61675d
 Rewrite lightsc.py to be simpler to use, more re-usable & BSD licensed
 
 And to make things clear: unless clearly indicated like here; everything
@@ -254,7 +254,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -        skew_ratio=peak,
 -        transient=transient
 -    )
-+        embed(header=banner + "\n>>> r\n")
++        embed(header=banner + "\n>>> r")
 +        return
 +    except ImportError:
 +        pass
