@@ -1,0 +1,101 @@
+# HG changeset patch
+# Parent  6f662ca53478b96cad8ff7512976a0765803e499
+Add support for the ambient light sensor
+
+As well as a bunch of LIFX packet types definitions.
+
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -313,6 +313,17 @@
+             .decode = lgtd_lifx_wire_null_packet_encoder_decoder,
+             .handle = HANDLER(lgtd_lifx_gateway_handle_bulb_label)
+         },
++        {
++            REQUEST_ONLY,
++            NO_PAYLOAD,
++            .name = "GET_AMBIENT_LIGHT",
++            .type = LGTD_LIFX_GET_AMBIENT_LIGHT
++        },
++        {
++            RESPONSE_ONLY,
++            .name = "STATE_AMBIENT_LIGHT",
++            .type = LGTD_LIFX_STATE_AMBIENT_LIGHT
++        },
+         // Unimplemented but "known" packets
+         {
+             UNIMPLEMENTED,
+@@ -423,6 +434,16 @@
+             UNIMPLEMENTED,
+             .name = "ACCESS_POINT",
+             .type = LGTD_LIFX_ACCESS_POINT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_DIMMER_VOLTAGE",
++            .type = LGTD_LIFX_GET_DIMMER_VOLTAGE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_DIMMER_VOLTAGE",
++            .type = LGTD_LIFX_STATE_DIMMER_VOLTAGE
+         }
+     };
+ 
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -116,6 +116,8 @@
+ enum { LGTD_LIFX_MAX_PACKET_SIZE = 4096 };
+ 
+ enum lgtd_lifx_packet_type {
++    // Device
++    LGTD_LIFX_SET_SITE = 0x01,
+     LGTD_LIFX_GET_PAN_GATEWAY = 0x02,
+     LGTD_LIFX_PAN_GATEWAY = 0x03,
+     LGTD_LIFX_GET_TIME = 0x04,
+@@ -155,18 +157,32 @@
+     LGTD_LIFX_ACK = 0x2d,
+     LGTD_LIFX_ECHO_REQUEST = 0x3a,
+     LGTD_LIFX_ECHO_RESPONSE = 0x3b,
++    // Light
+     LGTD_LIFX_GET_LIGHT_STATE = 0x65,
+     LGTD_LIFX_SET_LIGHT_COLOR = 0x66,
+     LGTD_LIFX_SET_WAVEFORM = 0x67,
+     LGTD_LIFX_SET_DIM_ABSOLUTE = 0x68,
+     LGTD_LIFX_SET_DIM_RELATIVE = 0x69,
+     LGTD_LIFX_LIGHT_STATUS = 0x6b,
++    // Wan
++    LGTD_LIFX_CONNECT_PLAIN = 0xc9,
++    LGTD_LIFX_CONNECT_KEY = 0xca,
++    LGTD_LIFX_STATE_CONNECT = 0xcb,
++    LGTD_LIFX_SUB = 0xcc,
++    LGTD_LIFX_UNSUB = 0xcd,
++    LGTD_LIFX_STATE_SUB = 0xcd,
++    // Wifi
+     LGTD_LIFX_GET_WIFI_STATE = 0x12d,
+     LGTD_LIFX_SET_WIFI_STATE = 0x12e,
+     LGTD_LIFX_WIFI_STATE = 0x12f,
+     LGTD_LIFX_GET_ACCESS_POINTS = 0x130,
+     LGTD_LIFX_SET_ACCESS_POINTS = 0x131,
+     LGTD_LIFX_ACCESS_POINT = 0x132,
++    // Sensor
++    LGTD_LIFX_GET_AMBIENT_LIGHT = 0x191,
++    LGTD_LIFX_STATE_AMBIENT_LIGHT = 0x192,
++    LGTD_LIFX_GET_DIMMER_VOLTAGE = 0x193,
++    LGTD_LIFX_STATE_DIMMER_VOLTAGE = 0x194
+ };
+ 
+ enum { LGTD_LIFX_LABEL_SIZE = 32 };
+@@ -278,6 +294,11 @@
+     uint64le_t  uptime;
+     uint64le_t  downtime;
+ };
++
++struct lgtd_lifx_packet_ambient_light {
++    floatle_t lux;
++};
++
+ #pragma pack(pop)
+ 
+ enum { LGTD_LIFX_VENDOR_ID = 1 };

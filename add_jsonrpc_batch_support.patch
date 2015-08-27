@@ -201,6 +201,672 @@ diff --git a/core/jsonrpc.h b/core/jsonrpc.h
  } while (0)
  
  #define LGTD_JSONRPC_NODE(key_, value_offset_, ntokens_offset_, fn_type_cmp, optional_)   { \
+diff --git a/tests/core/jsonrpc/test_jsonrpc_batch.c b/tests/core/jsonrpc/test_jsonrpc_batch.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_batch.c
+@@ -0,0 +1,94 @@
++#include "jsonrpc.c"
++
++#include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_GET_LIGHT_STATE
++#define MOCKED_LGTD_PROTO_POWER_ON
++#include "mock_proto.h"
++#include "test_jsonrpc_utils.h"
++
++static int power_on_call_count = 0;
++
++void
++lgtd_proto_power_on(struct lgtd_client *client,
++                    const struct lgtd_proto_target_list *targets)
++{
++    if (!client) {
++        errx(1, "missing client!");
++    }
++
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (power_on_call_count++) {
++        errx(1, "proto_power_on should have been called once");
++    }
++}
++
++static int get_light_state_call_count = 0;
++
++void
++lgtd_proto_get_light_state(struct lgtd_client *client,
++                           const struct lgtd_proto_target_list *targets)
++{
++    if (!client) {
++        errx(1, "missing client!");
++    }
++
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (get_light_state_call_count++) {
++        errx(1, "proto_power_on should have been called once");
++    }
++}
++
++int
++main(void)
++{
++    const char json[] = ("["
++        "{"
++            "\"method\": \"power_on\","
++            "\"id\": \"004daf12-0561-4fbc-bfdb-bfe69cfbf4b5\","
++            "\"params\": [\"*\"],"
++            "\"jsonrpc\": \"2.0\""
++        "},"
++        "{"
++            "\"method\": \"get_light_state\","
++            "\"id\": \"1f7a32c8-6741-4ee7-bec1-8431c7d514dc\","
++            "\"params\": [\"*\"],"
++            "\"jsonrpc\": \"2.0\""
++        "}"
++    "]");
++    struct lgtd_client client = { .json = json };
++    int parsed = parse_json(
++        client.jsmn_tokens,
++        LGTD_ARRAY_SIZE(client.jsmn_tokens),
++        json,
++        sizeof(json)
++    );
++
++    lgtd_jsonrpc_dispatch_request(&client, parsed);
++
++    if (!power_on_call_count) {
++        errx(1, "power_on was never called");
++    }
++
++    if (!get_light_state_call_count) {
++        errx(1, "get_light_state was never called");
++    }
++
++    const char expected[] = "[,]";  // we mocked the functions
++    if (strcmp(expected, client_write_buf)) {
++        errx(1, "got client buf %s (expected %s)", client_write_buf, expected);
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_batch_one_invalid_request.c b/tests/core/jsonrpc/test_jsonrpc_batch_one_invalid_request.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_batch_one_invalid_request.c
+@@ -0,0 +1,73 @@
++#include "jsonrpc.c"
++
++#include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_POWER_ON
++#include "mock_proto.h"
++#include "test_jsonrpc_utils.h"
++
++static int power_on_call_count = 0;
++
++void
++lgtd_proto_power_on(struct lgtd_client *client,
++                    const struct lgtd_proto_target_list *targets)
++{
++    if (!client) {
++        errx(1, "missing client!");
++    }
++
++    if (strcmp(SLIST_FIRST(targets)->target, "*")) {
++        errx(
++            1, "Invalid target [%s] (expected=[*])",
++            SLIST_FIRST(targets)->target
++        );
++    }
++
++    if (power_on_call_count++) {
++        errx(1, "proto_power_on should have been called once");
++    }
++}
++
++int
++main(void)
++{
++    const char json[] = ("["
++        "{"
++            "\"method\": \"power_on\","
++            "\"id\": \"004daf12-0561-4fbc-bfdb-bfe69cfbf4b5\","
++            "\"params\": [\"*\"],"
++            "\"jsonrpc\": \"2.0\""
++        "},"
++        "{"
++            "\"method\": \"la rache\","
++            "\"id\": \"1f7a32c8-6741-4ee7-bec1-8431c7d514dc\","
++            "\"params\": [\"*\"],"
++            "\"jsonrpc\": \"2.0\""
++        "}"
++    "]");
++    struct lgtd_client client = { .json = json };
++    int parsed = parse_json(
++        client.jsmn_tokens,
++        LGTD_ARRAY_SIZE(client.jsmn_tokens),
++        json,
++        sizeof(json)
++    );
++
++    lgtd_jsonrpc_dispatch_request(&client, parsed);
++
++    if (!power_on_call_count) {
++        errx(1, "power_on was never called");
++    }
++
++    const char expected[] = ("[,"
++        "{"
++            "\"jsonrpc\": \"2.0\", "
++            "\"id\": \"1f7a32c8-6741-4ee7-bec1-8431c7d514dc\", "
++            "\"error\": {\"code\": -32601, \"message\": \"Method not found\"}"
++        "}"
++    "]");
++    if (strcmp(expected, client_write_buf)) {
++        errx(1, "got client buf %s (expected %s)", client_write_buf, expected);
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
+--- a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
++++ b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ static void
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_POWER_OFF
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_POWER_OFF
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool power_off_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_POWER_OFF
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_POWER_OFF
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool power_off_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_POWER_ON
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_POWER_ON
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool power_on_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_POWER_ON
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_POWER_ON
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool power_on_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_POWER_TOGGLE
++#include "mock_proto.h"
+ 
+-#define MOCKED_LGTD_PROTO_POWER_TOGGLE
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool power_toggle_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_label.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_label.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_label.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_label.c
+@@ -1,9 +1,10 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_SET_LABEL
++#include "mock_proto.h"
+ #include "mock_gateway.h"
+ 
+-#define MOCKED_LGTD_PROTO_SET_LABEL
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool tag_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_SET_LIGHT_FROM_HSBK
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_SET_LIGHT_FROM_HSBK
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool set_light_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_SET_LIGHT_FROM_HSBK
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_SET_LIGHT_FROM_HSBK
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool set_light_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_invalid_params.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_SET_LIGHT_FROM_HSBK
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_SET_LIGHT_FROM_HSBK
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool set_light_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_SET_WAVEFORM
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_SET_WAVEFORM
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool set_waveform_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_waveform_invalid_params.c
+@@ -1,8 +1,9 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_SET_WAVEFORM
++#include "mock_proto.h"
+ 
+-#define LGTD_TESTING_SET_WAVEFORM
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool set_waveform_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag.c
+@@ -1,9 +1,10 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_TAG
++#include "mock_proto.h"
+ #include "mock_gateway.h"
+ 
+-#define MOCKED_LGTD_TAG
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool tag_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_tag_missing_params.c
+@@ -1,9 +1,10 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_TAG
++#include "mock_proto.h"
+ #include "mock_gateway.h"
+ 
+-#define MOCKED_LGTD_TAG
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool tag_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag.c
+@@ -1,9 +1,10 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_UNTAG
++#include "mock_proto.h"
+ #include "mock_gateway.h"
+ 
+-#define MOCKED_LGTD_UNTAG
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool untag_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_untag_invalid_params.c
+@@ -1,9 +1,10 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_UNTAG
++#include "mock_proto.h"
+ #include "mock_gateway.h"
+ 
+-#define MOCKED_LGTD_UNTAG
+ #include "test_jsonrpc_utils.h"
+ 
+ static bool untag_called = false;
+diff --git a/tests/core/jsonrpc/test_jsonrpc_consume_object_or_array.c b/tests/core/jsonrpc/test_jsonrpc_consume_object_or_array.c
+--- a/tests/core/jsonrpc/test_jsonrpc_consume_object_or_array.c
++++ b/tests/core/jsonrpc/test_jsonrpc_consume_object_or_array.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+@@ -12,7 +13,8 @@
+         "{"
+             "\"method\": \"power_on\","
+             "\"id\": \"004daf12-0561-4fbc-bfdb-bfe69cfbf4b5\","
+-            "\"params\": [\"*\"], \"jsonrpc\": \"2.0\""
++            "\"params\": [\"*\"],"
++            "\"jsonrpc\": \"2.0\""
+         "},"
+         "{"
+             "\"method\": \"get_light_state\","
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_no_params.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_notification_no_params.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_array.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_params_obj.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c b/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_request_valid_notification.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c b/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
+@@ -0,0 +1,61 @@
++#include <limits.h>
++
++#include "jsonrpc.c"
++
++#include "mock_client_buf.h"
++#include "mock_proto.h"
++#include "test_jsonrpc_utils.h"
++
++int
++main(void)
++{
++    jsmntok_t tokens[32];
++    memset(tokens, 0, sizeof(tokens));
++    const char json[] = "[[\"*\"],[1,2,3,4]]";
++    int parsed = parse_json(
++        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
++    );
++
++    struct lgtd_jsonrpc_target_args {
++        const jsmntok_t *target;
++        int             target_ntokens;
++        const jsmntok_t *label;
++    } params = { NULL, 0, NULL };
++    static const struct lgtd_jsonrpc_node schema[] = {
++        LGTD_JSONRPC_NODE(
++            "target",
++            offsetof(struct lgtd_jsonrpc_target_args, target),
++            offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
++            lgtd_jsonrpc_type_string_number_or_array,
++            false
++        ),
++        LGTD_JSONRPC_NODE(
++            "label",
++            offsetof(struct lgtd_jsonrpc_target_args, label),
++            -1,
++            // this must dereference json from the what's in the token (see
++            // next comment):
++            lgtd_jsonrpc_type_number,
++            false
++        )
++    };
++
++    // invalidate all the tokens so that the test will crash if we go beyond
++    // the first list:
++    for (int i = 3; i != LGTD_ARRAY_SIZE(tokens); i++) {
++        tokens[i].start = INT_MIN;
++        tokens[i].end = INT_MIN;
++        tokens[i].size = INT_MAX;
++        tokens[i].type = JSMN_PRIMITIVE;
++    }
++
++    bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
++        &params, schema, LGTD_ARRAY_SIZE(schema), &tokens[1], parsed - 1, json
++    );
++
++    if (ok) {
++        errx(1, "the schema shouldn't have been validated");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/jsonrpc/test_jsonrpc_send_error.c b/tests/core/jsonrpc/test_jsonrpc_send_error.c
+--- a/tests/core/jsonrpc/test_jsonrpc_send_error.c
++++ b/tests/core/jsonrpc/test_jsonrpc_send_error.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_send_response.c b/tests/core/jsonrpc/test_jsonrpc_send_response.c
+--- a/tests/core/jsonrpc/test_jsonrpc_send_response.c
++++ b/tests/core/jsonrpc/test_jsonrpc_send_response.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ static void
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ static void
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ static void
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ static void
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer.c b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
+@@ -1,6 +1,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
+diff --git a/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c b/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
+--- a/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
++++ b/tests/core/jsonrpc/test_jsonrpc_uint16_range_to_float_string.c
+@@ -3,6 +3,7 @@
+ #include "jsonrpc.c"
+ 
+ #include "mock_client_buf.h"
++#include "mock_proto.h"
+ #include "test_jsonrpc_utils.h"
+ 
+ int
 diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_jsonrpc_utils.h
 --- a/tests/core/jsonrpc/test_jsonrpc_utils.h
 +++ b/tests/core/jsonrpc/test_jsonrpc_utils.h
@@ -213,3 +879,277 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_utils.h b/tests/core/jsonrpc/test_j
  
  static inline int
  parse_json(jsmntok_t *tokens, size_t capacity, const char *json , size_t len)
+@@ -11,135 +11,3 @@
+     jsmn_init(&ctx);
+     return jsmn_parse(&ctx, json, len, tokens, capacity);
+ }
+-
+-void
+-lgtd_proto_target_list_clear(struct lgtd_proto_target_list *targets)
+-{
+-    (void)targets;
+-}
+-
+-void
+-lgtd_proto_list_tags(struct lgtd_client *client)
+-{
+-    (void)client;
+-}
+-
+-#ifndef LGTD_TESTING_SET_LIGHT_FROM_HSBK
+-void
+-lgtd_proto_set_light_from_hsbk(struct lgtd_client *client,
+-                               const struct lgtd_proto_target_list *targets,
+-                               int hue,
+-                               int saturation,
+-                               int brightness,
+-                               int kelvin,
+-                               int transition_msecs)
+-{
+-    (void)client;
+-    (void)targets;
+-    (void)hue;
+-    (void)saturation;
+-    (void)brightness;
+-    (void)kelvin;
+-    (void)transition_msecs;
+-}
+-#endif
+-
+-#ifndef LGTD_TESTING_POWER_ON
+-void
+-lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
+-{
+-    (void)client;
+-    (void)targets;
+-}
+-#endif
+-
+-#ifndef LGTD_TESTING_POWER_OFF
+-void
+-lgtd_proto_power_off(struct lgtd_client *client,
+-                     const struct lgtd_proto_target_list *targets)
+-{
+-    (void)client;
+-    (void)targets;
+-}
+-#endif
+-
+-#ifndef LGTD_TESTING_SET_WAVEFORM
+-void
+-lgtd_proto_set_waveform(struct lgtd_client *client,
+-                        const struct lgtd_proto_target_list *targets,
+-                        enum lgtd_lifx_waveform_type waveform,
+-                        int hue, int saturation,
+-                        int brightness, int kelvin,
+-                        int period, float cycles,
+-                        int skew_ratio, bool transient)
+-{
+-    (void)client;
+-    (void)targets;
+-    (void)waveform;
+-    (void)hue;
+-    (void)saturation;
+-    (void)brightness;
+-    (void)kelvin;
+-    (void)period;
+-    (void)cycles;
+-    (void)skew_ratio;
+-    (void)transient;
+-}
+-#endif
+-
+-#ifndef MOCKED_LGTD_GET_LIGHT_STATE
+-void
+-lgtd_proto_get_light_state(struct lgtd_client *client,
+-                           const struct lgtd_proto_target_list *targets)
+-{
+-    (void)client;
+-    (void)targets;
+-}
+-#endif
+-
+-#ifndef MOCKED_LGTD_TAG
+-void
+-lgtd_proto_tag(struct lgtd_client *client,
+-               const struct lgtd_proto_target_list *targets,
+-               const char *tag_label)
+-{
+-    (void)client;
+-    (void)targets;
+-    (void)tag_label;
+-}
+-#endif
+-
+-#ifndef MOCKED_LGTD_UNTAG
+-void
+-lgtd_proto_untag(struct lgtd_client *client,
+-                 const struct lgtd_proto_target_list *targets,
+-                 const char *tag_label)
+-{
+-    (void)client;
+-    (void)targets;
+-    (void)tag_label;
+-}
+-#endif
+-
+-#ifndef MOCKED_LGTD_PROTO_POWER_TOGGLE
+-void
+-lgtd_proto_power_toggle(struct lgtd_client *client,
+-                        const struct lgtd_proto_target_list *targets)
+-{
+-    (void)client;
+-    (void)targets;
+-}
+-#endif
+-
+-#ifndef MOCKED_LGTD_PROTO_SET_LABEL
+-void
+-lgtd_proto_set_label(struct lgtd_client *client,
+-                     const struct lgtd_proto_target_list *targets,
+-                     const char *label)
+-{
+-    (void)client;
+-    (void)targets;
+-    (void)label;
+-}
+-#endif
+diff --git a/tests/core/mock_proto.h b/tests/core/mock_proto.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/mock_proto.h
+@@ -0,0 +1,133 @@
++#pragma once
++
++void
++lgtd_proto_target_list_clear(struct lgtd_proto_target_list *targets)
++{
++    (void)targets;
++}
++
++void
++lgtd_proto_list_tags(struct lgtd_client *client)
++{
++    (void)client;
++}
++
++#ifndef MOCKED_LGTD_PROTO_SET_LIGHT_FROM_HSBK
++void
++lgtd_proto_set_light_from_hsbk(struct lgtd_client *client,
++                               const struct lgtd_proto_target_list *targets,
++                               int hue,
++                               int saturation,
++                               int brightness,
++                               int kelvin,
++                               int transition_msecs)
++{
++    (void)client;
++    (void)targets;
++    (void)hue;
++    (void)saturation;
++    (void)brightness;
++    (void)kelvin;
++    (void)transition_msecs;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_POWER_ON
++void
++lgtd_proto_power_on(struct lgtd_client *client,
++                    const struct lgtd_proto_target_list *targets)
++{
++    (void)client;
++    (void)targets;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_POWER_OFF
++void
++lgtd_proto_power_off(struct lgtd_client *client,
++                     const struct lgtd_proto_target_list *targets)
++{
++    (void)client;
++    (void)targets;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_SET_WAVEFORM
++void
++lgtd_proto_set_waveform(struct lgtd_client *client,
++                        const struct lgtd_proto_target_list *targets,
++                        enum lgtd_lifx_waveform_type waveform,
++                        int hue, int saturation,
++                        int brightness, int kelvin,
++                        int period, float cycles,
++                        int skew_ratio, bool transient)
++{
++    (void)client;
++    (void)targets;
++    (void)waveform;
++    (void)hue;
++    (void)saturation;
++    (void)brightness;
++    (void)kelvin;
++    (void)period;
++    (void)cycles;
++    (void)skew_ratio;
++    (void)transient;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_GET_LIGHT_STATE
++void
++lgtd_proto_get_light_state(struct lgtd_client *client,
++                           const struct lgtd_proto_target_list *targets)
++{
++    (void)client;
++    (void)targets;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_TAG
++void
++lgtd_proto_tag(struct lgtd_client *client,
++               const struct lgtd_proto_target_list *targets,
++               const char *tag_label)
++{
++    (void)client;
++    (void)targets;
++    (void)tag_label;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_UNTAG
++void
++lgtd_proto_untag(struct lgtd_client *client,
++                 const struct lgtd_proto_target_list *targets,
++                 const char *tag_label)
++{
++    (void)client;
++    (void)targets;
++    (void)tag_label;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_POWER_TOGGLE
++void
++lgtd_proto_power_toggle(struct lgtd_client *client,
++                        const struct lgtd_proto_target_list *targets)
++{
++    (void)client;
++    (void)targets;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_SET_LABEL
++void
++lgtd_proto_set_label(struct lgtd_client *client,
++                     const struct lgtd_proto_target_list *targets,
++                     const char *label)
++{
++    (void)client;
++    (void)targets;
++    (void)label;
++}
++#endif
