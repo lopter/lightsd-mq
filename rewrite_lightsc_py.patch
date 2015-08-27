@@ -11,7 +11,7 @@ in this repository is GPLv3, except:
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
-@@ -1,154 +1,220 @@
+@@ -1,154 +1,226 @@
 -#!/usr/bin/env python
 +#!/usr/bin/env python3
 +# Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
@@ -47,7 +47,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +import contextlib
  import json
  import socket
--import sys
+ import sys
 -import time
  import uuid
  
@@ -64,19 +64,29 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -    }
 -    socket.send(json.dumps(payload).encode("utf-8"))
 -    response = socket.recv(8192).decode("utf-8")
+-    try:
+-        response = json.loads(response)
+-    except ValueError:
+-        print("received invalid json: {}".format(response))
+-        return None
+-    return response
 +    def __init__(self, host, port):
 +        self.host = host
 +        self.port = port
 +        self._socket = socket.create_connection((host, port))
 +        self._pipeline = []
 +        self._batch = False
-+
+ 
 +    def __enter__(self):
 +        return self
-+
+ 
+-def set_light_from_hsbk(socket, target, h, s, b, k, t):
+-    return jsonrpc_call(socket, "set_light_from_hsbk", [
+-        target, h, s, b, k, t
+-    ])
 +    def __exit__(self, exc_type, exc_value, exc_tb):
 +        self.close()
-+
+ 
 +    @classmethod
 +    def _make_payload(cls, method, params):
 +        return {
@@ -85,7 +95,13 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +            "jsonrpc": "2.0",
 +            "id": str(uuid.uuid4()),
 +        }
-+
+ 
+-def set_waveform(socket, target, waveform,
+-                 h, s, b, k,
+-                 period, cycles, skew_ratio, transient):
+-    return jsonrpc_call(socket, "set_waveform", [
+-        target, waveform, h, s, b, k, period, cycles, skew_ratio, transient
+-    ])
 +    def _execute_payload(self, payload):
 +        self._socket.send(json.dumps(payload).encode("utf-8"))
 +        response = self._socket.recv(8192).decode("utf-8")
@@ -93,9 +109,16 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +            response = json.loads(response)
 +        except Exception:
 +            print("received invalid json: {}".format(response))
-+
+ 
 +        return response
-+
+ 
+-def saw(socket, target, h, s, b, k, period, cycles, transient=True):
+-    return set_waveform(
+-        socket, target, "SAW", h, s, b, k,
+-        cycles=cycles,
+-        period=period,
+-        skew_ratio=0.5,
+-        transient=transient
 +    def _jsonrpc_call(self, method, params):
 +        payload = self._make_payload(method, params)
 +        if self._batch:
@@ -215,49 +238,18 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +    neko = "d073d5018fb6"  # noqa
 +    middle = "d073d502e530"  # noqa
 +
-+    banner = """
-+lightsc is connected to {}:{}, use the variable c to interact with your bulbs:
-+
-+>>> c.get_light_state("*")
-+"""
-+
-     try:
--        response = json.loads(response)
--    except ValueError:
--        print("received invalid json: {}".format(response))
--        return None
--    return response
++    banner = (
++        "Connected to {}:{}, use the variable c to interact with your "
++        "bulbs:\n\n>>> c.get_light_state(\"*\")".format(c.host, c.port)
+     )
+ 
++    try:
 +        from IPython import embed
 +        embed(header=banner)
 +        return
 +    except ImportError:
 +        pass
  
--
--def set_light_from_hsbk(socket, target, h, s, b, k, t):
--    return jsonrpc_call(socket, "set_light_from_hsbk", [
--        target, h, s, b, k, t
--    ])
--
--
--def set_waveform(socket, target, waveform,
--                 h, s, b, k,
--                 period, cycles, skew_ratio, transient):
--    return jsonrpc_call(socket, "set_waveform", [
--        target, waveform, h, s, b, k, period, cycles, skew_ratio, transient
--    ])
--
--
--def saw(socket, target, h, s, b, k, period, cycles, transient=True):
--    return set_waveform(
--        socket, target, "SAW", h, s, b, k,
--        cycles=cycles,
--        period=period,
--        skew_ratio=0.5,
--        transient=transient
--    )
--
--
 -def sine(socket, target, h, s, b, k, period, cycles, peak=0.5, transient=True):
 -    return set_waveform(
 -        socket, target, "SINE", h, s, b, k,
@@ -348,7 +340,17 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -    neko = "d073d5018fb6"
 -    middle = "d073d502e530"
 -    target = "*"
--    try:
++    parser = argparse.ArgumentParser(
++        description="lightsc.py is an interactive lightsd Python client"
++    )
++    parser.add_argument(
++        "host", type=str, help="The hostname or ip where lightsd is running"
++    )
++    parser.add_argument(
++        "port", type=int, help="The port on which lightsd is listening on"
++    )
++    args = parser.parse_args()
+     try:
 -        if len(sys.argv) == 2 and sys.argv[1] == "shell":
 -            ipshell = InteractiveShellEmbed()
 -            ipshell()
@@ -362,16 +364,11 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -        power_off(s, target)
 -    finally:
 -        s.close()
-+    parser = argparse.ArgumentParser(
-+        description="lightsc.py is an interactive lightsd Python client"
-+    )
-+    parser.add_argument(
-+        "-h", "--host", type=str, required=True,
-+        help="The hostname or ip where lightsd is running"
-+    )
-+    parser.add_argument(
-+        "-p", "--port", type=int, required=True,
-+        help="The port on which lightsd is listening on"
-+    )
-+    args = parser.parse_args()
-+    _drop_to_shell(LightsClient(args.host, args.port))
++        _drop_to_shell(LightsClient(args.host, args.port))
++    except socket.error as ex:
++        print(
++            "Couldn't connect to lightsd@{}:{}, is it running? "
++            "({})".format(args.host, args.port, ex.strerror),
++            file=sys.stderr
++        )
++        sys.exit(1)
