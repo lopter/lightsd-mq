@@ -1,8 +1,11 @@
 # HG changeset patch
-# Parent  460894a536a1797814b7d85a6782a8542d161ba7
-Add support for the ambient light sensor
+# Parent  0f6c82d483af8447385661c519c2b0797a44dfdb
+Add support for the ambient light sensor (left unimplemented by LIFX)
 
-As well as a bunch of LIFX packet types definitions.
+If this turns out to be real someday then we can just schedule
+GET_AMBIENT_LIGHT from the gateway refresh loop.
+
+This changeset also adds a bunch of other LIFX packet types definitions.
 
 diff --git a/lifx/bulb.c b/lifx/bulb.c
 --- a/lifx/bulb.c
@@ -38,16 +41,7 @@ diff --git a/lifx/bulb.h b/lifx/bulb.h
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
 +++ b/lifx/gateway.c
-@@ -236,6 +236,8 @@
-     struct lgtd_lifx_packet_tags pkt = { .tags = LGTD_LIFX_ALL_TAGS };
-     lgtd_lifx_gateway_send_to_site_quiet(gw, LGTD_LIFX_GET_TAG_LABELS, &pkt);
- 
-+    lgtd_lifx_gateway_send_to_site_quiet(gw, LGTD_LIFX_GET_AMBIENT_LIGHT, NULL);
-+
-     gw->pending_refresh_req = true;
- }
- 
-@@ -856,7 +858,7 @@
+@@ -856,7 +856,7 @@
      assert(gw && hdr && pkt);
  
      char addr[LGTD_LIFX_ADDR_STRLEN];
@@ -56,7 +50,7 @@ diff --git a/lifx/gateway.c b/lifx/gateway.c
          "BULB_LABEL <-- [%s]:%hu - %s label=%.*s",
          gw->ip_addr, gw->port,
          LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr),
-@@ -867,3 +869,24 @@
+@@ -867,3 +867,24 @@
          gw, hdr->target.device_addr, lgtd_lifx_bulb_set_label, pkt->label
      );
  }
@@ -206,6 +200,48 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  void lgtd_lifx_wire_decode_product_info(struct lgtd_lifx_packet_product_info *);
  void lgtd_lifx_wire_decode_runtime_info(struct lgtd_lifx_packet_runtime_info *);
 +void lgtd_lifx_wire_decode_ambient_light(struct lgtd_lifx_packet_ambient_light *);
+diff --git a/tests/lifx/gateway/test_gateway_handle_ambient_light.c b/tests/lifx/gateway/test_gateway_handle_ambient_light.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/gateway/test_gateway_handle_ambient_light.c
+@@ -0,0 +1,37 @@
++#include <string.h>
++
++#include "gateway.c"
++
++#include "mock_timer.h"
++#include "test_gateway_utils.h"
++#include "tests_utils.h"
++
++int
++main(void)
++{
++    lgtd_lifx_wire_load_packet_info_map();
++
++    struct lgtd_lifx_gateway gw;
++    memset(&gw, 0, sizeof(gw));
++
++    struct lgtd_lifx_bulb *bulb = lgtd_tests_insert_mock_bulb(&gw, 42);
++
++    struct lgtd_lifx_packet_header hdr;
++    memset(&hdr, 0, sizeof(hdr));
++    memcpy(
++        &hdr.target.device_addr, &bulb->addr, sizeof(hdr.target.device_addr)
++    );
++
++    struct lgtd_lifx_packet_ambient_light pkt = { .illuminance = 3.14 };
++
++    lgtd_lifx_gateway_handle_ambient_light(&gw, &hdr, &pkt);
++
++    if (bulb->ambient_light != pkt.illuminance) {
++        errx(
++            1, "bulb->ambient_light = %f (expected %f)",
++            bulb->ambient_light, pkt.illuminance
++        );
++    }
++
++    return 0;
++}
 diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
 --- a/tests/lifx/mock_gateway.h
 +++ b/tests/lifx/mock_gateway.h
