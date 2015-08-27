@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  da8c0d7ea0acb3550b3cce73f5258fd9eef257ed
+# Parent  432127ef2e258d3f1a17913c3abd3251670f8aff
 Rewrite lightsc.py to be simpler to use, more re-usable & BSD licensed
 
 And to make things clear: unless clearly indicated like here; everything
@@ -11,7 +11,7 @@ in this repository is GPLv3, except:
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
-@@ -1,154 +1,226 @@
+@@ -1,154 +1,229 @@
 -#!/usr/bin/env python
 +#!/usr/bin/env python3
 +# Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
@@ -240,15 +240,11 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +
 +    banner = (
 +        "Connected to {}:{}, use the variable c to interact with your "
-+        "bulbs:\n\n>>> c.get_light_state(\"*\")".format(c.host, c.port)
++        "bulbs:\n\n>>> r = c.get_light_state(\"*\")".format(c.host, c.port)
      )
  
 +    try:
 +        from IPython import embed
-+        embed(header=banner)
-+        return
-+    except ImportError:
-+        pass
  
 -def sine(socket, target, h, s, b, k, period, cycles, peak=0.5, transient=True):
 -    return set_waveform(
@@ -258,8 +254,13 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -        skew_ratio=peak,
 -        transient=transient
 -    )
--
--
++        embed(header=banner + "\n>>> r\n")
++        return
++    except ImportError:
++        pass
+ 
++    import code
+ 
 -def half_sine(socket, target, h, s, b, k, period, cycles, transient=True):
 -    return set_waveform(
 -        socket, target, "HALF_SINE", h, s, b, k,
@@ -328,8 +329,8 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -        b = max(min(b, 1.0), 0.0)
 -        set_light_from_hsbk(socket, bulb["label"], h, s, b, k, 500)
 -
-+    import code
-+    code.interact(banner=banner)
++    banner += "\n>>> from pprint import pprint\n>>> pprint(r)\n"
++    code.interact(banner=banner, local=locals())
  
  if __name__ == "__main__":
 -    s = socket.create_connection(("localhost", 1234))
