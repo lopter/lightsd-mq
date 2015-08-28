@@ -11,7 +11,7 @@ in this repository is GPLv3, except:
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
-@@ -1,154 +1,229 @@
+@@ -1,154 +1,230 @@
 -#!/usr/bin/env python
 +#!/usr/bin/env python3
 +# Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
@@ -104,6 +104,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -    ])
 +    def _execute_payload(self, payload):
 +        self._socket.send(json.dumps(payload).encode("utf-8"))
++        # FIXME: proper read loop
 +        response = self._socket.recv(8192).decode("utf-8")
 +        try:
 +            response = json.loads(response)

@@ -2,4 +2,5 @@ add_jsonrpc_batch_support.patch
 rewrite_lightsc_py.patch
 add_batch_support_in_lightsc_sh.patch
 add_ambient_light_sensor_support.patch
+fix_client_read_loop.patch
 add_ipv4_to_ieee8023mac.patch #+future #+linux
