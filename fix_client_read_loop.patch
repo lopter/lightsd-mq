@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  6d4f1494c6d4bcfab5e6cf6c47631e95118d2b22
+# Parent  04fdb5fcf1287a36cf88dd1f0dd121f482806be4
 Make the pipe/socket read loops fully resilient against incomplete json
 
 In other words you can send your request character by character with as
@@ -40,7 +40,7 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
 +++ b/core/client.c
-@@ -70,59 +70,57 @@
+@@ -70,59 +70,55 @@
      struct lgtd_client *client = ctx;
  
      struct evbuffer *input = bufferevent_get_input(bev);
@@ -104,7 +104,6 @@ diff --git a/core/client.c b/core/client.c
 +#pragma GCC diagnostic ignored "-Wswitch"
 +        case 0:
 +#pragma GCC diagnostic pop
-+            lgtd_info("PART/0");
 +            if (evbuffer_get_length(input) > LGTD_CLIENT_MAX_REQUEST_BUF_SIZE) {
 +                lgtd_warnx(
 +                    "dropping client [%s]:%hu: request too big",
@@ -136,12 +135,11 @@ diff --git a/core/client.c b/core/client.c
 -        break;
 -    }
 +        nbytes = evbuffer_get_contiguous_space(input);
-+        lgtd_info("PULLUP, nbytes = %ju", (uintmax_t)nbytes);
 +    } while (nbytes);
  }
  
  static void
-@@ -216,7 +214,6 @@
+@@ -216,7 +212,6 @@
      );
      lgtd_sockaddrtoa(peer_addr, client->ip_addr, sizeof(client->ip_addr));
      client->port = lgtd_sockaddrport(peer_addr);
@@ -149,7 +147,7 @@ diff --git a/core/client.c b/core/client.c
      bufferevent_enable(client->io, EV_READ|EV_WRITE|EV_TIMEOUT);
  
      LIST_INSERT_HEAD(&lgtd_clients, client, link);
-@@ -232,6 +229,4 @@
+@@ -232,6 +227,4 @@
      assert(pipe_client);
  
      memset(pipe_client, 0, sizeof(*pipe_client));
@@ -159,7 +157,15 @@ diff --git a/core/client.c b/core/client.c
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
-@@ -1136,6 +1136,7 @@
+@@ -617,7 +617,6 @@
+     assert(targets);
+     assert(client);
+     assert(target);
+-    assert(target_ntokens >= 1);
+ 
+     if (lgtd_jsonrpc_type_array(target, client->json)) {
+         target_ntokens -= 1;
+@@ -1136,6 +1135,7 @@
      }
  
      assert(request.method);
@@ -194,3 +200,203 @@ diff --git a/core/pipe.c b/core/pipe.c
          }
      }
  
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_invalid.c
+@@ -9,7 +9,7 @@
+ {
+     jsmntok_t tokens[8];
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
+-    if (lgtd_jsonrpc_type_float_between_0_and_1(tokens, json)) {
++    if (lgtd_jsonrpc_type_float_between_0_and_1(&tokens[1], json)) {
+         errx(1, "%s was considered as a valid float >= 0 and <= 1", json);
+     }
+ }
+@@ -17,12 +17,12 @@
+ int
+ main(void)
+ {
+-    test_float("1.1234");
+-    test_float("-0.1234");
+-    test_float("1.00000001");
+-    test_float("2.0000");
+-    test_float("10");
+-    test_float("0.0.1");
++    test_float("[1.1234]");
++    test_float("[-0.1234]");
++    test_float("[1.00000001]");
++    test_float("[2.0000]");
++    test_float("[10]");
++    test_float("[0.0.1]");
+ 
+     return 0;
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_1_valid.c
+@@ -9,7 +9,7 @@
+ {
+     jsmntok_t tokens[8];
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
+-    if (!lgtd_jsonrpc_type_float_between_0_and_1(tokens, json)) {
++    if (!lgtd_jsonrpc_type_float_between_0_and_1(&tokens[1], json)) {
+         errx(1, "%s wasn't considered as a valid float >= 0 and <= 1", json);
+     }
+ }
+@@ -17,11 +17,11 @@
+ int
+ main(void)
+ {
+-    test_float("0.1234");
+-    test_float("1.0000000");
+-    test_float("0.9999");
+-    test_float("0.01");
+-    test_float("000.01");
++    test_float("[0.1234]");
++    test_float("[1.0000000]");
++    test_float("[0.9999]");
++    test_float("[0.01]");
++    test_float("[000.01]");
+ 
+     return 0;
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_invalid.c
+@@ -9,7 +9,7 @@
+ {
+     jsmntok_t tokens[8];
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
+-    if (lgtd_jsonrpc_type_float_between_0_and_360(tokens, json)) {
++    if (lgtd_jsonrpc_type_float_between_0_and_360(&tokens[1], json)) {
+         errx(1, "%s was considered as a valid float >= 0 and <= 360", json);
+     }
+ }
+@@ -17,12 +17,12 @@
+ int
+ main(void)
+ {
+-    test_float("-1.1234");
+-    test_float("-0.1234");
+-    test_float("0.1.234");
+-    test_float("0.1a234");
+-    test_float("360a");
+-    test_float("360.1");
++    test_float("[-1.1234]");
++    test_float("[-0.1234]");
++    test_float("[0.1.234]");
++    test_float("[0.1a234]");
++    test_float("[360a]");
++    test_float("[360.1]");
+ 
+     return 0;
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.c
+@@ -9,7 +9,7 @@
+ {
+     jsmntok_t tokens[8];
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
+-    if (!lgtd_jsonrpc_type_float_between_0_and_360(tokens, json)) {
++    if (!lgtd_jsonrpc_type_float_between_0_and_360(&tokens[1], json)) {
+         errx(1, "%s wasn't considered as a valid float >= 0 and <= 360", json);
+     }
+ }
+@@ -17,15 +17,15 @@
+ int
+ main(void)
+ {
+-    test_float("1.1234");
+-    test_float("1.00000001");
+-    test_float("2.0000");
+-    test_float("10");
+-    test_float("0.1");
+-    test_float("0");
+-    test_float("231.");
+-    test_float("359.1");
+-    test_float("360");
++    test_float("[1.1234]");
++    test_float("[1.00000001]");
++    test_float("[2.0000]");
++    test_float("[10]");
++    test_float("[0.1]");
++    test_float("[0]");
++    test_float("[231.]");
++    test_float("[359.1]");
++    test_float("[360]");
+ 
+     return 0;
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer.c b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
+@@ -7,12 +7,12 @@
+ int
+ main(void)
+ {
+-    const char *json = "1234";
++    const char *json = "[1234]";
+     jsmntok_t tokens[8];
+ 
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
+ 
+-    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++    bool ok = lgtd_jsonrpc_type_integer(&tokens[1], json);
+ 
+     if (!ok) {
+         errx(1, "%s wasn't considered as a valid integer", json);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c
+@@ -7,12 +7,12 @@
+ int
+ main(void)
+ {
+-    const char *json = "-1a";
++    const char *json = "[-1a]";
+     jsmntok_t tokens[8];
+ 
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
+ 
+-    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++    bool ok = lgtd_jsonrpc_type_integer(&tokens[1], json);
+ 
+     if (ok) {
+         errx(1, "%s wasn't considered invalid", json);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c
+@@ -7,12 +7,12 @@
+ int
+ main(void)
+ {
+-    const char *json = "9999999999";
++    const char *json = "[9999999999]";
+     jsmntok_t tokens[8];
+ 
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
+ 
+-    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++    bool ok = lgtd_jsonrpc_type_integer(&tokens[1], json);
+ 
+     if (ok) {
+         errx(1, "%s wasn't considered invalid", json);
+diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
+--- a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
++++ b/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c
+@@ -7,12 +7,12 @@
+ int
+ main(void)
+ {
+-    const char *json = "-9999999999";
++    const char *json = "[-9999999999]";
+     jsmntok_t tokens[8];
+ 
+     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
+ 
+-    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++    bool ok = lgtd_jsonrpc_type_integer(&tokens[1], json);
+ 
+     if (ok) {
+         errx(1, "%s wasn't considered invalid", json);

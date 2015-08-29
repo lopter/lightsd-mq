@@ -1,0 +1,18 @@
+# HG changeset patch
+# Parent  2ae975b26d16104b7fd10a3bd49d4095ddc80a29
+Add packet type definitions for GET_LOCATION/GROUP STATE_LOCATION/GROUP
+
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -153,6 +153,10 @@
+     LGTD_LIFX_SET_FACTORY_TEST_MODE = 0x27,
+     LGTD_LIFX_DISABLE_FACTORY_TEST_MODE = 0x28,
+     LGTD_LIFX_ACK = 0x2d,
++    LGTD_LIFX_GET_LOCATION = 0x30, // I wonder what 0x31 and 0x34 are...
++    LGTD_LIFX_STATE_LOCATION = 0x32,
++    LGTD_LIFX_GET_GROUP = 0x33, // TODO: replace GET/SET_TAG_LABELS ?
++    LGTD_LIFX_STATE_GROUP = 0x35,
+     LGTD_LIFX_ECHO_REQUEST = 0x3a,
+     LGTD_LIFX_ECHO_RESPONSE = 0x3b,
+     LGTD_LIFX_GET_LIGHT_STATE = 0x65,
