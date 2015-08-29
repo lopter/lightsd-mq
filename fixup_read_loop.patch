@@ -1,0 +1,22 @@
+# HG changeset patch
+# Parent  40473daee76c6fd6be5e78c7af11beaab971e553
+
+diff --git a/core/client.c b/core/client.c
+--- a/core/client.c
++++ b/core/client.c
+@@ -97,7 +97,6 @@
+ #pragma GCC diagnostic ignored "-Wswitch"
+         case 0:
+ #pragma GCC diagnostic pop
+-            lgtd_info("PART/0");
+             if (evbuffer_get_length(input) > LGTD_CLIENT_MAX_REQUEST_BUF_SIZE) {
+                 lgtd_warnx(
+                     "dropping client [%s]:%hu: request too big",
+@@ -119,7 +118,6 @@
+         // pullup and resume parsing:
+         buf = (char *)evbuffer_pullup(input, -1);
+         nbytes = evbuffer_get_contiguous_space(input);
+-        lgtd_info("PULLUP, nbytes = %ju", (uintmax_t)nbytes);
+     } while (nbytes);
+ }
+ 

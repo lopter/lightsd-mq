@@ -1,10 +1,46 @@
 # HG changeset patch
 # Parent  6d4f1494c6d4bcfab5e6cf6c47631e95118d2b22
+Make the pipe/socket read loops fully resilient against incomplete json
 
+In other words you can send your request character by character with as
+much as white space as you want (and as allowed by JSON) and lightsd and
+it will still sort it out.
+
+Among some rework in the socket read loop one big fix was to call
+jsmn_init before each call to jsmn_parse. So not sure if jsmn is really
+working as explained in its documentation.
+
+This changeset also moves -DJSMN_STRICT=1 to the top-level
+CMakeLists.txt so that the tests and lightsd use the same code.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -54,6 +54,8 @@
+ 
+     "-DLGTD_HAVE_LIBBSD=${HAVE_LIBBSD}"
+     "-DLGTD_HAVE_PROCTITLE=${HAVE_PROCTITLE}"
++
++    "-DJSMN_STRICT=1"
+ )
+ 
+ IF (CMAKE_BUILD_TYPE MATCHES "DEBUG")
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -10,8 +10,6 @@
+ 
+ CONFIGURE_FILE(version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
+ 
+-ADD_DEFINITIONS("-DJSMN_STRICT=1")
+-
+ ADD_EXECUTABLE(
+     lightsd
+     client.c
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
 +++ b/core/client.c
-@@ -70,59 +70,62 @@
+@@ -70,59 +70,57 @@
      struct lgtd_client *client = ctx;
  
      struct evbuffer *input = bufferevent_get_input(bev);
@@ -28,8 +64,8 @@ diff --git a/core/client.c b/core/client.c
 -        lgtd_warnx(
 -            "dropping client [%s]:%hu: request too big, not "
 -            "enough parser tokens", client->ip_addr, client->port
-+    lgtd_info("START nbytes %ju", (uintmax_t)nbytes);
 +    do {
++        jsmn_init(&client->jsmn_ctx);
 +        jsmnerr_t rv = jsmn_parse(
 +            &client->jsmn_ctx,
 +            buf,
@@ -53,7 +89,6 @@ diff --git a/core/client.c b/core/client.c
 +        switch (rv) {
 +        case JSMN_ERROR_NOMEM:
 +        case JSMN_ERROR_INVAL:
-+            lgtd_info("NOMEM/INVAL, draining nbytes %ju", (uintmax_t)nbytes);
              lgtd_warnx(
 -                "dropping client [%s]:%hu: request too big",
 +                "client [%s]:%hu: request too big or invalid",
@@ -61,7 +96,6 @@ diff --git a/core/client.c b/core/client.c
              );
 -            lgtd_client_close(client);
 +            evbuffer_drain(input, nbytes);
-+            jsmn_init(&client->jsmn_ctx);
              break;
 -        } else if (bufsz >= evbuffer_get_length(input)) {
 -            break; // We pulled up everything already, wait for more data
@@ -79,17 +113,14 @@ diff --git a/core/client.c b/core/client.c
 +                lgtd_client_close(client);
 +                break;
 +            } else if (nbytes == evbuffer_get_length(input)) {
-+                lgtd_info("PART/0 RETURN");
 +                return; // We pulled up everything already, wait for more data
 +            }
 +            break;
 +        default:
-+            lgtd_info("DEFAULT");
 +            client->json = buf;
 +            lgtd_jsonrpc_dispatch_request(client, rv);
 +            client->json = NULL;
 +            evbuffer_drain(input, nbytes);
-+            jsmn_init(&client->jsmn_ctx);
 +            break;
          }
          // pullup and resume parsing:
@@ -110,6 +141,21 @@ diff --git a/core/client.c b/core/client.c
  }
  
  static void
+@@ -216,7 +214,6 @@
+     );
+     lgtd_sockaddrtoa(peer_addr, client->ip_addr, sizeof(client->ip_addr));
+     client->port = lgtd_sockaddrport(peer_addr);
+-    jsmn_init(&client->jsmn_ctx);
+     bufferevent_enable(client->io, EV_READ|EV_WRITE|EV_TIMEOUT);
+ 
+     LIST_INSERT_HEAD(&lgtd_clients, client, link);
+@@ -232,6 +229,4 @@
+     assert(pipe_client);
+ 
+     memset(pipe_client, 0, sizeof(*pipe_client));
+-
+-    jsmn_init(&pipe_client->jsmn_ctx);
+ }
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
@@ -121,3 +167,30 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  
      for (int i = 0; i != LGTD_ARRAY_SIZE(methods); i++) {
          int parsed_method_namelen = LGTD_JSONRPC_TOKEN_LEN(request.method);
+diff --git a/core/pipe.c b/core/pipe.c
+--- a/core/pipe.c
++++ b/core/pipe.c
+@@ -97,6 +97,7 @@
+             (void)0;
+             const char *buf = (char *)evbuffer_pullup(pipe->read_buf, -1);
+             ssize_t bufsz = evbuffer_get_length(pipe->read_buf);
++            jsmn_init(&pipe->client.jsmn_ctx);
+             jsmnerr_t rv = jsmn_parse(
+                 &pipe->client.jsmn_ctx,
+                 buf,
+@@ -127,7 +128,6 @@
+                 lgtd_jsonrpc_dispatch_request(&pipe->client, ntokens);
+ 
+                 pipe->client.json = NULL;
+-                jsmn_init(&pipe->client.jsmn_ctx);
+                 int request_size = pipe->client.jsmn_tokens[0].end;
+                 evbuffer_drain(pipe->read_buf, request_size);
+                 if (request_size < bufsz) {
+@@ -141,7 +141,6 @@
+             ssize_t bufsz = evbuffer_get_length(pipe->read_buf);
+             evbuffer_drain(pipe->read_buf, bufsz);
+             drain = false;
+-            jsmn_init(&pipe->client.jsmn_ctx);
+         }
+     }
+ 

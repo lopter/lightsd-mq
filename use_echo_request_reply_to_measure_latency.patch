@@ -1,0 +1,322 @@
+# HG changeset patch
+# Parent  57a163a391aa3fa9f582f388644b73c29054d464
+Use EchoRequest/Response to measure the latency of the bulbs
+
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -221,7 +221,7 @@
+                     "}",
+             bulb_addr, site_addr,
+             bulb->gw->ip_addr, bulb->gw->port,
+-            (uintmax_t)LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
++            (uintmax_t)lgtd_lifx_gateway_latency(bulb->gw)
+         );
+ 
+ #define PRINT_LIFX_FW_TIMESTAMPS(fw_info, built_at_buf, installed_at_buf)       \
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -59,6 +59,9 @@
+ 
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, -1);
+     lgtd_timer_stop(gw->refresh_timer);
++    if (gw->ping_timer) {
++        lgtd_timer_stop(gw->ping_timer);
++    }
+     event_del(gw->write_ev);
+     if (gw->socket != -1) {
+         evutil_closesocket(gw->socket);
+@@ -227,6 +230,18 @@
+ }
+ 
+ static void
++lgtd_lifx_gateway_send_ping_request(struct lgtd_lifx_gateway *gw)
++{
++    assert(gw);
++
++    struct lgtd_lifx_packet_echo pkt = { { 0 } };
++    snprintf(
++        pkt.payload, sizeof(pkt), "%jx", (uintmax_t)lgtd_time_monotonic_msecs()
++    );
++    lgtd_lifx_gateway_send_to_site_quiet(gw, LGTD_LIFX_ECHO_REQUEST, &pkt);
++}
++
++static void
+ lgtd_lifx_gateway_send_get_all_light_state(struct lgtd_lifx_gateway *gw)
+ {
+     assert(gw);
+@@ -256,6 +271,31 @@
+     lgtd_timer_activate(gw->refresh_timer);
+ }
+ 
++static void
++lgtd_lifx_gateway_ping_callback(struct lgtd_timer *timer,
++                                union lgtd_timer_ctx ctx)
++{
++    (void)timer;
++
++    struct lgtd_lifx_gateway *gw = ctx.as_ptr;
++
++    if (!gw->latency &&
++        lgtd_time_monotonic_msecs() - gw->opened_at
++            > LGTD_LIFX_GATEWAY_PING_CALLBACK_TIMEOUT_MSECS) {
++        char site[LGTD_LIFX_ADDR_STRLEN];
++        lgtd_info(
++            "site %s on gateway [%s]:%hu doesn't seem to support ECHO_REQUEST, "
++            "only the gateway ICMP latency will be measured",
++            LGTD_IEEE8023MACTOA(gw->site.as_array, site), gw->ip_addr, gw->port
++        );
++        lgtd_timer_stop(timer);
++        gw->ping_timer = NULL;
++        return;
++    }
++
++    lgtd_lifx_gateway_send_ping_request(gw);
++}
++
+ static struct lgtd_lifx_bulb *
+ lgtd_lifx_gateway_get_or_open_bulb(struct lgtd_lifx_gateway *gw,
+                                    const uint8_t *bulb_addr)
+@@ -323,6 +363,7 @@
+     gw->last_req_at = received_at;
+     gw->next_req_at = received_at;
+     gw->last_pkt_at = received_at;
++    gw->opened_at = received_at;
+ 
+     union lgtd_timer_ctx ctx = { .as_ptr = gw };
+     gw->refresh_timer = lgtd_timer_start(
+@@ -331,7 +372,13 @@
+         lgtd_lifx_gateway_refresh_callback,
+         ctx
+     );
+-    if (!gw->refresh_timer) {
++    gw->ping_timer = lgtd_timer_start(
++        LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT,
++        LGTD_LIFX_GATEWAY_MIN_PING_INTERVAL_MSECS,
++        lgtd_lifx_gateway_ping_callback,
++        ctx
++    );
++    if (!gw->refresh_timer || !gw->ping_timer) {
+         lgtd_warn("can't allocate a new timer");
+         goto error_allocate;
+     }
+@@ -353,6 +400,12 @@
+     return gw;
+ 
+ error_allocate:
++    if (gw->ping_timer) {
++        lgtd_timer_stop(gw->ping_timer);
++    }
++    if (gw->refresh_timer) {
++        lgtd_timer_stop(gw->refresh_timer);
++    }
+     if (gw->write_ev) {
+         event_free(gw->write_ev);
+     }
+@@ -467,6 +520,20 @@
+     }
+ }
+ 
++lgtd_time_mono_t
++lgtd_lifx_gateway_latency(const struct lgtd_lifx_gateway *gw)
++{
++    assert(gw);
++
++    if (gw->latency) {
++        return gw->latency;
++    }
++    if (gw->last_req_at < gw->last_pkt_at) { // this doesn't look right
++        return gw->last_pkt_at - gw->last_req_at;
++    }
++    return 0;
++}
++
+ void
+ lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
+                                      const struct lgtd_lifx_packet_header *hdr,
+@@ -528,15 +595,15 @@
+         }
+     }
+ 
+-    int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
++    lgtd_time_mono_t latency = lgtd_lifx_gateway_latency(gw);
+     if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
+         if (!lgtd_timer_ispending(gw->refresh_timer)) {
+             int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
+             struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
+             lgtd_timer_reschedule(gw->refresh_timer, &tv);
+             lgtd_debug(
+-                "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
+-                gw->ip_addr, gw->port, latency, timeout
++                "[%s]:%hu latency is %jums, scheduling next GET_LIGHT_STATE in %dms",
++                gw->ip_addr, gw->port, (uintmax_t)latency, timeout
+             );
+         }
+         return;
+@@ -544,8 +611,8 @@
+ 
+     if (!gw->pending_refresh_req) {
+         lgtd_debug(
+-            "[%s]:%hu latency is %dms, sending GET_LIGHT_STATE now",
+-            gw->ip_addr, gw->port, latency
++            "[%s]:%hu latency is %jums, sending GET_LIGHT_STATE now",
++            gw->ip_addr, gw->port, (uintmax_t)latency
+         );
+         lgtd_lifx_gateway_send_get_all_light_state(gw);
+     } else {
+@@ -888,3 +955,36 @@
+         lgtd_lifx_bulb_set_ambient_light, pkt->illuminance
+     );
+ }
++
++void
++lgtd_lifx_gateway_handle_echo_response(struct lgtd_lifx_gateway *gw,
++                                       const struct lgtd_lifx_packet_header *hdr,
++                                       const struct lgtd_lifx_packet_echo *pkt)
++{
++    assert(gw && hdr && pkt);
++
++    char addr[LGTD_LIFX_ADDR_STRLEN];
++    lgtd_debug(
++        "ECHO_RESPONSE <-- [%s]:%hu - %s payload=%.*s",
++        gw->ip_addr, gw->port,
++        LGTD_IEEE8023MACTOA(hdr->target.device_addr, addr),
++        LGTD_LIFX_PACKET_ECHO_PAYLOAD_SIZE, pkt->payload
++    );
++
++    if (!memchr(pkt->payload, 0, LGTD_LIFX_PACKET_ECHO_PAYLOAD_SIZE)) {
++        return;
++    }
++
++    char *endptr = NULL;
++    lgtd_time_mono_t ping_at = strtoull(pkt->payload, &endptr, 16);
++    if (!endptr || *endptr != '\0') {
++        return;
++    }
++
++    gw->latency = lgtd_time_monotonic_msecs() - ping_at;
++
++    struct timeval tv = LGTD_MSECS_TO_TIMEVAL(
++        LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS
++    );
++    lgtd_timer_reschedule(gw->ping_timer, &tv);
++}
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -23,6 +23,9 @@
+ // still draw about 2W in ZigBee and about 3W in WiFi).
+ enum { LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 800 };
+ 
++enum { LGTD_LIFX_GATEWAY_MIN_PING_INTERVAL_MSECS = 500 };
++enum { LGTD_LIFX_GATEWAY_PING_CALLBACK_TIMEOUT_MSECS = 20000 };
++
+ // You can't send more than one lifx packet per UDP datagram.
+ enum { LGTD_LIFX_GATEWAY_PACKET_RING_SIZE = 16 };
+ 
+@@ -67,7 +70,10 @@
+     lgtd_time_mono_t                last_req_at;
+     lgtd_time_mono_t                next_req_at;
+     lgtd_time_mono_t                last_pkt_at;
+-#define LGTD_LIFX_GATEWAY_LATENCY(gw) ((gw)->last_pkt_at - (gw)->last_req_at)
++    // But for bulbs with a more recent firmware we can properly measure the
++    // latency with an ECHO REQUEST packet:
++    lgtd_time_mono_t                latency;
++    lgtd_time_mono_t                opened_at;
+     struct lgtd_lifx_message        pkt_ring[LGTD_LIFX_GATEWAY_PACKET_RING_SIZE];
+ #define LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(idx)  do { \
+     (idx) += 1;                                             \
+@@ -80,6 +86,7 @@
+     struct evbuffer                 *write_buf;
+     bool                            pending_refresh_req;
+     struct lgtd_timer               *refresh_timer;
++    struct lgtd_timer               *ping_timer;
+ };
+ LIST_HEAD(lgtd_lifx_gateway_list, lgtd_lifx_gateway);
+ 
+@@ -102,6 +109,7 @@
+ void lgtd_lifx_gateway_remove_and_close_bulb(struct lgtd_lifx_gateway *, struct lgtd_lifx_bulb *);
+ 
+ void lgtd_lifx_gateway_force_refresh(struct lgtd_lifx_gateway *);
++lgtd_time_mono_t lgtd_lifx_gateway_latency(const struct lgtd_lifx_gateway *);
+ 
+ void lgtd_lifx_gateway_enqueue_packet(struct lgtd_lifx_gateway *,
+                                       const struct lgtd_lifx_packet_header *,
+@@ -151,3 +159,6 @@
+ void lgtd_lifx_gateway_handle_ambient_light(struct lgtd_lifx_gateway *,
+                                             const struct lgtd_lifx_packet_header *,
+                                             const struct lgtd_lifx_packet_ambient_light *);
++void lgtd_lifx_gateway_handle_echo_response(struct lgtd_lifx_gateway *,
++                                            const struct lgtd_lifx_packet_header *,
++                                            const struct lgtd_lifx_packet_echo *);
+diff --git a/lifx/watchdog.c b/lifx/watchdog.c
+--- a/lifx/watchdog.c
++++ b/lifx/watchdog.c
+@@ -107,7 +107,7 @@
+     // gateways aren't bulbs themselves:
+     struct lgtd_lifx_gateway *gw, *next_gw;
+     LIST_FOREACH_SAFE(gw, &lgtd_lifx_gateways, link, next_gw) {
+-        int gw_lag = now - gw->last_pkt_at;
++        int gw_lag = lgtd_lifx_gateway_latency(gw);
+         if (gw_lag >= LGTD_LIFX_WATCHDOG_DEVICE_TIMEOUT_MSECS) {
+             lgtd_info(
+                 "closing bulb gateway [%s]:%hu that "
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -327,6 +327,21 @@
+             .decode = DECODER(lgtd_lifx_wire_decode_ambient_light),
+             .handle = HANDLER(lgtd_lifx_gateway_handle_ambient_light)
+         },
++        {
++            REQUEST_ONLY,
++            .encode = lgtd_lifx_wire_null_packet_encoder_decoder,
++            .name = "ECHO_REQUEST",
++            .type = LGTD_LIFX_ECHO_REQUEST,
++            .size = sizeof(struct lgtd_lifx_packet_echo)
++        },
++        {
++            RESPONSE_ONLY,
++            .name = "ECHO_RESPONSE",
++            .type = LGTD_LIFX_ECHO_RESPONSE,
++            .size = sizeof(struct lgtd_lifx_packet_echo),
++            .decode = lgtd_lifx_wire_null_packet_encoder_decoder,
++            .handle = HANDLER(lgtd_lifx_gateway_handle_echo_response)
++        },
+         // Unimplemented but "known" packets
+         {
+             UNIMPLEMENTED,
+@@ -390,16 +405,6 @@
+         },
+         {
+             UNIMPLEMENTED,
+-            .name = "ECHO_REQUEST",
+-            .type = LGTD_LIFX_ECHO_REQUEST
+-        },
+-        {
+-            UNIMPLEMENTED,
+-            .name = "ECHO_RESPONSE",
+-            .type = LGTD_LIFX_ECHO_RESPONSE
+-        },
+-        {
+-            UNIMPLEMENTED,
+             .name = "SET_DIM_ABSOLUTE",
+             .type = LGTD_LIFX_SET_DIM_ABSOLUTE
+         },
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -299,6 +299,12 @@
+     floatle_t illuminance; // lux
+ };
+ 
++enum { LGTD_LIFX_PACKET_ECHO_PAYLOAD_SIZE = 64 };
++
++struct lgtd_lifx_packet_echo {
++    char    payload[LGTD_LIFX_PACKET_ECHO_PAYLOAD_SIZE];
++};
++
+ #pragma pack(pop)
+ 
+ enum { LGTD_LIFX_VENDOR_ID = 1 };

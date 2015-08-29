@@ -1,0 +1,16 @@
+# HG changeset patch
+# Parent  47c13116ecf59798c30bd5770a5b3aa425ed5997
+params are optional in JSON-RPC don't crash if they are missing
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -1147,7 +1147,7 @@
+             methods[i].name, &client->json[request.method->start], methods[i].namelen
+         );
+         if (!diff) {
+-            int params_count = request.params->size;
++            int params_count = request.params ? request.params->size : 0;
+             if (params_count != methods[i].params_count) {
+                 lgtd_jsonrpc_send_error(
+                     client, LGTD_JSONRPC_INVALID_PARAMS,
