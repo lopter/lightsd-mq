@@ -1,0 +1,212 @@
+# HG changeset patch
+# Parent  3fea2e626b8ed54f402b5f6f2265b384ed09a4fe
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -618,9 +618,15 @@
+     assert(client);
+     assert(target);
+ 
++    if (target_ntokens < 1) {
++        return false;
++    }
++
+     if (lgtd_jsonrpc_type_array(target, client->json)) {
+         target_ntokens -= 1;
+         target++;
++    } else if (target_ntokens != 1) {
++        return false;
+     }
+ 
+     for (int ti = target_ntokens; ti--;) {
+diff --git a/core/pipe.c b/core/pipe.c
+--- a/core/pipe.c
++++ b/core/pipe.c
+@@ -94,10 +94,9 @@
+ 
+         if (!drain) {
+         next_request:
+-            (void)0;
++            jsmn_init(&pipe->client.jsmn_ctx);
+             const char *buf = (char *)evbuffer_pullup(pipe->read_buf, -1);
+             ssize_t bufsz = evbuffer_get_length(pipe->read_buf);
+-            jsmn_init(&pipe->client.jsmn_ctx);
+             jsmnerr_t rv = jsmn_parse(
+                 &pipe->client.jsmn_ctx,
+                 buf,
+diff --git a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
+--- a/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
++++ b/tests/core/jsonrpc/test_jsonrpc_build_target_list.c
+@@ -53,14 +53,18 @@
+     test_params("[\"on\", 12345, \"6789\"]", expected_1);
+ 
+     const char *expected_2[] = {"#tower", NULL};
+-    test_params("#tower", expected_2);
++    test_params("\"#tower\"", expected_2);
+ 
+     test_params("{\"key\": 42}", NULL);
+ 
+-    test_params("null", NULL);
+-
+     const char *expected_3[] = {NULL};
+     test_params("[]", expected_3);
+ 
++    test_params("[\"on\", {\"lol\": \"wut\"}, \"6789\"]", NULL);
++
++    // and make sure nothing blows up on plain invalid json/parameters
++    // (jsmn_parse will return a negative value):
++    test_params("null", NULL);
++
+     return 0;
+ }
+diff --git a/tests/core/pipe/test_pipe_read_callback.c b/tests/core/pipe/test_pipe_read_callback.c
+--- a/tests/core/pipe/test_pipe_read_callback.c
++++ b/tests/core/pipe/test_pipe_read_callback.c
+@@ -108,14 +108,6 @@
+         errx(1, "got unexpected buf %p (expected %p)", buf, (void *)2);
+     }
+ 
+-    jsmn_parser jsmn_ctx;
+-    jsmn_init(&jsmn_ctx);
+-    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
+-    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
+-        errx(1, "the client json parser context wasn't re-initialized");
+-    }
+-
+-
+     switch (evbuffer_drain_call_count) {
+     case 0:
+         if (len != sizeof(request) - 1) {
+@@ -148,6 +140,13 @@
+         );
+     }
+ 
++    jsmn_parser jsmn_ctx;
++    jsmn_init(&jsmn_ctx);
++    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
++    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
++        errx(1, "the client json parser context wasn't re-initialized");
++    }
++
+     return &request[evbuffer_pullup_call_count++ ? sizeof(request) - 1 : 0];
+ }
+ 
+diff --git a/tests/core/pipe/test_pipe_read_callback_extra_data.c b/tests/core/pipe/test_pipe_read_callback_extra_data.c
+--- a/tests/core/pipe/test_pipe_read_callback_extra_data.c
++++ b/tests/core/pipe/test_pipe_read_callback_extra_data.c
+@@ -103,15 +103,16 @@
+         errx(1, "got unexpected buf %p (expected %p)", buf, (void *)2);
+     }
+ 
+-    jsmn_parser jsmn_ctx;
+-    jsmn_init(&jsmn_ctx);
+-    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
+-    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
+-        errx(1, "the client json parser context wasn't re-initialized");
+-    }
+-
+     switch (evbuffer_drain_call_count) {
+     case 0:
++        if (len != sizeof(request) - sizeof(REQUEST_1)) {
++            errx(
++                1, "trying to drain %ju bytes (expected %ju)",
++                (uintmax_t)len, (uintmax_t)(sizeof(request) - sizeof(REQUEST_1))
++            );
++        }
++        break;
++    case 1:
+         if (len != sizeof(REQUEST_1) - 1) {
+             errx(
+                 1, "trying to drain %ju bytes (expected %ju)",
+@@ -119,14 +120,6 @@
+             );
+         }
+         break;
+-    case 1:
+-        if (len != sizeof(request) - sizeof(REQUEST_1)) {
+-            errx(
+-                1, "trying to drain %ju bytes (expected %ju)",
+-                (uintmax_t)len, (uintmax_t)(sizeof(request) - sizeof(REQUEST_1))
+-            );
+-        }
+-        break;
+     default:
+         break;
+     }
+@@ -150,6 +143,13 @@
+         );
+     }
+ 
++    jsmn_parser jsmn_ctx;
++    jsmn_init(&jsmn_ctx);
++    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
++    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
++        errx(1, "the client json parser context wasn't re-initialized");
++    }
++
+     return &request[evbuffer_pullup_call_count++ ? sizeof(request) - 1 : 0];
+ }
+ 
+diff --git a/tests/core/pipe/test_pipe_read_callback_multiple_requests.c b/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
+--- a/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
++++ b/tests/core/pipe/test_pipe_read_callback_multiple_requests.c
+@@ -119,13 +119,6 @@
+         errx(1, "got unexpected buf %p (expected %p)", buf, (void *)2);
+     }
+ 
+-    jsmn_parser jsmn_ctx;
+-    jsmn_init(&jsmn_ctx);
+-    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
+-    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
+-        errx(1, "the client json parser context wasn't re-initialized");
+-    }
+-
+     switch (evbuffer_drain_call_count) {
+     case 0:
+         if (len != sizeof(REQUEST_1) - 1) {
+@@ -167,6 +160,13 @@
+         );
+     }
+ 
++    jsmn_parser jsmn_ctx;
++    jsmn_init(&jsmn_ctx);
++    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
++    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
++        errx(1, "the client json parser context wasn't re-initialized");
++    }
++
+     int offset;
+     switch (evbuffer_pullup_call_count) {
+     case 0:
+diff --git a/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c b/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c
+--- a/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c
++++ b/tests/core/pipe/test_pipe_read_callback_yield_on_eagain.c
+@@ -119,13 +119,6 @@
+         errx(1, "got unexpected buf %p (expected %p)", buf, (void *)2);
+     }
+ 
+-    jsmn_parser jsmn_ctx;
+-    jsmn_init(&jsmn_ctx);
+-    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
+-    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
+-        errx(1, "the client json parser context wasn't re-initialized");
+-    }
+-
+     switch (evbuffer_drain_call_count) {
+     case 0:
+         if (len != sizeof(REQUEST_1) - 1) {
+@@ -167,6 +160,13 @@
+         );
+     }
+ 
++    jsmn_parser jsmn_ctx;
++    jsmn_init(&jsmn_ctx);
++    struct lgtd_command_pipe *pipe = SLIST_FIRST(&lgtd_command_pipes);
++    if (memcmp(&pipe->client.jsmn_ctx, &jsmn_ctx, sizeof(jsmn_ctx))) {
++        errx(1, "the client json parser context wasn't re-initialized");
++    }
++
+     int offset;
+     switch (evbuffer_pullup_call_count) {
+     case 0:
