@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  95333c16b35db2b7ec8b00a2bd98565e73f09059
+# Parent  908400de3b3d197b823822d4687b1a7c79e356ad
 Make the pipe/socket read loops fully resilient against incomplete json
 
 In other words you can send your request character by character with as
@@ -120,7 +120,7 @@ diff --git a/core/client.c b/core/client.c
 +            client->json = buf;
 +            lgtd_jsonrpc_dispatch_request(client, rv);
 +            client->json = NULL;
-+            int request_size = client->jsmn_tokens[0].end;
++            size_t request_size = client->jsmn_tokens[0].end;
 +            evbuffer_drain(input, request_size);
 +            if (request_size < nbytes) {
 +                buf += request_size;
@@ -404,7 +404,7 @@ new file mode 100644
 +
 +    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
 +
-+    if (!evbuffer_get_contiguous_space) {
++    if (!evbuffer_get_contiguous_space_call_count) {
 +        errx(1, "evbuffer_get_contiguous_space not called");
 +    }
 +    if (!jsonrpc_dispatch_request_call_count) {
@@ -413,7 +413,7 @@ new file mode 100644
 +    if (!evbuffer_drain_call_count) {
 +        errx(1, "evbuffer_drain not called");
 +    }
-+    if (!evbuffer_pullup) {
++    if (!evbuffer_pullup_call_count) {
 +        errx(1, "evbuffer_pullup not called");
 +    }
 +
@@ -634,7 +634,7 @@ new file mode 100644
 +
 +    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
 +
-+    if (!evbuffer_get_contiguous_space) {
++    if (!evbuffer_get_contiguous_space_call_count) {
 +        errx(1, "evbuffer_get_contiguous_space not called");
 +    }
 +    if (!jsonrpc_dispatch_request_call_count) {
@@ -643,7 +643,7 @@ new file mode 100644
 +    if (!evbuffer_drain_call_count) {
 +        errx(1, "evbuffer_drain not called");
 +    }
-+    if (!evbuffer_pullup) {
++    if (!evbuffer_pullup_call_count) {
 +        errx(1, "evbuffer_pullup not called");
 +    }
 +
@@ -849,7 +849,7 @@ new file mode 100644
 +
 +    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
 +
-+    if (!evbuffer_get_contiguous_space) {
++    if (!evbuffer_get_contiguous_space_call_count) {
 +        errx(1, "evbuffer_get_contiguous_space not called");
 +    }
 +    if (!jsonrpc_dispatch_request_call_count) {
@@ -858,7 +858,7 @@ new file mode 100644
 +    if (!evbuffer_drain_call_count) {
 +        errx(1, "evbuffer_drain not called");
 +    }
-+    if (!evbuffer_pullup) {
++    if (!evbuffer_pullup_call_count) {
 +        errx(1, "evbuffer_pullup not called");
 +    }
 +
@@ -1059,13 +1059,13 @@ new file mode 100644
 +
 +    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
 +
-+    if (!evbuffer_get_contiguous_space) {
++    if (!evbuffer_get_contiguous_space_call_count) {
 +        errx(1, "evbuffer_get_contiguous_space not called");
 +    }
 +    if (!evbuffer_drain_call_count) {
 +        errx(1, "evbuffer_drain not called");
 +    }
-+    if (!evbuffer_pullup) {
++    if (!evbuffer_pullup_call_count) {
 +        errx(1, "evbuffer_pullup not called");
 +    }
 +    if (!evbuffer_get_length_call_count) {
@@ -1271,7 +1271,7 @@ new file mode 100644
 +    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
 +    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
 +
-+    if (!evbuffer_get_contiguous_space) {
++    if (!evbuffer_get_contiguous_space_call_count) {
 +        errx(1, "evbuffer_get_contiguous_space not called");
 +    }
 +    if (!jsonrpc_dispatch_request_call_count) {
@@ -1280,7 +1280,7 @@ new file mode 100644
 +    if (!evbuffer_drain_call_count) {
 +        errx(1, "evbuffer_drain not called");
 +    }
-+    if (!evbuffer_pullup) {
++    if (!evbuffer_pullup_call_count) {
 +        errx(1, "evbuffer_pullup not called");
 +    }
 +    if (!evbuffer_get_length_call_count) {
