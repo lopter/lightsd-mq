@@ -1,11 +1,11 @@
 # HG changeset patch
-# Parent  47c13116ecf59798c30bd5770a5b3aa425ed5997
+# Parent  1987f3e4aa1de3967944617ea4b042c1cf2bb7f2
 params are optional in JSON-RPC don't crash if they are missing
 
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
-@@ -1147,7 +1147,7 @@
+@@ -1152,7 +1152,7 @@
              methods[i].name, &client->json[request.method->start], methods[i].namelen
          );
          if (!diff) {
@@ -14,3 +14,63 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              if (params_count != methods[i].params_count) {
                  lgtd_jsonrpc_send_error(
                      client, LGTD_JSONRPC_INVALID_PARAMS,
+diff --git a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
+@@ -0,0 +1,55 @@
++#include "jsonrpc.c"
++
++#include "mock_client_buf.h"
++#define MOCKED_LGTD_PROTO_POWER_ON
++#include "mock_proto.h"
++
++#include "test_jsonrpc_utils.h"
++
++void
++lgtd_proto_power_on(struct lgtd_client *client,
++                    const struct lgtd_proto_target_list *targets)
++{
++    (void)client;
++    (void)targets;
++
++    errx(1, "lgtd_proto_power_on shouldn't have been called");
++}
++
++int
++main(void)
++{
++    const char json[] = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"power_on\","
++        "\"id\": \"42\""
++    "}");
++    struct lgtd_client client = { .json = json };
++    int parsed = parse_json(
++        client.jsmn_tokens,
++        LGTD_ARRAY_SIZE(client.jsmn_tokens),
++        json,
++        sizeof(json)
++    );
++
++    lgtd_jsonrpc_dispatch_one(&client, client.jsmn_tokens, parsed);
++
++    const char expected[] = ("{"
++        "\"jsonrpc\": \"2.0\", "
++        "\"id\": \"42\", "
++        "\"error\": {"
++            "\"code\": -32602, "
++            "\"message\": "
++            "\"Invalid number of parameters\""
++        "}"
++    "}");
++
++    if (memcmp(expected, client_write_buf, sizeof(expected))) {
++        errx(
++            1, "got %.*s back (expected %s)",
++            client_write_buf_idx, client_write_buf, expected
++        );
++    }
++
++    return 0;
++}
