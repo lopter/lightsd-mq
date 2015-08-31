@@ -1,0 +1,121 @@
+# HG changeset patch
+# Parent  c23902866f11fb7974e191ac22c35d002b9dd03e
+Use a function to get a gateway's latency
+
+And cope with bad values, I should probably look into this closer, but
+the latency situation is quite complex actually, and hard to get right
+on pre 2.0 firmwares.
+
+diff --git a/core/proto.c b/core/proto.c
+--- a/core/proto.c
++++ b/core/proto.c
+@@ -221,7 +221,7 @@
+                     "}",
+             bulb_addr, site_addr,
+             bulb->gw->ip_addr, bulb->gw->port,
+-            (uintmax_t)LGTD_LIFX_GATEWAY_LATENCY(bulb->gw)
++            (uintmax_t)lgtd_lifx_gateway_latency(bulb->gw)
+         );
+ 
+ #define PRINT_LIFX_FW_TIMESTAMPS(fw_info, built_at_buf, installed_at_buf)       \
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -467,6 +467,17 @@
+     }
+ }
+ 
++lgtd_time_mono_t
++lgtd_lifx_gateway_latency(const struct lgtd_lifx_gateway *gw)
++{
++    assert(gw);
++
++    if (gw->last_req_at < gw->last_pkt_at) { // this doesn't look right
++        return gw->last_pkt_at - gw->last_req_at;
++    }
++    return 0;
++}
++
+ void
+ lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
+                                      const struct lgtd_lifx_packet_header *hdr,
+@@ -528,15 +539,15 @@
+         }
+     }
+ 
+-    int latency = LGTD_LIFX_GATEWAY_LATENCY(gw);
++    lgtd_time_mono_t latency = lgtd_lifx_gateway_latency(gw);
+     if (latency < LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS) {
+         if (!lgtd_timer_ispending(gw->refresh_timer)) {
+             int timeout = LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS - latency;
+             struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
+             lgtd_timer_reschedule(gw->refresh_timer, &tv);
+             lgtd_debug(
+-                "[%s]:%hu latency is %dms, scheduling next GET_LIGHT_STATE in %dms",
+-                gw->ip_addr, gw->port, latency, timeout
++                "[%s]:%hu latency is %jums, scheduling next GET_LIGHT_STATE in %dms",
++                gw->ip_addr, gw->port, (uintmax_t)latency, timeout
+             );
+         }
+         return;
+@@ -544,8 +555,8 @@
+ 
+     if (!gw->pending_refresh_req) {
+         lgtd_debug(
+-            "[%s]:%hu latency is %dms, sending GET_LIGHT_STATE now",
+-            gw->ip_addr, gw->port, latency
++            "[%s]:%hu latency is %jums, sending GET_LIGHT_STATE now",
++            gw->ip_addr, gw->port, (uintmax_t)latency
+         );
+         lgtd_lifx_gateway_send_get_all_light_state(gw);
+     } else {
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -67,7 +67,6 @@
+     lgtd_time_mono_t                last_req_at;
+     lgtd_time_mono_t                next_req_at;
+     lgtd_time_mono_t                last_pkt_at;
+-#define LGTD_LIFX_GATEWAY_LATENCY(gw) ((gw)->last_pkt_at - (gw)->last_req_at)
+     struct lgtd_lifx_message        pkt_ring[LGTD_LIFX_GATEWAY_PACKET_RING_SIZE];
+ #define LGTD_LIFX_GATEWAY_INC_MESSAGE_RING_INDEX(idx)  do { \
+     (idx) += 1;                                             \
+@@ -102,6 +101,7 @@
+ void lgtd_lifx_gateway_remove_and_close_bulb(struct lgtd_lifx_gateway *, struct lgtd_lifx_bulb *);
+ 
+ void lgtd_lifx_gateway_force_refresh(struct lgtd_lifx_gateway *);
++lgtd_time_mono_t lgtd_lifx_gateway_latency(const struct lgtd_lifx_gateway *);
+ 
+ void lgtd_lifx_gateway_enqueue_packet(struct lgtd_lifx_gateway *,
+                                       const struct lgtd_lifx_packet_header *,
+diff --git a/lifx/watchdog.c b/lifx/watchdog.c
+--- a/lifx/watchdog.c
++++ b/lifx/watchdog.c
+@@ -107,7 +107,7 @@
+     // gateways aren't bulbs themselves:
+     struct lgtd_lifx_gateway *gw, *next_gw;
+     LIST_FOREACH_SAFE(gw, &lgtd_lifx_gateways, link, next_gw) {
+-        int gw_lag = now - gw->last_pkt_at;
++        int gw_lag = lgtd_lifx_gateway_latency(gw);
+         if (gw_lag >= LGTD_LIFX_WATCHDOG_DEVICE_TIMEOUT_MSECS) {
+             lgtd_info(
+                 "closing bulb gateway [%s]:%hu that "
+diff --git a/tests/lifx/mock_gateway.h b/tests/lifx/mock_gateway.h
+--- a/tests/lifx/mock_gateway.h
++++ b/tests/lifx/mock_gateway.h
+@@ -9,6 +9,15 @@
+ struct lgtd_lifx_gateway_list lgtd_lifx_gateways =
+     LIST_HEAD_INITIALIZER(&lgtd_lifx_gateways);
+ 
++#ifndef MOCKED_LGTD_LIFX_GATEWAY_LATENCY
++lgtd_time_mono_t
++lgtd_lifx_gateway_latency(const struct lgtd_lifx_gateway *gw)
++{
++    (void)gw;
++    return 0;
++}
++#endif
++
+ #ifndef MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+ bool
+ lgtd_lifx_gateway_send_to_site(struct lgtd_lifx_gateway *gw,
