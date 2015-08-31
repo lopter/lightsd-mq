@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  908400de3b3d197b823822d4687b1a7c79e356ad
+# Parent  20325b9c7d7ff5a5ba56b86131f15801f96663cb
 Make the pipe/socket read loops fully resilient against incomplete json
 
 In other words you can send your request character by character with as
@@ -1454,17 +1454,20 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_type_float_between_0_and_360_valid.
 diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer.c b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
 --- a/tests/core/jsonrpc/test_jsonrpc_type_integer.c
 +++ b/tests/core/jsonrpc/test_jsonrpc_type_integer.c
-@@ -7,12 +7,12 @@
+@@ -7,12 +7,14 @@
  int
  main(void)
  {
 -    const char *json = "1234";
-+    const char *json = "[1234]";
++    const char json[] = "[1234]";
      jsmntok_t tokens[8];
  
-     parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
+-    parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
++    int rv = parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
  
 -    bool ok = lgtd_jsonrpc_type_integer(tokens, json);
++    printf("rv = %d\n", rv);
++
 +    bool ok = lgtd_jsonrpc_type_integer(&tokens[1], json);
  
      if (!ok) {
@@ -1477,7 +1480,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_invalid_characters.c b
  main(void)
  {
 -    const char *json = "-1a";
-+    const char *json = "[-1a]";
++    const char json[] = "[-1a]";
      jsmntok_t tokens[8];
  
      parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
@@ -1495,7 +1498,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c b/tests/core
  main(void)
  {
 -    const char *json = "9999999999";
-+    const char *json = "[9999999999]";
++    const char json[] = "[9999999999]";
      jsmntok_t tokens[8];
  
      parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
@@ -1513,7 +1516,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c b/tests/co
  main(void)
  {
 -    const char *json = "-9999999999";
-+    const char *json = "[-9999999999]";
++    const char json[] = "[-9999999999]";
      jsmntok_t tokens[8];
  
      parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
