@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  20325b9c7d7ff5a5ba56b86131f15801f96663cb
+# Parent  320cb216628b79690a6b4851d8d8182f333bd0cf
 Make the pipe/socket read loops fully resilient against incomplete json
 
 In other words you can send your request character by character with as
@@ -1498,7 +1498,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_big.c b/tests/core
  main(void)
  {
 -    const char *json = "9999999999";
-+    const char json[] = "[9999999999]";
++    const char json[] = "[99999999999999999999999]";
      jsmntok_t tokens[8];
  
      parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
@@ -1516,7 +1516,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_type_integer_too_small.c b/tests/co
  main(void)
  {
 -    const char *json = "-9999999999";
-+    const char json[] = "[-9999999999]";
++    const char json[] = "[-999999999999999999999]";
      jsmntok_t tokens[8];
  
      parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json));
