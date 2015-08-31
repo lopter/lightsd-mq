@@ -5,7 +5,5 @@ add_ambient_light_sensor_support.patch
 fix_client_read_loop.patch
 fix_crash_on_missing_params.patch
 add_location_group_packet_types.patch
-fixup_client_read_loop.patch
-test_client_read_loop.patch
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
