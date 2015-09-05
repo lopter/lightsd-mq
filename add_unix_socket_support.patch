@@ -1,0 +1,223 @@
+# HG changeset patch
+# Parent  887e6f6616a7c56a56e194502fb65c304fc1cabd
+Add support for unix sockets with the -s option (--socket)
+
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -81,12 +81,17 @@
+ {
+     assert(peer);
+ 
+-    if (peer->ss_family == AF_INET) {
++    switch (peer->ss_family) {
++    case AF_INET:
++        (void)0;
+         const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
+         return ntohs(in_peer->sin_port);
+-    } else {
++    case AF_INET6:
++        (void)0;
+         const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
+         return ntohs(in6_peer->sin6_port);
++    default:
++        return 0;
+     }
+ }
+ 
+@@ -143,6 +148,8 @@
+ "  [-c,--comand-pipe /command/fifo [+]] Open an unidirectional JSON-RPC \n"
+ "                                       command pipe at this location (can \n"
+ "                                       be repeated).\n"
++"  [-s,--socket /unix/socket [+]]       Open an Unix socket at this location \n"
++"                                       (can be repeated).\n"
+ "  [-f,--foreground]                    Stay in the foreground (default).\n"
+ "  [-d,--daemonize]                     Fork in the background.\n"
+ "  [-t,--no-timestamps]                 Disable timestamps in logs.\n"
+@@ -168,6 +175,7 @@
+     static const struct option long_opts[] = {
+         {"listen",          required_argument, NULL, 'l'},
+         {"command-pipe",    required_argument, NULL, 'c'},
++        {"socket",          required_argument, NULL, 's'},
+         {"foreground",      no_argument,       NULL, 'f'},
+         {"daemonize",       no_argument,       NULL, 'd'},
+         {"no-timestamps",   no_argument,       NULL, 't'},
+@@ -177,7 +185,7 @@
+         {"prefix",          no_argument,       NULL, 'p'},
+         {NULL,              0,                 NULL, 0}
+     };
+-    const char short_opts[] = "l:c:fdthv:V";
++    const char short_opts[] = "l:c:s:fdthv:V";
+ 
+     if (argc == 1) {
+         lgtd_usage(argv[0]);
+@@ -203,6 +211,11 @@
+                 exit(1);
+             }
+             break;
++        case 's':
++            if (!lgtd_listen_unix_open(optarg)) {
++                exit(1);
++            }
++            break;
+         case 'f':
+             lgtd_opts.foreground = true;
+             break;
+diff --git a/core/listen.c b/core/listen.c
+--- a/core/listen.c
++++ b/core/listen.c
+@@ -16,6 +16,8 @@
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ #include <sys/queue.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ #include <assert.h>
+ #include <err.h>
+ #include <stdbool.h>
+@@ -146,3 +148,73 @@
+     evutil_freeaddrinfo(res);
+     return false;
+ }
++
++bool
++lgtd_listen_unix_open(const char *path)
++{
++    assert(path);
++
++    static const int maxpathlen =
++        sizeof(struct sockaddr_un) - offsetof(struct sockaddr_un, sun_path);
++    int pathlen = strlen(path);
++    if (pathlen > maxpathlen) {
++        lgtd_warnx(
++            "%s (%d bytes) is too long, your system only supports paths up to "
++            "%d bytes", path, pathlen, maxpathlen
++        );
++        return false;
++    }
++
++    struct lgtd_listen *listener;
++    SLIST_FOREACH(listener, &lgtd_listeners, link) {
++        if (listener->addrlen == sizeof(struct sockaddr_un)) {
++            struct sockaddr_un *sockaddr;
++            sockaddr = (struct sockaddr_un *)listener->sockaddr;
++            if (!strcmp(sockaddr->sun_path, path)) {
++                return true;
++            }
++        }
++    }
++
++    evutil_socket_t fd = -1;
++
++    listener = calloc(1, sizeof(*listener));
++    if (!listener) {
++        goto error;
++    }
++
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd == -1) {
++        goto error;
++    }
++
++    struct sockaddr_un sockpath = { .sun_family = AF_UNIX };
++    memcpy(sockpath.sun_path, path, pathlen);
++    if (bind(fd, (struct sockaddr *)&sockpath, sizeof(sockpath)) == -1) {
++        goto error;
++    }
++
++    struct evconnlistener *evlistener = evconnlistener_new(
++        lgtd_ev_base,
++        lgtd_listen_accept_new_client,
++        listener,
++        LEV_OPT_CLOSE_ON_FREE,
++        -1,
++        fd
++    );
++    if (!evlistener) {
++        goto error;
++    }
++
++    lgtd_info("unix socket at %s", path);
++
++    return true;
++
++error:
++    lgtd_warn("can't open unix at %s", path);
++    if (fd != -1) {
++        close(fd);
++    }
++    free(listener);
++    return false;
++}
+diff --git a/core/listen.h b/core/listen.h
+--- a/core/listen.h
++++ b/core/listen.h
+@@ -23,6 +23,8 @@
+     SLIST_ENTRY(lgtd_listen)    link;
+     const char                  *addr;
+     const char                  *port;
++    ev_socklen_t                addrlen;
++    struct sockaddr             *sockaddr;
+     struct evconnlistener       *evlistener;
+ };
+ SLIST_HEAD(lgtd_listen_list, lgtd_listen);
+@@ -30,4 +32,5 @@
+ extern struct lgtd_listen_list lgtd_listeners;
+ 
+ bool lgtd_listen_open(const char *, const char *);
++bool lgtd_listen_unix_open(const char *);
+ void lgtd_listen_close_all(void);
+diff --git a/core/log.c b/core/log.c
+--- a/core/log.c
++++ b/core/log.c
+@@ -15,8 +15,10 @@
+ // You should have received a copy of the GNU General Public License
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
++#include <sys/socket.h>
+ #include <sys/tree.h>
+ #include <sys/time.h>
++#include <sys/un.h>
+ #include <arpa/inet.h>
+ #include <assert.h>
+ #include <endian.h>
+@@ -27,6 +29,7 @@
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <time.h>
+ 
+ #if LGTD_HAVE_LIBBSD
+@@ -95,15 +98,28 @@
+     assert(buf);
+     assert(buflen > 0);
+ 
+-    const char *printed;
+-    if (peer->ss_family == AF_INET) {
++    const char *printed = NULL;
++    switch (peer->ss_family) {
++    case AF_INET:
++        (void)0;
+         const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
+         int i = 0;
+         LGTD_SNPRINTF_APPEND(buf, i, buflen, "::ffff:");
+         printed = inet_ntop(AF_INET, &in_peer->sin_addr, &buf[i], buflen - i);
+-    } else {
++    case AF_INET6:
++        (void)0;
+         const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
+         printed = inet_ntop(AF_INET6, &in6_peer->sin6_addr, buf, buflen);
++        break;
++    case AF_UNIX:
++        (void)0;
++        const struct sockaddr_un *un_path = (const struct sockaddr_un *)peer;
++        printed = memcpy(buf, un_path->sun_path, LGTD_MIN(
++            strlen(un_path->sun_path), buflen
++        ));
++        break;
++    default:
++        break;
+     }
+     if (!printed) {
+         buf[0] = 0;
