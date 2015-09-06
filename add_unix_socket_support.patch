@@ -33,12 +33,12 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  SET(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
  
 -SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}} -pipe")
--SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99")
 +SET(CMAKE_C_FLAGS "-pipe ${CMAKE_C_FLAGS}")
- STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
++STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
 +SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}}")
 +STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
-+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c11")
+ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99")
+-STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
  SET(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE} "")
  
  ADD_DEFINITIONS(
@@ -1389,3 +1389,19 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
      );
  }
  
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -126,9 +126,10 @@
+ struct lgtd_listen *
+ lgtd_tests_insert_mock_listener(const char *addr, const char *port)
+ {
++    (void)addr;
++    (void)port;
++
+     struct lgtd_listen *listener = calloc(1, sizeof(*listener));
+-    listener->addr = addr;
+-    listener->port = port;
+     SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
+ 
+     return listener;
