@@ -1,7 +1,47 @@
 # HG changeset patch
-# Parent  f3af75bc1046e1f3269659b7b0254922d6092be4
+# Parent  4e63aff2211f55dc8b5c773910a3cd5b3bd69e5f
 Add support for unix sockets with the -s option (--socket)
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,10 +1,11 @@
+-CMAKE_MINIMUM_REQUIRED(VERSION 2.8.11)  # first version TARGET_INCLUDE_DIRECTORIES
++# first version with TARGET_INCLUDE_DIRECTORIES:
++CMAKE_MINIMUM_REQUIRED(VERSION 2.8.11)
+ 
+ PROJECT(LIGHTSD C)
+ 
+ SET(CPACK_PACKAGE_VERSION_MAJOR "0")
+ SET(CPACK_PACKAGE_VERSION_MINOR "9")
+-SET(CPACK_PACKAGE_VERSION_PATCH "1")
++SET(CPACK_PACKAGE_VERSION_PATCH "2")
+ SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+ 
+ MESSAGE(STATUS "CMake version: ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}.${CMAKE_PATCH_VERSION}")
+@@ -14,7 +15,7 @@
+ MESSAGE(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
+ MESSAGE(STATUS "Source directory: ${LIGHTSD_SOURCE_DIR}")
+ 
+-SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${LIGHTSD_SOURCE_DIR}/CMakeScripts)
++SET(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${LIGHTSD_SOURCE_DIR}/CMakeScripts")
+ 
+ ENABLE_TESTING()
+ 
+@@ -38,9 +39,11 @@
+ 
+ SET(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
+ 
+-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}} -pipe")
+-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99")
++SET(CMAKE_C_FLAGS "-pipe ${CMAKE_C_FLAGS}")
+ STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
++SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}}")
++STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
++SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c11")
+ SET(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE} "")
+ 
+ ADD_DEFINITIONS(
 diff --git a/README.rst b/README.rst
 --- a/README.rst
 +++ b/README.rst
@@ -68,14 +108,12 @@ diff --git a/core/client.c b/core/client.c
          lgtd_client_close(client);
      }
  }
-@@ -197,21 +194,31 @@
+@@ -197,21 +194,29 @@
  }
  
  struct lgtd_client *
 -lgtd_client_open(evutil_socket_t peer, const struct sockaddr_storage *peer_addr)
-+lgtd_client_open(evutil_socket_t peer,
-+                 const struct sockaddr *addr,
-+                 ev_socklen_t addrlen)
++lgtd_client_open(evutil_socket_t peer, const struct sockaddr *addr, int addrlen)
  {
      assert(peer != -1);
 -    assert(peer_addr);
@@ -103,7 +141,7 @@ diff --git a/core/client.c b/core/client.c
      bufferevent_setcb(
          client->io,
          lgtd_client_read_callback,
-@@ -219,15 +226,23 @@
+@@ -219,15 +224,23 @@
          lgtd_client_event_callback,
          client
      );
@@ -148,34 +186,50 @@ diff --git a/core/client.h b/core/client.h
  LIST_HEAD(lgtd_client_list, lgtd_client);
  
 -struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr_storage *);
-+struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr *, ev_socklen_t);
++struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr *, int);
  void lgtd_client_open_from_pipe(struct lgtd_client *);
  void lgtd_client_close_all(void);
  
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -135,9 +135,10 @@
+     }                                                         \
+ } while (0)
+ 
++    char addr[LGTD_SOCKADDR_STRLEN];
+     LOOP(
+         SLIST, &lgtd_listeners, struct lgtd_listen,
+-        "listening_on", "%s:[%s]", it->addr, it->port
++        "listening_on", "%s", LGTD_SOCKADDRTOA(it->sockaddr, addr)
+     );
+ 
+     LOOP(
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
-@@ -81,12 +81,17 @@
- {
-     assert(peer);
- 
--    if (peer->ss_family == AF_INET) {
-+    switch (peer->ss_family) {
-+    case AF_INET:
-+        (void)0;
-         const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
-         return ntohs(in_peer->sin_port);
--    } else {
-+    case AF_INET6:
-+        (void)0;
-         const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
-         return ntohs(in6_peer->sin6_port);
-+    default:
-+        return 0;
-     }
+@@ -76,20 +76,6 @@
+ #endif
  }
  
-@@ -143,6 +148,8 @@
+-short
+-lgtd_sockaddrport(const struct sockaddr_storage *peer)
+-{
+-    assert(peer);
+-
+-    if (peer->ss_family == AF_INET) {
+-        const struct sockaddr_in *in_peer = (const struct sockaddr_in *)peer;
+-        return ntohs(in_peer->sin_port);
+-    } else {
+-        const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
+-        return ntohs(in6_peer->sin6_port);
+-    }
+-}
+-
+ static void
+ lgtd_signal_event_callback(int signum, short events, void *ctx)
+ {
+@@ -143,6 +129,8 @@
  "  [-c,--comand-pipe /command/fifo [+]] Open an unidirectional JSON-RPC \n"
  "                                       command pipe at this location (can \n"
  "                                       be repeated).\n"
@@ -184,7 +238,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  "  [-f,--foreground]                    Stay in the foreground (default).\n"
  "  [-d,--daemonize]                     Fork in the background.\n"
  "  [-t,--no-timestamps]                 Disable timestamps in logs.\n"
-@@ -168,6 +175,7 @@
+@@ -168,6 +156,7 @@
      static const struct option long_opts[] = {
          {"listen",          required_argument, NULL, 'l'},
          {"command-pipe",    required_argument, NULL, 'c'},
@@ -192,7 +246,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          {"foreground",      no_argument,       NULL, 'f'},
          {"daemonize",       no_argument,       NULL, 'd'},
          {"no-timestamps",   no_argument,       NULL, 't'},
-@@ -177,7 +185,7 @@
+@@ -177,7 +166,7 @@
          {"prefix",          no_argument,       NULL, 'p'},
          {NULL,              0,                 NULL, 0}
      };
@@ -201,7 +255,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  
      if (argc == 1) {
          lgtd_usage(argv[0]);
-@@ -203,6 +211,11 @@
+@@ -203,6 +192,11 @@
                  exit(1);
              }
              break;
@@ -213,6 +267,14 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          case 'f':
              lgtd_opts.foreground = true;
              break;
+@@ -229,6 +223,7 @@
+             break;
+         case 'V':
+             printf("lightsd %s\n", LGTD_VERSION);
++            lgtd_cleanup();
+             return 0;
+         case 'p':
+             printf(
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
@@ -253,45 +315,58 @@ diff --git a/core/listen.c b/core/listen.c
  #include <stdbool.h>
  #include <stdlib.h>
  #include <string.h>
-@@ -39,26 +43,25 @@
+@@ -39,26 +43,38 @@
  static void
  lgtd_listen_accept_new_client(struct evconnlistener *evlistener,
                                evutil_socket_t peer,
 -                              struct sockaddr *peer_addr,
--                              int addrlen,
 +                              struct sockaddr *addr,
-+                              ev_socklen_t addrlen,
+                               int addrlen,
                                void *ctx)
  {
      (void)evlistener;
 -    (void)addrlen;
++    struct lgtd_listen *listener = ctx;
  
-+    char buf[LGTD_SOCKADDR_STRLEN];
-     struct lgtd_listen *listener = ctx;
+-    struct lgtd_listen *listener = ctx;
 -    struct lgtd_client *client = lgtd_client_open(
 -        peer, (struct sockaddr_storage *)peer_addr
 -    );
 -    if (client) {
 -        lgtd_info(
 -            "accepted new client [%s]:%hu", client->ip_addr, client->port
-+    struct lgtd_client *client = lgtd_client_open(peer, addr, addrlen);
++    char bufserver[LGTD_SOCKADDR_STRLEN];
++    LGTD_SOCKADDRTOA(listener->sockaddr, bufserver);
++
++    struct lgtd_client *client = NULL;
++    if (addr->sa_family == AF_UNIX) {
++        struct sockaddr_storage sockname;
++        memset(&sockname, 0, sizeof(sockname));
++        ev_socklen_t socklen = sizeof(sockname);
++        getsockname(peer, (struct sockaddr *)&sockname, &socklen);
++        client = lgtd_client_open(peer, (struct sockaddr *)&sockname, socklen);
++    } else {
++        client = lgtd_client_open(peer, addr, addrlen);
++    }
++
 +    if (!client) {
 +        char bufclient[LGTD_SOCKADDR_STRLEN];
 +        lgtd_warn(
 +            "can't accept new client %s on %s",
-+            LGTD_SOCKADDRTOA(addr, bufclient),
-+            LGTD_SOCKADDRTOA(listener->sockaddr, buf)
++            LGTD_SOCKADDRTOA(client->addr, bufclient),
++            bufserver
          );
          return;
      }
 -    lgtd_warn(
 -        "can't accept new client on %s:%s", listener->addr, listener->port
 -    );
-+    lgtd_info("accepted new client %s", LGTD_SOCKADDRTOA(client->addr, buf));
++
++    lgtd_info("accepted new client %s", bufserver);
  }
  
  void
-@@ -67,6 +70,11 @@
+@@ -67,7 +83,15 @@
      while (!SLIST_EMPTY(&lgtd_listeners)) {
          struct lgtd_listen *listener = SLIST_FIRST(&lgtd_listeners);
          SLIST_REMOVE_HEAD(&lgtd_listeners, link);
@@ -301,9 +376,13 @@ diff --git a/core/listen.c b/core/listen.c
 +            unlink(sockpath->sun_path);
 +        }
          evconnlistener_free(listener->evlistener);
++        char addr[LGTD_SOCKADDR_STRLEN];
++        LGTD_SOCKADDRTOA(listener->sockaddr, addr);
++        lgtd_info("closed socket %s", addr);
          free(listener);
      }
-@@ -80,13 +88,6 @@
+ 
+@@ -80,13 +104,6 @@
      assert(addr);
      assert(port);
  
@@ -317,7 +396,7 @@ diff --git a/core/listen.c b/core/listen.c
      struct evutil_addrinfo *res = NULL, hints = {
          .ai_family = AF_UNSPEC,
          .ai_socktype = SOCK_STREAM,
-@@ -102,13 +103,25 @@
+@@ -102,13 +119,25 @@
          return false;
      }
  
@@ -343,7 +422,7 @@ diff --git a/core/listen.c b/core/listen.c
          evlistener = evconnlistener_new_bind(
              lgtd_ev_base,
              lgtd_listen_accept_new_client,
-@@ -121,9 +134,11 @@
+@@ -121,9 +150,11 @@
          if (!evlistener) {
              goto error;
          }
@@ -357,7 +436,7 @@ diff --git a/core/listen.c b/core/listen.c
          SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
          lgtd_info(
              "listening on %s:%s (%s)",
-@@ -139,10 +154,109 @@
+@@ -139,10 +170,110 @@
  
  error:
      lgtd_warn("can't listen on %s:%s", addr, port);
@@ -446,7 +525,7 @@ diff --git a/core/listen.c b/core/listen.c
 +        goto error;
 +    }
 +
-+    struct evconnlistener *evlistener = evconnlistener_new(
++    listener->evlistener = evconnlistener_new(
 +        lgtd_ev_base,
 +        lgtd_listen_accept_new_client,
 +        listener,
@@ -454,11 +533,12 @@ diff --git a/core/listen.c b/core/listen.c
 +        -1,
 +        fd
 +    );
-+    if (!evlistener) {
++    if (!listener->evlistener) {
 +        goto error;
 +    }
 +
-+    lgtd_info("unix socket at %s", path);
++    SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
++    lgtd_info("unix socket ready at %s", path);
 +
 +    return true;
 +
@@ -512,7 +592,7 @@ diff --git a/core/log.c b/core/log.c
  #include <time.h>
  
  #if LGTD_HAVE_LIBBSD
-@@ -88,23 +91,48 @@
+@@ -88,23 +91,46 @@
      return buf;
  }
  
@@ -547,8 +627,9 @@ diff --git a/core/log.c b/core/log.c
 +    case AF_INET6:
 +        (void)0;
          const struct sockaddr_in6 *in6_peer = (const struct sockaddr_in6 *)peer;
+-        printed = inet_ntop(AF_INET6, &in6_peer->sin6_addr, buf, buflen);
 +        LGTD_SNPRINTF_APPEND(buf, i, buflen, "[");
-         printed = inet_ntop(AF_INET6, &in6_peer->sin6_addr, buf, buflen);
++        printed = inet_ntop(AF_INET6, &in6_peer->sin6_addr, &buf[i], buflen - i);
 +        if (printed) {
 +            i += strlen(printed);
 +            LGTD_SNPRINTF_APPEND(buf, i, buflen, "]:%hu", in6_peer->sin6_port);
@@ -557,10 +638,8 @@ diff --git a/core/log.c b/core/log.c
 +    case AF_UNIX:
 +        (void)0;
 +        const struct sockaddr_un *un_path = (const struct sockaddr_un *)peer;
-+        int to_copy = LGTD_MIN(strlen(un_path->sun_path), (unsigned)buflen - 1);
-+        if (to_copy) {
-+            printed = memcpy(buf, un_path->sun_path, to_copy);
-+        }
++        LGTD_SNPRINTF_APPEND(buf, i, buflen, "at %s", un_path->sun_path);
++        printed = buf;
 +        break;
 +    default:
 +        break;
@@ -569,7 +648,7 @@ diff --git a/core/log.c b/core/log.c
      if (!printed) {
          buf[0] = 0;
          lgtd_warnx("not enough space to log an ip address");
-@@ -112,6 +140,8 @@
+@@ -112,6 +138,8 @@
          abort();
  #endif
      }
@@ -686,7 +765,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +        elif parts.scheme == "tcp":
 +            self._socket = socket.create_connection((parts.hostname, parts.port))
 +        else:
-+            raise ValueError("Unsupported scheme {}".format(parts.scheme))
++            raise ValueError("Unsupported url {}".format(url))
 +
          self._pipeline = []
          self._batch = False
@@ -702,7 +781,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
      )
  
      try:
-@@ -213,18 +223,17 @@
+@@ -213,18 +223,19 @@
          description="lightsc.py is an interactive lightsd Python client"
      )
      parser.add_argument(
@@ -715,24 +794,21 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +             "unix:///run/lightsd.sock or tcp://[::1]:1234)"
      )
      args = parser.parse_args()
--    try:
++
+     try:
 -        _drop_to_shell(LightsClient(args.host, args.port))
 -    except socket.error as ex:
--        print(
++        with LightsClient(args.url) as client:
++            _drop_to_shell(client)
++    except Exception as ex:
+         print(
 -            "Couldn't connect to lightsd@{}:{}, is it running? "
 -            "({})".format(args.host, args.port, ex.strerror),
--            file=sys.stderr
--        )
--        sys.exit(1)
-+#   try:
-+    _drop_to_shell(LightsClient(args.url))
-+#   except Exception as ex:
-+#       print(
-+#           "Couldn't connect to {}, is it running? "
-+#           "({})".format(args.url, ex),
-+#           file=sys.stderr
-+#       )
-+#       sys.exit(1)
++            "Couldn't connect to {}, is lightsd running? "
++            "({})".format(args.url, ex),
+             file=sys.stderr
+         )
+         sys.exit(1)
 diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 --- a/lifx/broadcast.c
 +++ b/lifx/broadcast.c
