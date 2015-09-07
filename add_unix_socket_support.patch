@@ -366,14 +366,12 @@ diff --git a/core/listen.c b/core/listen.c
  }
  
  void
-@@ -67,7 +83,16 @@
+@@ -67,7 +83,14 @@
      while (!SLIST_EMPTY(&lgtd_listeners)) {
          struct lgtd_listen *listener = SLIST_FIRST(&lgtd_listeners);
          SLIST_REMOVE_HEAD(&lgtd_listeners, link);
 +        if (listener->sockaddr->sa_family == AF_UNIX) {
-+            struct sockaddr_un *sockpath;
-+            sockpath = (struct sockaddr_un *)listener->sockaddr;
-+            unlink(sockpath->sun_path);
++            unlink(((struct sockaddr_un *)listener->sockaddr)->sun_path);
 +        }
          evconnlistener_free(listener->evlistener);
 +        char addr[LGTD_SOCKADDR_STRLEN];
@@ -383,7 +381,7 @@ diff --git a/core/listen.c b/core/listen.c
          free(listener);
      }
  
-@@ -80,13 +105,6 @@
+@@ -80,13 +103,6 @@
      assert(addr);
      assert(port);
  
@@ -397,7 +395,7 @@ diff --git a/core/listen.c b/core/listen.c
      struct evutil_addrinfo *res = NULL, hints = {
          .ai_family = AF_UNSPEC,
          .ai_socktype = SOCK_STREAM,
-@@ -102,13 +120,25 @@
+@@ -102,13 +118,25 @@
          return false;
      }
  
@@ -423,7 +421,7 @@ diff --git a/core/listen.c b/core/listen.c
          evlistener = evconnlistener_new_bind(
              lgtd_ev_base,
              lgtd_listen_accept_new_client,
-@@ -121,9 +151,11 @@
+@@ -121,9 +149,11 @@
          if (!evlistener) {
              goto error;
          }
@@ -437,7 +435,7 @@ diff --git a/core/listen.c b/core/listen.c
          SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
          lgtd_info(
              "listening on %s:%s (%s)",
-@@ -139,10 +171,110 @@
+@@ -139,10 +169,110 @@
  
  error:
      lgtd_warn("can't listen on %s:%s", addr, port);

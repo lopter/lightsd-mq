@@ -1,0 +1,41 @@
+# HG changeset patch
+# Parent  87c34a0a6e12448f22923853d35ccf70826ba2eb
+
+diff --git a/core/client.c b/core/client.c
+--- a/core/client.c
++++ b/core/client.c
+@@ -49,7 +49,9 @@
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(clients, -1);
+ 
+     LIST_REMOVE(client, link);
+-    bufferevent_free(client->io);
++    if (client->io) { // XXX: see ugly hack in lgtd_jsonrpc_dispatch_one
++        bufferevent_free(client->io);
++    }
+     free(client);
+ }
+ 
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -1160,7 +1160,20 @@
+                 );
+                 goto error;
+             }
++            struct bufferevent *client_io;
++            if (!request.id) {
++                // Ugly hack to behave correctly on jsonrpc notifications, it's
++                // not worth it do it properly right now. It is especially ugly
++                // since we can't properly close that client now (but we don't
++                // do that in lgtd_proto and signals are deferred with the
++                // event loop).
++                client_io = client->io;
++                client->io = NULL;
++            }
+             methods[i].method(client);
++            if (!request.id) {
++                client->io = client_io;
++            }
+             client->current_request = NULL;
+             return request.request_ntokens;
+         }
