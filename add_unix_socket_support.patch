@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  4e63aff2211f55dc8b5c773910a3cd5b3bd69e5f
+# Parent  e42f250e88b5a28532e25521a60238a483f8655e
 Add support for unix sockets with the -s option (--socket)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -674,22 +674,7 @@ diff --git a/core/proto.c b/core/proto.c
      lgtd_client_start_send_response(client);
      lgtd_client_write_string(client, "[");
      struct lgtd_router_device *device;
-@@ -203,11 +206,13 @@
- 
-         char buf[2048],
-              site_addr[LGTD_LIFX_ADDR_STRLEN],
--             bulb_addr[LGTD_LIFX_ADDR_STRLEN];
-+             bulb_addr[LGTD_LIFX_ADDR_STRLEN],
-+             gw_ip_addr[LGTD_SOCKADDR_STRLEN];
-         int i = 0;
- 
-         LGTD_IEEE8023MACTOA(bulb->addr, bulb_addr);
-         LGTD_IEEE8023MACTOA(bulb->gw->site.as_array, site_addr);
-+        LGTD_SOCKADDRTOA((const struct sockaddr *)&bulb->gw->peer, gw_ip_addr);
- 
-         LGTD_SNPRINTF_APPEND(
-             buf, i, (int)sizeof(buf),
-@@ -216,11 +221,10 @@
+@@ -216,11 +219,10 @@
                      "\"addr\":\"%s\","
                      "\"gateway\":{"
                          "\"site\":\"%s\","
@@ -699,11 +684,11 @@ diff --git a/core/proto.c b/core/proto.c
                      "}",
 -            bulb_addr, site_addr,
 -            bulb->gw->ip_addr, bulb->gw->port,
-+            bulb_addr, site_addr, gw_ip_addr,
++            bulb_addr, site_addr, bulb->gw->peeraddr,
              (uintmax_t)lgtd_lifx_gateway_latency(bulb->gw)
          );
  
-@@ -347,8 +351,8 @@
+@@ -347,8 +349,8 @@
          if (i >= (int)sizeof(buf)) {
              lgtd_warnx(
                  "can't send state of bulb %s (%s) to client "
@@ -714,7 +699,7 @@ diff --git a/core/proto.c b/core/proto.c
              );
              continue;
          }
-@@ -365,9 +369,9 @@
+@@ -365,9 +367,9 @@
              } else {
                  lgtd_warnx(
                      "tag_id %d on bulb %.*s (%s) doesn't "
@@ -722,22 +707,18 @@ diff --git a/core/proto.c b/core/proto.c
 +                    "exist on gw %s (site %s)",
                      tag_id, (int)sizeof(bulb->state.label), bulb->state.label,
 -                    bulb_addr, bulb->gw->ip_addr, bulb->gw->port, site_addr
-+                    bulb_addr, gw_ip_addr, site_addr
++                    bulb_addr, bulb->gw->peeraddr, site_addr
                  );
              }
          }
-@@ -438,9 +442,12 @@
-         if (!enqueued) {
+@@ -439,8 +441,8 @@
              goto error_site_alloc;
          }
-+        char site_gw_ip_addr[LGTD_SOCKADDR_STRLEN];
          lgtd_info(
 -            "created tag [%s] with id %d on gw [%s]:%hu",
 -            tag_label, tag_id, site->gw->ip_addr, site->gw->port
 +            "created tag [%s] with id %d on gw %s",
-+            tag_label, tag_id, LGTD_SOCKADDRTOA(
-+                (const struct sockaddr *)&site->gw->peer, site_gw_ip_addr
-+            )
++            tag_label, tag_id, site->gw->peeraddr
          );
      }
  
@@ -1389,19 +1370,686 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
      );
  }
  
+diff --git a/tests/core/client/CMakeLists.txt b/tests/core/client/CMakeLists.txt
+--- a/tests/core/client/CMakeLists.txt
++++ b/tests/core/client/CMakeLists.txt
+@@ -3,17 +3,18 @@
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
+-ADD_LIBRARY(
++ADD_CORE_LIBRARY(
+     test_core_client STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/jsmn.c
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
+     ${LIGHTSD_SOURCE_DIR}/core/stats.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+ 
+-TARGET_LINK_LIBRARIES(test_core_client ${TIME_MONOTONIC_LIBRARY})
+-
+ FUNCTION(ADD_CLIENT_TEST TEST_SOURCE)
+     ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_core_client)
+ ENDFUNCTION()
+diff --git a/tests/core/client/test_client_read_callback.c b/tests/core/client/test_client_read_callback.c
+--- a/tests/core/client/test_client_read_callback.c
++++ b/tests/core/client/test_client_read_callback.c
+@@ -144,9 +144,10 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
++    lgtd_client_read_callback(FAKE_BUFFEREVENT, client);
+ 
+     if (!evbuffer_get_contiguous_space_call_count) {
+         errx(1, "evbuffer_get_contiguous_space not called");
+diff --git a/tests/core/client/test_client_read_callback_extra_data.c b/tests/core/client/test_client_read_callback_extra_data.c
+--- a/tests/core/client/test_client_read_callback_extra_data.c
++++ b/tests/core/client/test_client_read_callback_extra_data.c
+@@ -204,9 +204,10 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
++    lgtd_client_read_callback(FAKE_BUFFEREVENT, client);
+ 
+     if (!evbuffer_get_contiguous_space_call_count) {
+         errx(1, "evbuffer_get_contiguous_space not called");
+diff --git a/tests/core/client/test_client_read_callback_multiple_requests.c b/tests/core/client/test_client_read_callback_multiple_requests.c
+--- a/tests/core/client/test_client_read_callback_multiple_requests.c
++++ b/tests/core/client/test_client_read_callback_multiple_requests.c
+@@ -189,9 +189,10 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
++    lgtd_client_read_callback(FAKE_BUFFEREVENT, client);
+ 
+     if (!evbuffer_get_contiguous_space_call_count) {
+         errx(1, "evbuffer_get_contiguous_space not called");
+diff --git a/tests/core/client/test_client_read_callback_part_too_large.c b/tests/core/client/test_client_read_callback_part_too_large.c
+--- a/tests/core/client/test_client_read_callback_part_too_large.c
++++ b/tests/core/client/test_client_read_callback_part_too_large.c
+@@ -184,9 +184,10 @@
+         );
+     }
+ 
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
++    lgtd_client_read_callback(FAKE_BUFFEREVENT, client);
+ 
+     if (!evbuffer_get_contiguous_space_call_count) {
+         errx(1, "evbuffer_get_contiguous_space not called");
+diff --git a/tests/core/client/test_client_read_callback_yield_on_eagain.c b/tests/core/client/test_client_read_callback_yield_on_eagain.c
+--- a/tests/core/client/test_client_read_callback_yield_on_eagain.c
++++ b/tests/core/client/test_client_read_callback_yield_on_eagain.c
+@@ -185,10 +185,11 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
+-    lgtd_client_read_callback(FAKE_BUFFEREVENT, &client);
++    lgtd_client_read_callback(FAKE_BUFFEREVENT, client);
++    lgtd_client_read_callback(FAKE_BUFFEREVENT, client);
+ 
+     if (!evbuffer_get_contiguous_space_call_count) {
+         errx(1, "evbuffer_get_contiguous_space not called");
+diff --git a/tests/core/daemon/test_daemon_update_proctitle.c b/tests/core/daemon/test_daemon_update_proctitle.c
+--- a/tests/core/daemon/test_daemon_update_proctitle.c
++++ b/tests/core/daemon/test_daemon_update_proctitle.c
+@@ -76,19 +76,19 @@
+     }
+ 
+     expected = (
+-        "listening_on(foobar.com:[1234]); "
++        "listening_on([::ffff:127.0.0.1]:1234); "
+         "lifx_gateways(found=1); "
+         "bulbs(found=2, on=0); "
+         "clients(connected=0)"
+     );
+-    lgtd_tests_insert_mock_listener("foobar.com", "1234");
++    lgtd_tests_insert_mock_listener("127.0.0.1", 1234);
+     lgtd_daemon_update_proctitle();
+     if (setproctitle_call_count != 5) {
+         errx(1, "setproctitle should have been called");
+     }
+ 
+     expected = (
+-        "listening_on(foobar.com:[1234]); "
++        "listening_on([::ffff:127.0.0.1]:1234); "
+         "lifx_gateways(found=1); "
+         "bulbs(found=2, on=1); "
+         "clients(connected=0)"
+@@ -99,7 +99,7 @@
+     }
+ 
+     expected = (
+-        "listening_on(foobar.com:[1234]); "
++        "listening_on([::ffff:127.0.0.1]:1234); "
+         "lifx_gateways(found=1); "
+         "bulbs(found=2, on=1); "
+         "clients(connected=1)"
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+--- a/tests/core/proto/test_proto_get_light_state.c
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -37,7 +37,8 @@
+     }
+ 
+     static struct lgtd_lifx_gateway gw_bulb_1 = {
+-        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs)
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs),
++        .peeraddr = "[::ffff:127.0.0.1]:1"
+     };
+     static struct lgtd_lifx_bulb bulb_1 = {
+         .addr = { 1, 2, 3, 4, 5 },
+@@ -69,7 +70,8 @@
+     struct lgtd_lifx_tag *gw_2_tag_3 = lgtd_tests_insert_mock_tag("wave~");
+     static struct lgtd_lifx_gateway gw_bulb_2 = {
+         .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_2.bulbs),
+-        .tag_ids = 0x7
++        .tag_ids = 0x7,
++        .peeraddr = "[::ffff:127.0.0.1]:2"
+     };
+     lgtd_tests_add_tag_to_gw(gw_2_tag_1, &gw_bulb_2, 0);
+     lgtd_tests_add_tag_to_gw(gw_2_tag_2, &gw_bulb_2, 1);
+@@ -104,10 +106,11 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+-    lgtd_proto_get_light_state(&client, targets);
++    lgtd_proto_get_light_state(client, targets);
+ 
+     const char expected[] = ("["
+         "{"
+@@ -115,7 +118,7 @@
+                 "\"addr\":\"05:04:03:02:01:00\","
+                 "\"gateway\":{"
+                     "\"site\":\"00:00:00:00:00:00\","
+-                    "\"url\":\"tcp://[]:0\","
++                    "\"url\":\"tcp://[::ffff:127.0.0.1]:2\","
+                     "\"latency\":0"
+                 "},"
+                 "\"mcu\":{"
+@@ -158,7 +161,7 @@
+                 "\"addr\":\"01:02:03:04:05:00\","
+                 "\"gateway\":{"
+                     "\"site\":\"00:00:00:00:00:00\","
+-                    "\"url\":\"tcp://[]:0\","
++                    "\"url\":\"tcp://[::ffff:127.0.0.1]:1\","
+                     "\"latency\":0"
+                 "},"
+                 "\"mcu\":{"
+@@ -228,7 +231,7 @@
+                 "\"addr\":\"05:04:03:02:01:00\","
+                 "\"gateway\":{"
+                     "\"site\":\"00:00:00:00:00:00\","
+-                    "\"url\":\"tcp://[]:0\","
++                    "\"url\":\"tcp://[::ffff:127.0.0.1]:2\","
+                     "\"latency\":0"
+                 "},"
+                 "\"mcu\":{\"firmware_version\":\"2.1\"},"
+@@ -246,7 +249,7 @@
+                 "\"addr\":\"01:02:03:04:05:00\","
+                 "\"gateway\":{"
+                     "\"site\":\"00:00:00:00:00:00\","
+-                    "\"url\":\"tcp://[]:0\","
++                    "\"url\":\"tcp://[::ffff:127.0.0.1]:1\","
+                     "\"latency\":0"
+                 "},"
+                 "\"mcu\":{\"firmware_version\":\"0.0\"},"
+@@ -263,7 +266,7 @@
+ 
+     reset_client_write_buf();
+ 
+-    lgtd_proto_get_light_state(&client, targets);
++    lgtd_proto_get_light_state(client, targets);
+ 
+     if (client_write_buf_idx != sizeof(expected_info) - 1) {
+         lgtd_errx(
+diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+@@ -38,10 +38,11 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+-    lgtd_proto_get_light_state(&client, targets);
++    lgtd_proto_get_light_state(client, targets);
+ 
+     const char expected[] = "[]";
+ 
+diff --git a/tests/core/proto/test_proto_get_light_state_label_overflow.c b/tests/core/proto/test_proto_get_light_state_label_overflow.c
+--- a/tests/core/proto/test_proto_get_light_state_label_overflow.c
++++ b/tests/core/proto/test_proto_get_light_state_label_overflow.c
+@@ -37,7 +37,8 @@
+     }
+ 
+     static struct lgtd_lifx_gateway gw_bulb_1 = {
+-        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs)
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs),
++        .peeraddr = "[::ffff:127.0.0.1]:1"
+     };
+     static struct lgtd_lifx_bulb bulb_1 = {
+         .addr = { 1, 2, 3, 4, 5 },
+@@ -70,7 +71,8 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_opts.verbosity = LGTD_INFO;
+@@ -81,7 +83,7 @@
+                 "\"addr\":\"01:02:03:04:05:00\","
+                 "\"gateway\":{"
+                     "\"site\":\"00:00:00:00:00:00\","
+-                    "\"url\":\"tcp://[]:0\","
++                    "\"url\":\"tcp://[::ffff:127.0.0.1]:1\","
+                     "\"latency\":0"
+                 "},"
+                 "\"mcu\":{\"firmware_version\":\"0.0\"},"
+@@ -98,7 +100,7 @@
+ 
+     reset_client_write_buf();
+ 
+-    lgtd_proto_get_light_state(&client, targets);
++    lgtd_proto_get_light_state(client, targets);
+ 
+     if (client_write_buf_idx != sizeof(expected_info) - 1) {
+         lgtd_errx(
+diff --git a/tests/core/proto/test_proto_get_light_state_null_device_list.c b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_null_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+@@ -48,10 +48,11 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+-    lgtd_proto_get_light_state(&client, targets);
++    lgtd_proto_get_light_state(client, targets);
+ 
+     if (!send_error_called) {
+         lgtd_errx(1, "lgtd_client_send_error hasn't been called");
+diff --git a/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c b/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c
+--- a/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c
++++ b/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c
+@@ -34,7 +34,8 @@
+         SLIST_HEAD_INITIALIZER(&devices);
+ 
+     static struct lgtd_lifx_gateway gw_bulb_1 = {
+-        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs)
++        .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_1.bulbs),
++        .peeraddr = "[::ffff:127.0.0.1]:1"
+     };
+     static struct lgtd_lifx_bulb bulb_1 = {
+         .addr = { 1, 2, 3, 4, 5 },
+@@ -57,7 +58,8 @@
+     struct lgtd_lifx_tag *gw_2_tag_3 = lgtd_tests_insert_mock_tag("wave~");
+     static struct lgtd_lifx_gateway gw_bulb_2 = {
+         .bulbs = LIST_HEAD_INITIALIZER(&gw_bulb_2.bulbs),
+-        .tag_ids = 0x7
++        .tag_ids = 0x7,
++        .peeraddr = "[::ffff:127.0.0.1]:2"
+     };
+     lgtd_tests_add_tag_to_gw(gw_2_tag_1, &gw_bulb_2, 0);
+     lgtd_tests_add_tag_to_gw(gw_2_tag_2, &gw_bulb_2, 1);
+@@ -84,12 +86,13 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     lgtd_opts.verbosity = LGTD_INFO;
+ 
+-    lgtd_proto_get_light_state(&client, targets);
++    lgtd_proto_get_light_state(client, targets);
+ 
+     const char expected[] = ("["
+         "{"
+@@ -97,7 +100,7 @@
+                 "\"addr\":\"05:04:03:02:01:00\","
+                 "\"gateway\":{"
+                     "\"site\":\"00:00:00:00:00:00\","
+-                    "\"url\":\"tcp://[]:0\","
++                    "\"url\":\"tcp://[::ffff:127.0.0.1]:2\","
+                     "\"latency\":0"
+                 "},"
+                 "\"mcu\":{\"firmware_version\":\"0.0\"},"
+@@ -115,7 +118,7 @@
+                 "\"addr\":\"01:02:03:04:05:00\","
+                 "\"gateway\":{"
+                     "\"site\":\"00:00:00:00:00:00\","
+-                    "\"url\":\"tcp://[]:0\","
++                    "\"url\":\"tcp://[::ffff:127.0.0.1]:1\","
+                     "\"latency\":0"
+                 "},"
+                 "\"mcu\":{\"firmware_version\":\"0.0\"},"
+diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_proto_power_off.c
+--- a/tests/core/proto/test_proto_power_off.c
++++ b/tests/core/proto/test_proto_power_off.c
+@@ -55,9 +55,10 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_off(&client, targets);
++    lgtd_proto_power_off(client, targets);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_off_routing_error.c b/tests/core/proto/test_proto_power_off_routing_error.c
+--- a/tests/core/proto/test_proto_power_off_routing_error.c
++++ b/tests/core/proto/test_proto_power_off_routing_error.c
+@@ -55,9 +55,10 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_off(&client, targets);
++    lgtd_proto_power_off(client, targets);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
+--- a/tests/core/proto/test_proto_power_on.c
++++ b/tests/core/proto/test_proto_power_on.c
+@@ -55,9 +55,10 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_on(&client, targets);
++    lgtd_proto_power_on(client, targets);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/proto/test_proto_power_on_routing_error.c
+--- a/tests/core/proto/test_proto_power_on_routing_error.c
++++ b/tests/core/proto/test_proto_power_on_routing_error.c
+@@ -55,9 +55,10 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_on(&client, targets);
++    lgtd_proto_power_on(client, targets);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_toggle.c b/tests/core/proto/test_proto_power_toggle.c
+--- a/tests/core/proto/test_proto_power_toggle.c
++++ b/tests/core/proto/test_proto_power_toggle.c
+@@ -127,10 +127,11 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+-    lgtd_proto_power_toggle(&client, targets);
++    lgtd_proto_power_toggle(client, targets);
+ 
+     const char expected[] = "true";
+ 
+diff --git a/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c b/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c
+--- a/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c
++++ b/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c
+@@ -66,10 +66,11 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+-    lgtd_proto_power_toggle(&client, targets);
++    lgtd_proto_power_toggle(client, targets);
+ 
+     if (client_send_error_call_count != 1) {
+         errx(1, "lgtd_client_send_error called %d times (expected 1)",
+diff --git a/tests/core/proto/test_proto_set_label.c b/tests/core/proto/test_proto_set_label.c
+--- a/tests/core/proto/test_proto_set_label.c
++++ b/tests/core/proto/test_proto_set_label.c
+@@ -69,9 +69,10 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_set_label(&client, targets, "test");
++    lgtd_proto_set_label(client, targets, "test");
+ 
+     if (!router_send_call_count) {
+         errx(1, "lgtd_router_send wasn't called");
+diff --git a/tests/core/proto/test_proto_set_label_too_long.c b/tests/core/proto/test_proto_set_label_too_long.c
+--- a/tests/core/proto/test_proto_set_label_too_long.c
++++ b/tests/core/proto/test_proto_set_label_too_long.c
+@@ -71,9 +71,10 @@
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_set_label(&client, targets, test_label);
++    lgtd_proto_set_label(client, targets, test_label);
+ 
+     if (!router_send_call_count) {
+         errx(1, "lgtd_router_send wasn't called");
+diff --git a/tests/core/proto/test_proto_tag_create.c b/tests/core/proto/test_proto_tag_create.c
+--- a/tests/core/proto/test_proto_tag_create.c
++++ b/tests/core/proto/test_proto_tag_create.c
+@@ -220,11 +220,12 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+     setup_devices();
+ 
+-    lgtd_proto_tag(&client, FAKE_TARGET_LIST, "dub");
++    lgtd_proto_tag(client, FAKE_TARGET_LIST, "dub");
+ 
+     const char expected[] = "true";
+     if (client_write_buf_idx != sizeof(expected) - 1) {
+diff --git a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+--- a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
++++ b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+@@ -187,12 +187,12 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+     setup_devices();
+ 
+-    lgtd_proto_tag(&client, FAKE_TARGET_LIST, "dub");
+-
++    lgtd_proto_tag(client, FAKE_TARGET_LIST, "dub");
+ 
+     if (gateway_send_to_site_called) {
+         lgtd_errx(1, "SET_TAG_LABELS shouldn't have been sent");
+diff --git a/tests/core/proto/test_proto_tag_update.c b/tests/core/proto/test_proto_tag_update.c
+--- a/tests/core/proto/test_proto_tag_update.c
++++ b/tests/core/proto/test_proto_tag_update.c
+@@ -247,11 +247,12 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+     setup_devices();
+ 
+-    lgtd_proto_tag(&client, FAKE_TARGET_LIST, "dub");
++    lgtd_proto_tag(client, FAKE_TARGET_LIST, "dub");
+ 
+     const char expected[] = "true";
+     if (client_write_buf_idx != sizeof(expected) - 1) {
+diff --git a/tests/core/proto/test_proto_untag.c b/tests/core/proto/test_proto_untag.c
+--- a/tests/core/proto/test_proto_untag.c
++++ b/tests/core/proto/test_proto_untag.c
+@@ -136,13 +136,14 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+     tag_vapor = lgtd_tests_insert_mock_tag("vapor");
+ 
+-    lgtd_proto_untag(&client, targets, "vapor");
++    lgtd_proto_untag(client, targets, "vapor");
+ 
+     const char expected[] = "true";
+ 
+diff --git a/tests/core/proto/test_proto_untag_tag_does_not_exist.c b/tests/core/proto/test_proto_untag_tag_does_not_exist.c
+--- a/tests/core/proto/test_proto_untag_tag_does_not_exist.c
++++ b/tests/core/proto/test_proto_untag_tag_does_not_exist.c
+@@ -53,12 +53,13 @@
+ int
+ main(void)
+ {
+-    struct lgtd_client client = { .io = FAKE_BUFFEREVENT };
++    struct lgtd_client *client;
++    client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+     struct lgtd_proto_target_list *targets;
+     targets = lgtd_tests_build_target_list("*", NULL);
+ 
+-    lgtd_proto_untag(&client, targets, "vapor");
++    lgtd_proto_untag(client, targets, "vapor");
+ 
+     const char expected[] = "true";
+ 
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
-@@ -126,9 +126,10 @@
- struct lgtd_listen *
- lgtd_tests_insert_mock_listener(const char *addr, const char *port)
- {
-+    (void)addr;
-+    (void)port;
+@@ -1,6 +1,7 @@
+ #include <sys/queue.h>
+ #include <sys/tree.h>
+ #include <sys/socket.h>
++#include <arpa/inet.h>
+ #include <assert.h>
+ #include <dirent.h>
+ #include <endian.h>
+@@ -30,6 +31,7 @@
+ #include "lifx/bulb.h"
+ #include "lifx/gateway.h"
+ #include "tests_utils.h"
++#include "core/lightsd.h"
+ 
+ struct lgtd_listen_list lgtd_listeners =
+     SLIST_HEAD_INITIALIZER(&lgtd_listeners);
+@@ -42,6 +44,17 @@
+     gw->socket = id;
+     gw->site.as_array[0] = id;
+ 
++#if 0
++    struct sockaddr_in in_addr = {
++        .sin_family = AF_INET,
++        .sin_addr.s_addr = inet_addr("127.0.0.1"),
++        .sin_port = htons(id)
++    };
++    gw->peer = calloc(1, sizeof(in_addr));
++    memcpy(gw->peeraddr, &in_addr, sizeof(in_addr));
++    gw->peerlen = sizeof(in_addr);
++#endif
 +
+     LIST_INSERT_HEAD(&lgtd_lifx_gateways, gw, link);
+ 
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, 1);
+@@ -124,16 +137,44 @@
+ }
+ 
+ struct lgtd_listen *
+-lgtd_tests_insert_mock_listener(const char *addr, const char *port)
++lgtd_tests_insert_mock_listener(const char *ipv4, uint16_t port)
+ {
      struct lgtd_listen *listener = calloc(1, sizeof(*listener));
 -    listener->addr = addr;
 -    listener->port = port;
++    struct sockaddr_in in_addr = {
++        .sin_family = AF_INET,
++        .sin_addr.s_addr = inet_addr(ipv4),
++        .sin_port = htons(port)
++    };
++    listener->sockaddr = calloc(1, sizeof(in_addr));
++    memcpy(listener->sockaddr, &in_addr, sizeof(in_addr));
++    listener->addrlen = sizeof(in_addr);
      SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
  
      return listener;
+ }
+ 
++static struct sockaddr *
++lgtd_tests_make_sockaddr(int family, const char *addr, size_t addrlen)
++{
++    struct sockaddr *sa = calloc(1, sizeof(struct sockaddr_storage));
++    sa->sa_family = family;
++    memcpy(sa->sa_data, addr, LGTD_MIN(
++        sizeof(*sa) - offsetof(struct sockaddr, sa_data), addrlen
++    ));
++    return sa;
++}
++
++struct lgtd_client *
++lgtd_tests_insert_mock_client(struct bufferevent *io)
++{
++    struct lgtd_client *client = calloc(1, sizeof(*client));
++    client->io = io;
++    client->addr = lgtd_tests_make_sockaddr(
++        AF_UNIX, "/toto.sock", sizeof("/toto.sock")
++    );
++    return client;
++}
++
+ char *
+ lgtd_tests_make_temp_dir(void)
+ {
+diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
+--- a/tests/core/tests_utils.h
++++ b/tests/core/tests_utils.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++struct bufferevent;
++
+ static inline bool
+ lgtd_tests_lifx_header_has_flags(const struct lgtd_lifx_packet_header *hdr,
+                                  int flags)
+@@ -40,4 +42,5 @@
+ struct lgtd_lifx_site *lgtd_tests_add_tag_to_gw(struct lgtd_lifx_tag *,
+                                                 struct lgtd_lifx_gateway *,
+                                                 int);
+-struct lgtd_listen *lgtd_tests_insert_mock_listener(const char *addr, const char *port);
++struct lgtd_listen *lgtd_tests_insert_mock_listener(const char *, uint16_t);
++struct lgtd_client *lgtd_tests_insert_mock_client(struct bufferevent *);
