@@ -1,5 +1,8 @@
 rename_install_prefix_into_prefix.patch
 add_unix_socket_support.patch
 stop_replying_to_jsonrpc_notifications.patch
+fixup_unix_socket_support_leak.patch
+backoff_to_passive_discovery_interval.patch
+use_reallocarray_for_jsmn_tokens.patch
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux

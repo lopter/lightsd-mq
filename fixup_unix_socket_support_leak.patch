@@ -1,0 +1,14 @@
+# HG changeset patch
+# Parent  a4fcfbd00936f71c56e1d8b4e073dc37108f8d6a
+
+diff --git a/core/client.c b/core/client.c
+--- a/core/client.c
++++ b/core/client.c
+@@ -52,6 +52,7 @@
+     if (client->io) { // XXX: see ugly hack in lgtd_jsonrpc_dispatch_one
+         bufferevent_free(client->io);
+     }
++    free(client->addr);
+     free(client);
+ }
+ 
