@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  87c34a0a6e12448f22923853d35ccf70826ba2eb
+# Parent  5505441e86b81e2ea9a22c9eb6fcef643f7c0fde
 
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
@@ -12,9 +12,9 @@ diff --git a/core/client.c b/core/client.c
 +    if (client->io) { // XXX: see ugly hack in lgtd_jsonrpc_dispatch_one
 +        bufferevent_free(client->io);
 +    }
+     free(client->addr);
      free(client);
  }
- 
 diff --git a/core/client.h b/core/client.h
 --- a/core/client.h
 +++ b/core/client.h

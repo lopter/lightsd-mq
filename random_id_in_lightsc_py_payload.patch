@@ -1,0 +1,23 @@
+# HG changeset patch
+# Parent  441f30eda51690a5aea9295b16ccf91b31ca70fc
+
+diff --git a/examples/lightsc.py b/examples/lightsc.py
+--- a/examples/lightsc.py
++++ b/examples/lightsc.py
+@@ -63,12 +63,14 @@
+ 
+     @classmethod
+     def _make_payload(cls, method, params):
+-        return {
++        payload = {
+             "method": method,
+             "params": params,
+             "jsonrpc": "2.0",
+-            "id": str(uuid.uuid4()),
+         }
++        import random
++        if random.random() < 0.5:
++            payload["id"] = uuid.uuid4()
+ 
+     def _execute_payload(self, payload):
+         self._socket.send(json.dumps(payload).encode("utf-8"))

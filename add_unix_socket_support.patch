@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  073fd7275ffefa866adf8e8827afc2d3988f2313
+# Parent  c3ceddc33d659c056b7a0b2150fb93fd3d40e832
 Add support for unix sockets with the -s option (--socket)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -52,14 +52,30 @@ diff --git a/README.rst b/README.rst
 -The JSON-RPC interface works on top of TCP/IPv4/v6 or over a command pipe (named
 -pipe, see mkfifo(1)).
 +The JSON-RPC interface works on top of TCP/IPv4/v6, Unix sockets, or over a
-+command pipe (named pipe, see mkfifo(1)).
++command pipe (named pipe, see `mkfifo(1)`_).
  
  lightsd can target single or multiple bulbs at once:
  
+@@ -47,6 +47,7 @@
+ lightsd works and is developed against LIFX firmwares 1.1, 1.5, 2.0 and 2.1.
+ 
+ .. _JSON-RPC: http://www.jsonrpc.org/specification
++.. _mkfifo(1): http://www.openbsd.org/cgi-bin/man.cgi?query=mkfifo
+ 
+ Requirements
+ ------------
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
 +++ b/core/client.c
-@@ -69,6 +69,9 @@
+@@ -50,6 +50,7 @@
+ 
+     LIST_REMOVE(client, link);
+     bufferevent_free(client->io);
++    free(client->addr);
+     free(client);
+ }
+ 
+@@ -69,6 +70,9 @@
  
      struct lgtd_client *client = ctx;
  
@@ -69,7 +85,7 @@ diff --git a/core/client.c b/core/client.c
      struct evbuffer *input = bufferevent_get_input(bev);
      size_t nbytes = evbuffer_get_contiguous_space(input);
      // Get the actual pointer to the beginning of the evbuf:
-@@ -86,10 +89,7 @@
+@@ -86,10 +90,7 @@
          switch (rv) {
          case JSMN_ERROR_NOMEM:
          case JSMN_ERROR_INVAL:
@@ -81,7 +97,7 @@ diff --git a/core/client.c b/core/client.c
              evbuffer_drain(input, nbytes);
              break;
          case JSMN_ERROR_PART:
-@@ -100,10 +100,7 @@
+@@ -100,10 +101,7 @@
              (void)0;
              size_t buflen = evbuffer_get_length(input);
              if (buflen > LGTD_CLIENT_MAX_REQUEST_BUF_SIZE) {
@@ -93,7 +109,7 @@ diff --git a/core/client.c b/core/client.c
                  evbuffer_drain(input, buflen);
              } else if (nbytes == buflen) {
                  return; // We pulled up everything already, wait for more data
-@@ -139,10 +136,10 @@
+@@ -139,10 +137,10 @@
      struct lgtd_client *client = ctx;
  
      if (events & (BEV_EVENT_ERROR|BEV_EVENT_EOF)) {
@@ -108,7 +124,7 @@ diff --git a/core/client.c b/core/client.c
          lgtd_client_close(client);
      }
  }
-@@ -197,21 +194,29 @@
+@@ -197,21 +195,29 @@
  }
  
  struct lgtd_client *
@@ -141,7 +157,7 @@ diff --git a/core/client.c b/core/client.c
      bufferevent_setcb(
          client->io,
          lgtd_client_read_callback,
-@@ -219,15 +224,23 @@
+@@ -219,15 +225,23 @@
          lgtd_client_event_callback,
          client
      );
@@ -278,16 +294,18 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -66,6 +66,8 @@
+@@ -66,6 +66,10 @@
  
  enum { LGTD_ERROR_MSG_BUFSIZE = 2048 };
  
-+enum { LGTD_SOCKADDR_STRLEN = 128 };  // should be >= sockaddr_un.sun_path
++// FIXME: introspect sizeof(sockaddr_un.sun_path) with CMake to generate a
++// reasonable value for that:
++enum { LGTD_SOCKADDR_STRLEN = 128 };
 +
  struct lgtd_opts {
      bool                foreground;
      bool                log_timestamps;
-@@ -79,8 +81,9 @@
+@@ -79,8 +83,9 @@
  char *lgtd_iee8023mactoa(const uint8_t *addr, char *buf, int buflen);
  #define LGTD_IEEE8023MACTOA(addr, buf) \
      lgtd_iee8023mactoa((addr), (buf), sizeof(buf))
@@ -405,7 +423,7 @@ diff --git a/core/listen.c b/core/listen.c
 +        SLIST_FOREACH(listener, &lgtd_listeners, link) {
 +            if (listener->addrlen == it->ai_addrlen
 +                && memcmp(listener->sockaddr, it->ai_addr, it->ai_addrlen)) {
-+                return true;
++                goto done;
 +            }
 +        }
 +
@@ -435,23 +453,29 @@ diff --git a/core/listen.c b/core/listen.c
          SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
          lgtd_info(
              "listening on %s:%s (%s)",
-@@ -139,10 +169,110 @@
+@@ -131,18 +161,118 @@
+         );
+     }
  
- error:
-     lgtd_warn("can't listen on %s:%s", addr, port);
--    if (evlistener) {
--        evconnlistener_free(evlistener);
++    lgtd_daemon_update_proctitle();
++
++done:
+     evutil_freeaddrinfo(res);
++    return true;
+ 
+-    lgtd_daemon_update_proctitle();
++error:
++    lgtd_warn("can't listen on %s:%s", addr, port);
 +    if (listener) {
 +        if (listener->evlistener) {
 +            evconnlistener_free(evlistener);
 +        }
 +        free(listener->sockaddr);
 +        free(listener);
-     }
--    free(listener);
-     evutil_freeaddrinfo(res);
-     return false;
- }
++    }
++    evutil_freeaddrinfo(res);
++    return false;
++}
 +
 +bool
 +lgtd_listen_unix_open(const char *path)
@@ -538,17 +562,21 @@ diff --git a/core/listen.c b/core/listen.c
 +
 +    SLIST_INSERT_HEAD(&lgtd_listeners, listener, link);
 +    lgtd_info("unix socket ready at %s", path);
-+
-+    return true;
-+
-+error:
+ 
+     return true;
+ 
+ error:
+-    lgtd_warn("can't listen on %s:%s", addr, port);
+-    if (evlistener) {
+-        evconnlistener_free(evlistener);
 +    lgtd_warn("can't open unix at %s", path);
 +    if (fd != -1) {
 +        close(fd);
-+    }
-+    free(listener);
-+    return false;
-+}
+     }
+     free(listener);
+-    evutil_freeaddrinfo(res);
+     return false;
+ }
 diff --git a/core/listen.h b/core/listen.h
 --- a/core/listen.h
 +++ b/core/listen.h
@@ -1996,11 +2024,11 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
      struct lgtd_listen *listener = calloc(1, sizeof(*listener));
 -    listener->addr = addr;
 -    listener->port = port;
-+    struct sockaddr_in in_addr = {
-+        .sin_family = AF_INET,
-+        .sin_addr.s_addr = inet_addr(ipv4),
-+        .sin_port = htons(port)
-+    };
++    struct sockaddr_in in_addr;
++    memset(&in_addr, 0, sizeof(in_addr));
++    in_addr.sin_family = AF_INET;
++    in_addr.sin_addr.s_addr = inet_addr(ipv4);
++    in_addr.sin_port = htons(port);
 +    listener->sockaddr = calloc(1, sizeof(in_addr));
 +    memcpy(listener->sockaddr, &in_addr, sizeof(in_addr));
 +    listener->addrlen = sizeof(in_addr);
