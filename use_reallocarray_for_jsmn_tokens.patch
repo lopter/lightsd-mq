@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  435a90b749c9531341d4b56c0df488c287a669a9
+# Parent  2c1d567469d5f0d3acb9bc6d3614d7bd23f9e60e
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -136,7 +136,7 @@ diff --git a/core/client.c b/core/client.c
 diff --git a/core/client.h b/core/client.h
 --- a/core/client.h
 +++ b/core/client.h
-@@ -34,8 +34,7 @@
+@@ -34,15 +34,13 @@
      LIST_ENTRY(lgtd_client)     link;
      struct bufferevent          *io;
      struct sockaddr             *addr;
@@ -146,6 +146,13 @@ diff --git a/core/client.h b/core/client.h
      const char                  *json;
      struct lgtd_jsonrpc_request *current_request;
  };
+ LIST_HEAD(lgtd_client_list, lgtd_client);
+ 
+ struct lgtd_client *lgtd_client_open(evutil_socket_t, const struct sockaddr *, int);
+-void lgtd_client_open_from_pipe(struct lgtd_client *);
+ void lgtd_client_close_all(void);
+ 
+ void lgtd_client_write_string(struct lgtd_client *, const char *);
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
@@ -246,6 +253,14 @@ diff --git a/core/pipe.c b/core/pipe.c
 +                goto next_request;
              }
          }
+ 
+@@ -172,7 +177,6 @@
+         return false;
+     }
+ 
+-    lgtd_client_open_from_pipe(&pipe->client);
+     pipe->path = path;
+     pipe->fd = -1;
  
 diff --git a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
 --- a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
