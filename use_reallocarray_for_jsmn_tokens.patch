@@ -1,26 +1,18 @@
 # HG changeset patch
-# Parent  75cd134adc360abec2ada7b5c83613626cbe27ef
+# Parent  f948be40f076f8468ec968da5340d68e9b0e680d
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -30,6 +30,15 @@
+@@ -29,6 +29,7 @@
+ INCLUDE(TestBigEndian)
  INCLUDE(CompatSetProctitle)
  INCLUDE(CompatTimeMonotonic)
++INCLUDE(CompatReallocArray)
  
-+IF (NOT HAVE_LIBBSD)
-+    CHECK_FUNCTION_EXISTS("reallocarray" HAVE_REALLOCARRAY)
-+    IF (HAVE_REALLOCARRAY)
-+        SET(HAVE_REALLOCARRAY 1 CACHE INTERNAL "reallocarray found in libbsd")
-+    ENDIF ()
-+ELSE ()
-+    SET(HAVE_REALLOCARRAY 1)
-+ENDIF()
-+
  TEST_BIG_ENDIAN(BIG_ENDIAN_SYSTEM)
  
- ### Global definitions #########################################################
-@@ -59,8 +68,10 @@
+@@ -59,8 +60,10 @@
  
      "-DLGTD_HAVE_LIBBSD=${HAVE_LIBBSD}"
      "-DLGTD_HAVE_PROCTITLE=${HAVE_PROCTITLE}"
@@ -31,6 +23,42 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  )
  
  IF (CMAKE_BUILD_TYPE MATCHES "DEBUG")
+diff --git a/CMakeScripts/CompatReallocArray.cmake b/CMakeScripts/CompatReallocArray.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/CompatReallocArray.cmake
+@@ -0,0 +1,31 @@
++IF (HAVE_REALLOCARRAY)
++    RETURN()
++ENDIF (HAVE_REALLOCARRAY)
++
++MESSAGE(STATUS "Looking for reallocarray")
++
++IF (HAVE_LIBBSD)
++    MESSAGE(STATUS "Looking for reallocarray - found")
++    SET(HAVE_REALLOCARRAY 1 CACHE INTERNAL "reallocarray found in libbsd")
++    RETURN()
++ENDIF ()
++
++SET(CMAKE_REQUIRED_QUIET TRUE)
++CHECK_FUNCTION_EXISTS("reallocarray" HAVE_REALLOCARRAY)
++IF (HAVE_REALLOCARRAY)
++    MESSAGE(STATUS "Looking for reallocarray - found")
++    SET(
++        HAVE_REALLOCARRAY 1
++        CACHE INTERNAL
++        "reallocarray found on the system"
++    )
++ELSE ()
++    MESSAGE(
++        STATUS "Looking for reallocarray - not found, using realloc instead"
++    )
++    SET(
++        HAVE_REALLOCARRAY 0
++        CACHE INTERNAL
++        "reallocarray not found, using internal implementation"
++    )
++ENDIF ()
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
 +++ b/core/client.c
