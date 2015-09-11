@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  2fa931be70c14442657e2b769d79373fff33ba06
+# Parent  e843b7cb551c5d4a996faa249cc024bbec06b6c0
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -47,7 +47,7 @@ diff --git a/CMakeScripts/CompatReallocArray.cmake b/CMakeScripts/CompatReallocA
 diff --git a/CMakeScripts/CompatSetProctitle.cmake b/CMakeScripts/CompatSetProctitle.cmake
 --- a/CMakeScripts/CompatSetProctitle.cmake
 +++ b/CMakeScripts/CompatSetProctitle.cmake
-@@ -1,20 +1,47 @@
+@@ -1,20 +1,59 @@
 -IF (NOT HAVE_PROCTITLE)
 -    SET(CMAKE_REQUIRED_QUIET TRUE)
 -    SET(HAVE_PROCTITLE 0 CACHE INTERNAL "setproctitle found in libbsd")
@@ -111,6 +111,18 @@ diff --git a/CMakeScripts/CompatSetProctitle.cmake b/CMakeScripts/CompatSetProct
 +    CHECK_VARIABLE_EXISTS(
 +        "program_invocation_short_name" HAVE_PROGRAM_INVOCATION_SHORT_NAME
 +    )
++    IF (HAVE_CLEARENV)
++        ADD_DEFINITIONS("-DHAVE_CLEARENV=1")
++    ENDIF ()
++    IF (HAVE_GETEXECNAME)
++        ADD_DEFINITIONS("-DHAVE_GETEXECNAME=1")
++    ENDIF ()
++    IF (HAVE___PROGNAME)
++        ADD_DEFINITIONS("-DHAVE___PROGNAME=1")
++    ENDIF ()
++    IF (HAVE_HAVE_PROGRAM_INVOCATION_SHORT_NAME)
++        ADD_DEFINITIONS("-DHAVE_HAVE_PROGRAM_INVOCATION_SHORT_NAME=1")
++    ENDIF ()
 +ENDIF ()
 diff --git a/CMakeScripts/FindLibBSD.cmake b/CMakeScripts/FindLibBSD.cmake
 deleted file mode 100644
