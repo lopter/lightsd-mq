@@ -601,6 +601,19 @@ diff --git a/core/version.h.in b/core/version.h.in
      "Copyright (c) 2014, 2015, Louis Opter <kalessin@kalessin.fr>"
  );
  
+diff --git a/examples/lightsc.py b/examples/lightsc.py
+--- a/examples/lightsc.py
++++ b/examples/lightsc.py
+@@ -70,7 +70,8 @@
+         }
+         import random
+         if random.random() < 0.5:
+-            payload["id"] = uuid.uuid4()
++            payload["id"] = str(uuid.uuid4())
++        return payload
+ 
+     def _execute_payload(self, payload):
+         self._socket.send(json.dumps(payload).encode("utf-8"))
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
