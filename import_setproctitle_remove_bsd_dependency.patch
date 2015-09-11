@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  b53c2ad85dcb39d8d0773ce9b6e6584c877b2a04
+# Parent  2fa931be70c14442657e2b769d79373fff33ba06
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -174,16 +174,18 @@ diff --git a/core/daemon.c b/core/daemon.c
  #include <event2/util.h>
  
  #include "time_monotonic.h"
-@@ -91,14 +87,14 @@
+@@ -91,14 +87,16 @@
  void
  lgtd_daemon_setup_proctitle(int argc, char *argv[], char *envp[])
  {
 -#if LGTD_HAVE_LIBBSD
-+#ifdef LGTD_HAVE_SETPROCTITLE
++#if LGTD_HAVE_SETPROCTITLE
 +    (void)argc;
 +    (void)argv;
 +    (void)envp;
 +#else
++    void setproctitle_init(int argc, char *argv[], char *envp[]);
++
      setproctitle_init(argc, argv, envp);
      lgtd_daemon_update_proctitle();
      lgtd_daemon_proctitle_initialized = true;
@@ -194,15 +196,24 @@ diff --git a/core/daemon.c b/core/daemon.c
  #endif
  }
  
-@@ -109,7 +105,7 @@
+@@ -109,7 +107,10 @@
          return;
      }
  
 -#if LGTD_HAVE_PROCTITLE
-+#ifdef LGTD_HAVE_SETPROCTITLE
++#if !LGTD_HAVE_SETPROCTITLE
++    void setproctitle(const char *fmt, ...);
++#endif
++
      char title[LGTD_DAEMON_TITLE_SIZE] = { 0 };
      int i = 0;
  
+@@ -158,5 +159,4 @@
+     PREFIX("clients(connected=%d)", LGTD_STATS_GET(clients));
+ 
+     setproctitle("%s", title);
+-#endif
+ }
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
@@ -567,6 +578,17 @@ new file mode 100644
 +#else
 +typedef int hello_compiler;
 +#endif
+diff --git a/core/version.h.in b/core/version.h.in
+--- a/core/version.h.in
++++ b/core/version.h.in
+@@ -32,7 +32,6 @@
+ const char LGTD_VERSION[] = (
+     "@LIGHTSD_VERSION@\n\n"
+     "cflags: @CMAKE_C_FLAGS@\n"
+-    "proctitle_support: @HAVE_PROCTITLE@\n\n"
+     "Copyright (c) 2014, 2015, Louis Opter <kalessin@kalessin.fr>"
+ );
+ 
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
@@ -580,6 +602,17 @@ diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
  ENDFUNCTION()
  
  ADD_ALL_SUBDIRECTORIES()
+diff --git a/tests/core/daemon/CMakeLists.txt b/tests/core/daemon/CMakeLists.txt
+--- a/tests/core/daemon/CMakeLists.txt
++++ b/tests/core/daemon/CMakeLists.txt
+@@ -6,6 +6,7 @@
+ ADD_CORE_LIBRARY(
+     test_core_daemon STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/log.c
++    ${LIGHTSD_SOURCE_DIR}/core/setproctitle.c
+     ${LIGHTSD_SOURCE_DIR}/core/stats.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
 diff --git a/tests/core/daemon/test_daemon_update_proctitle.c b/tests/core/daemon/test_daemon_update_proctitle.c
 --- a/tests/core/daemon/test_daemon_update_proctitle.c
 +++ b/tests/core/daemon/test_daemon_update_proctitle.c
