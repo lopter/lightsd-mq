@@ -7,5 +7,6 @@ backoff_to_passive_discovery_interval.patch
 use_reallocarray_for_jsmn_tokens.patch
 import_setproctitle_remove_bsd_dependency.patch
 fixup_jsonrpc_notifications.patch
+add_privdrop_systemd_lanuchd.patch
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux

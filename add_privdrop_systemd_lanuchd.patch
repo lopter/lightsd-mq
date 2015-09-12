@@ -1,0 +1,27 @@
+# HG changeset patch
+# Parent  3b956ab148fb5a8bf013964fdd7184f210ff8af9
+Add -u option a systemd unit and a Mac OS X plist
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -95,3 +95,4 @@
+     REGEX ".*\\.sw.$" EXCLUDE
+ )
+ INSTALL(FILES share/lightsc.sh DESTINATION share/lightsd)
++INSTALL(FILES dist/lightsd.service DESTINATION lib/systemd/system)
+diff --git a/dist/lightsd.service b/dist/lightsd.service
+new file mode 100644
+--- /dev/null
++++ b/dist/lightsd.service
+@@ -0,0 +1,10 @@
++[Unit]
++Description=LIFX WiFi smart bulbs control service
++After=network.target
++
++[Service]
++ExecStart=/usr/bin/lightsd -f -u nobody -s %t/lightsd.socket
++Restart=on-failure
++
++[Install]
++WantedBy=multi-user.target
