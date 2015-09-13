@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  ff4fb90dc714233fadc2d1b4a0dccecaad922d6c
+# Parent  b3d29101e9dcaa5c29630798ff73cc842ab7178f
 Create parent directories for pipes and unix sockets
 
 This allows us to reduce the clutter in /run.
@@ -8,6 +8,8 @@ The new "default" path are: /run/lightsd/socket and /run/lightsd/pipe.
 
 The directories are created *before* privileges are dropped and with
 mode 755.
+
+Created directories aren't cleaned-up by lightsd at exit.
 
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
