@@ -25,3 +25,13 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          {NULL,              0,                 NULL, 0}
      };
      const char short_opts[] = "l:c:fdthv:V";
+diff --git a/examples/toggle b/examples/toggle
+--- a/examples/toggle
++++ b/examples/toggle
+@@ -1,5 +1,5 @@
+ #!/bin/sh
+ 
+-. `lightsd --install-prefix`/share/lightsd/lightsc.sh
++. `lightsd --prefix`/share/lightsd/lightsc.sh
+ 
+ lightsc power_toggle ${*:-'"*"'}
