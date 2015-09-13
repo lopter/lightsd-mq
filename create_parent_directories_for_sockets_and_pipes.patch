@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  b3d29101e9dcaa5c29630798ff73cc842ab7178f
+# Parent  cd051f40214f5799c739ae73db0229a41f91f3c3
 Create parent directories for pipes and unix sockets
 
 This allows us to reduce the clutter in /run.
@@ -30,16 +30,25 @@ diff --git a/core/daemon.c b/core/daemon.c
  #include <pwd.h>
  #include <stdbool.h>
  #include <stdint.h>
-@@ -264,3 +267,56 @@
+@@ -264,3 +267,64 @@
          lgtd_err(1, "can't change user to %s", user);
      }
  }
 +
 +static bool
-+_lgtd_daemon_makedirs(char *fp)
++_lgtd_daemon_makedirs(const char *fp)
 +{
-+    char *fpsave = strdup(fp);
-+    char *next = dirname(fpsave);
++    char *fpsave = NULL, *next = NULL;
++
++    fpsave = strdup(fp);
++    if (!fpsave) {
++        goto err;
++    }
++    next = strdup(dirname(fpsave));
++    if (!next) {
++        goto err;
++    }
++
 +    if (!strcmp(next, fp)) {
 +        goto done;
 +    }
@@ -67,20 +76,19 @@ diff --git a/core/daemon.c b/core/daemon.c
 +
 +done:
 +    free(fpsave);
++    free(next);
 +    return true;
 +
 +err:
 +    free(fpsave);
++    free(next);
 +    return false;
 +}
 +
 +bool
 +lgtd_daemon_makedirs(const char *filepath)
 +{
-+    char *fp = strdup(filepath);
-+    bool ok = _lgtd_daemon_makedirs(fp);
-+    free(fp);
-+    if (!ok) {
++    if (!_lgtd_daemon_makedirs(filepath)) {
 +        lgtd_warn("can't create parent directories for %s", filepath);
 +        return false;
 +    }

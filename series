@@ -10,5 +10,6 @@ check_if_existing_pipe_is_fifo.patch
 fix_bulbs_refresh.patch
 create_parent_directories_for_sockets_and_pipes.patch
 rename_watchdog_into_discovery.patch
+add_rundir_option.patch
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
