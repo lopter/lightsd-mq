@@ -1,5 +1,9 @@
 # HG changeset patch
-# Parent  8403e23edf212b5ab68773db1052d7653c60c9ec
+# Parent  f8b22c0a0d1338f1e0e3b4e740a254b3d79e8af2
+Properly handle JSON-RPC notifications
+
+JSON-RPC notifications are requests without the id field which means
+that no reply should be sent.
 
 diff --git a/core/client.c b/core/client.c
 --- a/core/client.c
@@ -104,7 +108,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +            struct bufferevent *client_io = NULL; // keep compilers happy...
 +            if (!request.id) {
 +                // Ugly hack to behave correctly on jsonrpc notifications, it's
-+                // not worth it do it properly right now. It is especially ugly
++                // not worth doing it properly right now. It is especially ugly
 +                // since we can't properly close that client now (but we don't
 +                // do that in lgtd_proto and signals are deferred with the
 +                // event loop).

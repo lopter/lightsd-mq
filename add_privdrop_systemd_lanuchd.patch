@@ -1,6 +1,9 @@
 # HG changeset patch
-# Parent  981212dea0504ccd11d8706251b35202148ed8ea
+# Parent  5aa0a9db09759327a7180af228baa6c38821245f
 Add -u option a systemd unit and a Mac OS X plist
+
+This changeset also fix the chmod logic so other users can use the
+socket or the pipe too.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -30,7 +33,7 @@ diff --git a/core/daemon.c b/core/daemon.c
  #include <stdbool.h>
  #include <stdint.h>
  #include <stdio.h>
-@@ -160,3 +166,82 @@
+@@ -179,3 +185,82 @@
  
      setproctitle("%s", title);
  }
@@ -217,6 +220,61 @@ diff --git a/core/lightsd.h b/core/lightsd.h
  };
  
  extern struct lgtd_opts lgtd_opts;
+diff --git a/core/listen.c b/core/listen.c
+--- a/core/listen.c
++++ b/core/listen.c
+@@ -251,6 +251,11 @@
+         goto error;
+     }
+ 
++    mode_t mode = S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
++    if (chmod(path, mode)) {
++        goto error;
++    }
++
+     listener->evlistener = evconnlistener_new(
+         lgtd_ev_base,
+         lgtd_listen_accept_new_client,
+@@ -273,6 +278,7 @@
+     if (fd != -1) {
+         close(fd);
+     }
++    unlink(path);
+     free(listener);
+     return false;
+ }
+diff --git a/core/pipe.c b/core/pipe.c
+--- a/core/pipe.c
++++ b/core/pipe.c
+@@ -154,14 +154,6 @@
+     lgtd_command_pipe_reset(pipe);
+ }
+ 
+-static mode_t
+-lgtd_command_pipe_get_umask(void)
+-{
+-    mode_t mask = umask(0);
+-    umask(mask);
+-    return mask;
+-}
+-
+ static bool
+ _lgtd_command_pipe_open(const char *path)
+ {
+@@ -188,10 +180,9 @@
+         if (errno != EEXIST) {
+             goto error;
+         }
+-        mode &= ~lgtd_command_pipe_get_umask();
+-        if (chmod(path, mode)) {
+-            goto error;
+-        }
++    }
++    if (chmod(path, mode)) {
++        goto error;
+     }
+ 
+     pipe->fd = open(path, O_RDONLY|O_NONBLOCK);
 diff --git a/dist/lightsd.service b/dist/lightsd.service
 new file mode 100644
 --- /dev/null
@@ -227,8 +285,30 @@ new file mode 100644
 +After=network.target
 +
 +[Service]
-+ExecStart=/usr/bin/lightsd -f -u nobody -s %t/lightsd.socket
++ExecStart=/usr/bin/lightsd -v warning -f -u lightsd -s %t/lightsd.socket -c %t/lightsd.cmd
 +Restart=on-failure
 +
 +[Install]
 +WantedBy=multi-user.target
+diff --git a/tests/core/pipe/test_pipe_open.c b/tests/core/pipe/test_pipe_open.c
+--- a/tests/core/pipe/test_pipe_open.c
++++ b/tests/core/pipe/test_pipe_open.c
+@@ -140,7 +140,6 @@
+ 
+     mode_t expected_mode;
+     expected_mode = S_IFIFO|S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
+-    expected_mode &= ~lgtd_command_pipe_get_umask();
+     if (sb.st_mode != expected_mode) {
+         errx(
+             1, "unexpected mode %o (expected %o)",
+diff --git a/tests/core/pipe/test_pipe_open_fifo_already_exists.c b/tests/core/pipe/test_pipe_open_fifo_already_exists.c
+--- a/tests/core/pipe/test_pipe_open_fifo_already_exists.c
++++ b/tests/core/pipe/test_pipe_open_fifo_already_exists.c
+@@ -145,7 +145,6 @@
+ 
+     mode_t expected_mode;
+     expected_mode = S_IFIFO|S_IWUSR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IWGRP;
+-    expected_mode &= ~lgtd_command_pipe_get_umask();
+     if (sb.st_mode != expected_mode) {
+         errx(
+             1, "unexpected mode %o (expected %o)",

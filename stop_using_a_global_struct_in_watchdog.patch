@@ -1,5 +1,8 @@
 # HG changeset patch
-# Parent  214724318ab41141f9762cdafd7f002c3473f12f
+# Parent  919dd1dff157b327c7685834c649c851bb8f3d29
+Stop using a global struct in watchdog.c
+
+It's annoying..
 
 diff --git a/lifx/watchdog.c b/lifx/watchdog.c
 --- a/lifx/watchdog.c

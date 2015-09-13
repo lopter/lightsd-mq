@@ -1,0 +1,24 @@
+# HG changeset patch
+# Parent  4def9cd22f43336dbf323da9286b7e5892726fd9
+Handle an existing non-fifo file with -c option more gracefully
+
+diff --git a/core/pipe.c b/core/pipe.c
+--- a/core/pipe.c
++++ b/core/pipe.c
+@@ -180,6 +180,16 @@
+         return false;
+     }
+ 
++    struct stat sb;
++    if (stat(path, &sb) == -1) {
++        if (errno != ENOENT) {
++            goto error;
++        }
++    } else if ((sb.st_mode & S_IFMT) != S_IFIFO) {
++        errno = EEXIST;
++        goto error;
++    }
++
+     pipe->path = path;
+     pipe->fd = -1;
+ 

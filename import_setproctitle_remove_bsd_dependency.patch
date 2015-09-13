@@ -1,5 +1,10 @@
 # HG changeset patch
-# Parent  a9e61f5c6b224950d62c8e5ad5de6489cacd6b61
+# Parent  d291df281f1470c28a8bc367f6c9c9fc573dd721
+Import setproctitle from libbsd 0.7.0
+
+Using libbsd was getting annoying: it clashes with my own compatibility
+functions and it's hard to use on Mac OS X since it clashes with so many
+things.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -593,11 +598,13 @@ new file mode 100644
 diff --git a/core/version.h.in b/core/version.h.in
 --- a/core/version.h.in
 +++ b/core/version.h.in
-@@ -32,7 +32,6 @@
+@@ -31,8 +31,7 @@
+ 
  const char LGTD_VERSION[] = (
      "@LIGHTSD_VERSION@\n\n"
-     "cflags: @CMAKE_C_FLAGS@\n"
+-    "cflags: @CMAKE_C_FLAGS@\n"
 -    "proctitle_support: @HAVE_PROCTITLE@\n\n"
++    "cflags: @CMAKE_C_FLAGS@\n\n"
      "Copyright (c) 2014, 2015, Louis Opter <kalessin@kalessin.fr>"
  );
  

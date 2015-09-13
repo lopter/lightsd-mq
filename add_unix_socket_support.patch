@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  39fe3c05bfbf41eba803aa7fce09d8e61a96efef
+# Parent  67bab33887fe05323b83081e14d73459009d079b
 Add support for unix sockets with the -s option (--socket)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt

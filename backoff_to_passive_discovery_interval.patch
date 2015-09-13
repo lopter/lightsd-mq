@@ -1,5 +1,6 @@
 # HG changeset patch
-# Parent  c857c77597d348a47e9311bb149722f6f7176444
+# Parent  f96aff647ad9811b2631e98f71829fea9d071c3a
+Incrementally switch from active discovery to passive discovery
 
 diff --git a/lifx/watchdog.c b/lifx/watchdog.c
 --- a/lifx/watchdog.c
