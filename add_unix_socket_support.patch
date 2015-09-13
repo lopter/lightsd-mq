@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  67bab33887fe05323b83081e14d73459009d079b
+# Parent  bbd40b8b6ff59fc4a873f5c8a9af745f75d14b31
 Add support for unix sockets with the -s option (--socket)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -595,7 +595,7 @@ diff --git a/core/listen.c b/core/listen.c
 -    lgtd_warn("can't listen on %s:%s", addr, port);
 -    if (evlistener) {
 -        evconnlistener_free(evlistener);
-+    lgtd_warn("can't open unix at %s", path);
++    lgtd_warn("can't open unix socket at %s", path);
 +    if (fd != -1) {
 +        close(fd);
      }
