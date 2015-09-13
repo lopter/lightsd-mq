@@ -7,5 +7,6 @@ use_reallocarray_for_jsmn_tokens.patch
 import_setproctitle_remove_bsd_dependency.patch
 add_privdrop_systemd_lanuchd.patch
 check_if_existing_pipe_is_fifo.patch
+fixup_scheduling.patch
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
