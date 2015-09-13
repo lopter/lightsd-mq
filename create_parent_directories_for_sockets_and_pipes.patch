@@ -1,0 +1,205 @@
+# HG changeset patch
+# Parent  ff4fb90dc714233fadc2d1b4a0dccecaad922d6c
+Create parent directories for pipes and unix sockets
+
+This allows us to reduce the clutter in /run.
+
+The new "default" path are: /run/lightsd/socket and /run/lightsd/pipe.
+
+The directories are created *before* privileges are dropped and with
+mode 755.
+
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -19,12 +19,15 @@
+ #include <sys/socket.h>
+ #include <sys/tree.h>
+ #include <sys/types.h>
++#include <sys/stat.h>
+ #include <sys/un.h>
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
++#include <errno.h>
+ #include <fcntl.h>
+ #include <grp.h>
++#include <libgen.h>
+ #include <pwd.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -264,3 +267,56 @@
+         lgtd_err(1, "can't change user to %s", user);
+     }
+ }
++
++static bool
++_lgtd_daemon_makedirs(char *fp)
++{
++    char *fpsave = strdup(fp);
++    char *next = dirname(fpsave);
++    if (!strcmp(next, fp)) {
++        goto done;
++    }
++
++    bool ok = _lgtd_daemon_makedirs(next);
++    if (!ok) {
++        goto err;
++    }
++
++    struct stat sb;
++    if (stat(next, &sb) == -1) {
++        if (errno == ENOENT) {
++            mode_t mode = S_IWUSR|S_IRUSR|S_IXUSR
++                         |S_IRGRP|S_IXGRP|S_IWGRP
++                         |S_IXOTH|S_IROTH;
++            if (mkdir(next, mode) == 0) {
++                goto done;
++            }
++        }
++        goto err;
++    } else if (!S_ISDIR(sb.st_mode)) {
++        errno = ENOTDIR;
++        goto err;
++    }
++
++done:
++    free(fpsave);
++    return true;
++
++err:
++    free(fpsave);
++    return false;
++}
++
++bool
++lgtd_daemon_makedirs(const char *filepath)
++{
++    char *fp = strdup(filepath);
++    bool ok = _lgtd_daemon_makedirs(fp);
++    free(fp);
++    if (!ok) {
++        lgtd_warn("can't create parent directories for %s", filepath);
++        return false;
++    }
++
++    return true;
++}
+diff --git a/core/daemon.h b/core/daemon.h
+--- a/core/daemon.h
++++ b/core/daemon.h
+@@ -24,3 +24,4 @@
+ void lgtd_daemon_update_proctitle(void);
+ void lgtd_daemon_die_if_running_as_root_unless_requested(const char *);
+ void lgtd_daemon_drop_privileges(const char *, const char *);
++bool lgtd_daemon_makedirs(const char *);
+diff --git a/core/listen.c b/core/listen.c
+--- a/core/listen.c
++++ b/core/listen.c
+@@ -207,6 +207,10 @@
+         }
+     }
+ 
++    if (!lgtd_daemon_makedirs(path)) {
++        return false;
++    }
++
+     evutil_socket_t fd = -1;
+ 
+     listener = calloc(1, sizeof(*listener));
+@@ -237,7 +241,7 @@
+         if (errno != ENOENT) {
+             goto error;
+         }
+-    } else if ((sb.st_mode & S_IFMT) == S_IFSOCK) {
++    } else if (S_ISSOCK(sb.st_mode)) {
+         lgtd_warnx("removing existing unix socket: %s", path);
+         if (unlink(path) == -1 && errno != ENOENT) {
+             goto error;
+diff --git a/core/pipe.c b/core/pipe.c
+--- a/core/pipe.c
++++ b/core/pipe.c
+@@ -31,6 +31,7 @@
+ #include <event2/buffer.h>
+ #include <event2/event.h>
+ 
++#include "daemon.h"
+ #include "jsmn.h"
+ #include "jsonrpc.h"
+ #include "client.h"
+@@ -166,6 +167,10 @@
+         }
+     }
+ 
++    if (!lgtd_daemon_makedirs(path)) {
++        return false;
++    }
++
+     pipe = calloc(1, sizeof(*pipe));
+     if (!pipe) {
+         lgtd_warn("can't open command pipe %s", path);
+@@ -177,7 +182,7 @@
+         if (errno != ENOENT) {
+             goto error;
+         }
+-    } else if ((sb.st_mode & S_IFMT) != S_IFIFO) {
++    } else if (!S_ISFIFO(sb.st_mode)) {
+         errno = EEXIST;
+         goto error;
+     }
+diff --git a/dist/lightsd.service b/dist/lightsd.service
+--- a/dist/lightsd.service
++++ b/dist/lightsd.service
+@@ -3,7 +3,7 @@
+ After=network.target
+ 
+ [Service]
+-ExecStart=/usr/bin/lightsd -v warning -f -u lightsd -s %t/lightsd.socket -c %t/lightsd.cmd
++ExecStart=/usr/bin/lightsd -t -v warning -f -u lightsd -s %t/lightsd/socket -c %t/lightsd/pipe
+ Restart=on-failure
+ 
+ [Install]
+diff --git a/examples/lightsc.py b/examples/lightsc.py
+--- a/examples/lightsc.py
++++ b/examples/lightsc.py
+@@ -223,9 +223,10 @@
+         description="lightsc.py is an interactive lightsd Python client"
+     )
+     parser.add_argument(
+-        "url", type=str,
++        "-u", "--url", type=str,
+         help="How to connect to lightsd (e.g: "
+-             "unix:///run/lightsd.sock or tcp://[::1]:1234)"
++             "unix:///run/lightsd/socket or tcp://[::1]:1234)",
++        default="unix:///run/lightsd/socket",
+     )
+     args = parser.parse_args()
+ 
+diff --git a/share/lightsc.sh b/share/lightsc.sh
+--- a/share/lightsc.sh
++++ b/share/lightsc.sh
+@@ -80,7 +80,7 @@
+ }
+ 
+ _lightsc_get_pipe() {
+-    local pipe=${COMMAND_PIPE:-/run/lightsd.cmd}
++    local pipe=${COMMAND_PIPE:-/run/lightsd/pipe}
+     if [ ! -p $pipe ] ; then
+         echo >&2 "$pipe cannot be found, is lightsd running?"
+         exit 1
+diff --git a/tests/core/mock_daemon.h b/tests/core/mock_daemon.h
+--- a/tests/core/mock_daemon.h
++++ b/tests/core/mock_daemon.h
+@@ -6,3 +6,12 @@
+ {
+ }
+ #endif
++
++#ifndef MOCKED_DAEMON_MAKEDIRS
++bool
++lgtd_daemon_makedirs(const char *fp)
++{
++    (void)fp;
++    return true;
++}
++#endif

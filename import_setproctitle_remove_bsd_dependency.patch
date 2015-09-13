@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  d291df281f1470c28a8bc367f6c9c9fc573dd721
+# Parent  ece03ff2a202cc70b3dd4933e142e1f042130bc8
 Import setproctitle from libbsd 0.7.0
 
 Using libbsd was getting annoying: it clashes with my own compatibility
@@ -14,8 +14,8 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  INCLUDE(CheckFunctionExists)
 +INCLUDE(CheckVariableExists)
-+
  INCLUDE(TestBigEndian)
++
 +INCLUDE(CompatReallocArray)
  INCLUDE(CompatSetProctitle)
  INCLUDE(CompatTimeMonotonic)

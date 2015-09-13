@@ -1,0 +1,34 @@
+# HG changeset patch
+# Parent  d6feb03e082a4157e3dfbf91ccf9e5bea30676df
+
+diff --git a/lifx/CMakeLists.txt b/lifx/CMakeLists.txt
+--- a/lifx/CMakeLists.txt
++++ b/lifx/CMakeLists.txt
+@@ -9,8 +9,8 @@
+     lifx
+     broadcast.c
+     bulb.c
++    discovery.c
+     gateway.c
+     tagging.c
+-    watchdog.c
+     wire_proto.c
+ )
+diff --git a/lifx/watchdog.c b/lifx/discovery.c
+rename from lifx/watchdog.c
+rename to lifx/discovery.c
+diff --git a/lifx/watchdog.h b/lifx/discovery.h
+rename from lifx/watchdog.h
+rename to lifx/discovery.h
+diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.txt
+--- a/tests/lifx/gateway/CMakeLists.txt
++++ b/tests/lifx/gateway/CMakeLists.txt
+@@ -17,7 +17,7 @@
+     test_lifx_gateway STATIC
+     ${LIGHTSD_SOURCE_DIR}/lifx/broadcast.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+-    ${LIGHTSD_SOURCE_DIR}/lifx/watchdog.c
++    ${LIGHTSD_SOURCE_DIR}/lifx/discovery.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+ )
+ 

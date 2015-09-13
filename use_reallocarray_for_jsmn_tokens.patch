@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  d1e1b455ce4d7aeef3240a7b41d9fc44b22039f4
+# Parent  4f17d96b77049bcb8bbf2b8be917e34f6ef98aab
 Handle arbitrary large JSON-RPC request up to 4KiB
 
 Turns out it's pretty easy to run out of jsmn tokens, so this changeset

@@ -1,5 +1,9 @@
 # HG changeset patch
-# Parent  9d1679be671a1eaca7bdd310c8d514a497de7a92
+# Parent  c00106ad7d5ecb7211361f8861119db20282de0f
+Do a much better job at keeping in-sync with the bulb
+
+By always keeping the bulbs refresh timer running. This is so good we
+might wanna give a shot at reducing the min refresh interval.
 
 diff --git a/lifx/gateway.c b/lifx/gateway.c
 --- a/lifx/gateway.c
