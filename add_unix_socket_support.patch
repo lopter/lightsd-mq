@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c3ceddc33d659c056b7a0b2150fb93fd3d40e832
+# Parent  39fe3c05bfbf41eba803aa7fce09d8e61a96efef
 Add support for unix sockets with the -s option (--socket)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -209,7 +209,30 @@ diff --git a/core/client.h b/core/client.h
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
 +++ b/core/daemon.c
-@@ -135,9 +135,10 @@
+@@ -102,6 +102,22 @@
+ #endif
+ }
+ 
++static char *
++lgtd_daemon_update_proctitle_format_sockaddr(const struct sockaddr *sa,
++                                             char *buf,
++                                             int buflen)
++{
++    assert(sa);
++    assert(buf);
++    assert(buflen > 0);
++
++    if (sa->sa_family == AF_UNIX) {
++        return ((struct sockaddr_un *)sa)->sun_path;
++    }
++
++    return lgtd_sockaddrtoa(sa, buf, buflen);
++}
++
+ void
+ lgtd_daemon_update_proctitle(void)
+ {
+@@ -135,9 +151,13 @@
      }                                                         \
  } while (0)
  
@@ -217,7 +240,10 @@ diff --git a/core/daemon.c b/core/daemon.c
      LOOP(
          SLIST, &lgtd_listeners, struct lgtd_listen,
 -        "listening_on", "%s:[%s]", it->addr, it->port
-+        "listening_on", "%s", LGTD_SOCKADDRTOA(it->sockaddr, addr)
++        "listening_on", "%s",
++        lgtd_daemon_update_proctitle_format_sockaddr(
++            it->sockaddr, addr, sizeof(addr)
++        )
      );
  
      LOOP(

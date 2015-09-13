@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  25a0f8e72aaabd0827bcd3524b06639270fb433f
+# Parent  6fbbd346338ab4415ef5e69e3d235f42393cc83c
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -289,28 +289,6 @@ diff --git a/core/pipe.c b/core/pipe.c
      pipe->path = path;
      pipe->fd = -1;
  
-diff --git a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
---- a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
-+++ b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
-@@ -25,14 +25,12 @@
-         "\"id\": \"42\""
-     "}");
-     struct lgtd_client client = { .json = json };
-+    client.jsmn_tokens = calloc(32, sizeof(*client.jsmn_tokens));
-     int parsed = parse_json(
--        client.jsmn_tokens,
--        LGTD_ARRAY_SIZE(client.jsmn_tokens),
--        json,
--        sizeof(json)
-+        client.jsmn_tokens, 32, json, sizeof(json)
-     );
--
--    lgtd_jsonrpc_dispatch_one(&client, client.jsmn_tokens, parsed);
-+    struct lgtd_jsonrpc_request req;
-+    lgtd_jsonrpc_dispatch_one(&client, client.jsmn_tokens, parsed, &req);
- 
-     const char expected[] = ("{"
-         "\"jsonrpc\": \"2.0\", "
 diff --git a/tests/core/pipe/test_pipe_close.c b/tests/core/pipe/test_pipe_close.c
 --- a/tests/core/pipe/test_pipe_close.c
 +++ b/tests/core/pipe/test_pipe_close.c
