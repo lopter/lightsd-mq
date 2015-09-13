@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  5aa0a9db09759327a7180af228baa6c38821245f
+# Parent  4e8114841413708fc5e8458422e3a30ff40ebee3
 Add -u option a systemd unit and a Mac OS X plist
 
 This changeset also fix the chmod logic so other users can use the
@@ -8,11 +8,12 @@ socket or the pipe too.
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -95,3 +95,4 @@
+@@ -95,3 +95,5 @@
      REGEX ".*\\.sw.$" EXCLUDE
  )
  INSTALL(FILES share/lightsc.sh DESTINATION share/lightsd)
 +INSTALL(FILES dist/lightsd.service DESTINATION lib/systemd/system)
++INSTALL(FILES dist/fr.kalessin.lightsd.plist DESTINATION share/lightsd)
 diff --git a/core/daemon.c b/core/daemon.c
 --- a/core/daemon.c
 +++ b/core/daemon.c
@@ -275,6 +276,43 @@ diff --git a/core/pipe.c b/core/pipe.c
      }
  
      pipe->fd = open(path, O_RDONLY|O_NONBLOCK);
+diff --git a/dist/fr.kalessin.lightsd.plist b/dist/fr.kalessin.lightsd.plist
+new file mode 100644
+--- /dev/null
++++ b/dist/fr.kalessin.lightsd.plist
+@@ -0,0 +1,32 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++  <dict>
++    <key>KeepAlive</key>
++    <dict>
++      <key>SuccessfulExit</key>
++      <false/>
++    </dict>
++    <key>Label</key>
++    <string>fr.kalessin.lightsd</string>
++    <key>ProgramArguments</key>
++    <array>
++      <string>/usr/local/bin/lightsd</string>
++      <string>-f</string>
++      <string>-v</string>
++      <string>warning</string>
++      <string>-s</string>
++      <string>/usr/local/var/run/lightsd/socket</string>
++      <string>-c</string>
++      <string>/usr/local/var/run/lightsd/pipe</string>
++    </array>
++    <key>RunAtLoad</key>
++    <true/>
++    <key>WorkingDirectory</key>
++    <string>/usr/local/</string>
++    <key>StandardErrorPath</key>
++    <string>/usr/local/var/log/lightsd.log</string>
++    <key>StandardOutPath</key>
++    <string>/usr/local/var/log/lightsd.log</string>
++  </dict>
++</plist>
 diff --git a/dist/lightsd.service b/dist/lightsd.service
 new file mode 100644
 --- /dev/null
