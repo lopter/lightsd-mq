@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  3b956ab148fb5a8bf013964fdd7184f210ff8af9
+# Parent  981212dea0504ccd11d8706251b35202148ed8ea
 Add -u option a systemd unit and a Mac OS X plist
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -10,6 +10,213 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  )
  INSTALL(FILES share/lightsc.sh DESTINATION share/lightsd)
 +INSTALL(FILES dist/lightsd.service DESTINATION lib/systemd/system)
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -16,10 +16,16 @@
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ #include <sys/queue.h>
++#include <sys/socket.h>
+ #include <sys/tree.h>
+ #include <sys/types.h>
++#include <sys/un.h>
++#include <assert.h>
+ #include <endian.h>
++#include <err.h>
+ #include <fcntl.h>
++#include <grp.h>
++#include <pwd.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -160,3 +166,82 @@
+ 
+     setproctitle("%s", title);
+ }
++
++void
++lgtd_daemon_die_if_running_as_root_unless_requested(const char *requested_user)
++{
++    if (requested_user && !strcmp(requested_user, "root")) {
++        return;
++    }
++
++    if (geteuid() == 0 || getegid() == 0) {
++        lgtd_errx(
++            1,
++            "not running as root unless -u root is passed in; if you don't "
++            "understand why this very basic safety measure is in place and "
++            "use -u root then you deserve to be thrown under a bus, kthx bye."
++        );
++    }
++}
++
++void
++lgtd_daemon_drop_privileges(const char *user, const char *group)
++{
++    assert(user);
++
++    uid_t uid;
++    gid_t gid;
++
++    struct passwd *user_info = getpwnam(user);
++    if (!user_info) {
++        lgtd_err(1, "can't get user info for %s", user);
++    }
++    uid = user_info->pw_uid;
++
++    struct group *group_info;
++    if (group) {
++        group_info = getgrnam(group);
++    } else {
++        group_info = getgrgid(user_info->pw_gid);
++        group = group_info->gr_name;
++    }
++    if (!group_info) {
++        lgtd_err(1, "can't get group info for %s", group ? group : user);
++    }
++    gid = group_info->gr_gid;
++
++    struct lgtd_command_pipe *pipe;
++    SLIST_FOREACH(pipe, &lgtd_command_pipes, link) {
++        if (fchown(pipe->fd, uid, gid) == -1) {
++            lgtd_err(1, "can't chown %s to %s:%s", pipe->path, user, group);
++        }
++    }
++
++    struct lgtd_listen *listener;
++    SLIST_FOREACH(listener, &lgtd_listeners, link) {
++        if (listener->sockaddr->sa_family != AF_UNIX) {
++            continue;
++        }
++
++        const char *path = ((struct sockaddr_un *)listener->sockaddr)->sun_path;
++        if (chown(path, uid, gid) == -1) {
++            char addr[LGTD_SOCKADDR_STRLEN];
++            lgtd_err(
++                1, "can't chown %s to %s:%s",
++                LGTD_SOCKADDRTOA(listener->sockaddr, addr), user, group
++            );
++        }
++    }
++
++    if (setgid(gid) == -1) {
++        lgtd_err(1, "can't change group to %s", group);
++    }
++
++    if (setgroups(1, &gid) == -1) {
++        lgtd_err(1, "can't change group to %s", group);
++    }
++
++    if (setuid(uid) == -1) {
++        lgtd_err(1, "can't change user to %s", user);
++    }
++}
+diff --git a/core/daemon.h b/core/daemon.h
+--- a/core/daemon.h
++++ b/core/daemon.h
+@@ -22,3 +22,5 @@
+ bool lgtd_daemon_unleash(void); // \_o<
+ void lgtd_daemon_setup_proctitle(int, char *[], char *[]);
+ void lgtd_daemon_update_proctitle(void);
++void lgtd_daemon_die_if_running_as_root_unless_requested(const char *);
++void lgtd_daemon_drop_privileges(const char *, const char *);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -55,7 +55,9 @@
+ struct lgtd_opts lgtd_opts = {
+     .foreground = true,
+     .log_timestamps = true,
+-    .verbosity = LGTD_INFO
++    .verbosity = LGTD_INFO,
++    .user = NULL,
++    .group = NULL
+ }; 
+ 
+ struct event_base *lgtd_ev_base = NULL;
+@@ -124,15 +126,18 @@
+ {
+     printf(
+ "Usage: %s ...\n\n"
+-"  [-l,--listen addr:port [+]]          Listen for JSON-RPC commands over TCP \n"
+-"                                       at this address (can be repeated).\n"
+-"  [-c,--comand-pipe /command/fifo [+]] Open an unidirectional JSON-RPC \n"
+-"                                       command pipe at this location (can \n"
+-"                                       be repeated).\n"
+-"  [-s,--socket /unix/socket [+]]       Open an Unix socket at this location \n"
++"  [-l,--listen addr:port [+]]          Listen for JSON-RPC commands over TCP at\n"
++"                                       this address (can be repeated).\n"
++"  [-c,--comand-pipe /command/fifo [+]] Open an unidirectional JSON-RPC\n"
++"                                       command pipe at this location (can be\n"
++"                                       repeated).\n"
++"  [-s,--socket /unix/socket [+]]       Open an Unix socket at this location\n"
+ "                                       (can be repeated).\n"
+ "  [-f,--foreground]                    Stay in the foreground (default).\n"
+ "  [-d,--daemonize]                     Fork in the background.\n"
++"  [-u,--user user]                     Drop privileges to this user (and the \n"
++"                                       group of this user if -g is missing)\n"
++"  [-g,--group group]                   Drop privileges to this group\n"
+ "  [-t,--no-timestamps]                 Disable timestamps in logs.\n"
+ "  [-h,--help]                          Display this.\n"
+ "  [-V,--version]                       Display version and build information.\n"
+@@ -159,6 +164,8 @@
+         {"socket",          required_argument, NULL, 's'},
+         {"foreground",      no_argument,       NULL, 'f'},
+         {"daemonize",       no_argument,       NULL, 'd'},
++        {"user",            required_argument, NULL, 'u'},
++        {"group",           required_argument, NULL, 'g'},
+         {"no-timestamps",   no_argument,       NULL, 't'},
+         {"help",            no_argument,       NULL, 'h'},
+         {"verbosity",       required_argument, NULL, 'v'},
+@@ -166,7 +173,7 @@
+         {"prefix",          no_argument,       NULL, 'p'},
+         {NULL,              0,                 NULL, 0}
+     };
+-    const char short_opts[] = "l:c:s:fdthv:V";
++    const char short_opts[] = "l:c:s:fdu:g:thv:V";
+ 
+     if (argc == 1) {
+         lgtd_usage(argv[0]);
+@@ -202,6 +209,12 @@
+             break;
+         case 'd':
+             lgtd_opts.foreground = false;
++        case 'u':
++            lgtd_opts.user = optarg;
++            break;
++        case 'g':
++            lgtd_opts.group = optarg;
++            break;
+         case 't':
+             lgtd_opts.log_timestamps = false;
+             break;
+@@ -240,6 +253,12 @@
+     argc -= optind;
+     argv += optind;
+ 
++    if (lgtd_opts.user) {
++        lgtd_daemon_drop_privileges(lgtd_opts.user, lgtd_opts.group);
++    }
++
++    lgtd_daemon_die_if_running_as_root_unless_requested(lgtd_opts.user);
++
+     lgtd_lifx_wire_load_packet_info_map();
+     if (!lgtd_lifx_watchdog_setup() || !lgtd_lifx_broadcast_setup()) {
+         lgtd_err(1, "can't setup lightsd");
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -107,6 +107,8 @@
+     bool                foreground;
+     bool                log_timestamps;
+     enum lgtd_verbosity verbosity;
++    const char          *user;
++    const char          *group;
+ };
+ 
+ extern struct lgtd_opts lgtd_opts;
 diff --git a/dist/lightsd.service b/dist/lightsd.service
 new file mode 100644
 --- /dev/null

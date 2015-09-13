@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  bfaf17289204b95c28ce5d7da5385b020d90a7f4
+# Parent  25a0f8e72aaabd0827bcd3524b06639270fb433f
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -72,7 +72,7 @@ diff --git a/core/client.c b/core/client.c
      free(client);
  }
  
-@@ -80,15 +81,12 @@
+@@ -80,15 +81,13 @@
      // Get the actual pointer to the beginning of the evbuf:
      const char *buf = (char *)evbuffer_pullup(input, nbytes);
  
@@ -88,12 +88,13 @@ diff --git a/core/client.c b/core/client.c
 -            LGTD_ARRAY_SIZE(client->jsmn_tokens)
 -        );
 +        jsmn_parser jsmn_ctx;
++    parse_after_realloc:
 +        jsmn_init(&jsmn_ctx);
 +        jsmnerr_t rv = jsmn_parse(&jsmn_ctx, buf, nbytes, tokens, ntokens);
          switch (rv) {
          case JSMN_ERROR_NOMEM:
          case JSMN_ERROR_INVAL:
-@@ -110,19 +108,29 @@
+@@ -110,19 +109,30 @@
              }
              break;
          default:
@@ -130,6 +131,7 @@ diff --git a/core/client.c b/core/client.c
 +                    client->jsmn_tokens, ntokens, sizeof(*tokens)
 +                );
 +                tokens = client->jsmn_tokens;
++                goto parse_after_realloc;
              }
 -            break;
          }
@@ -155,18 +157,6 @@ diff --git a/core/client.h b/core/client.h
  void lgtd_client_close_all(void);
  
  void lgtd_client_write_string(struct lgtd_client *, const char *);
-diff --git a/core/jsonrpc.c b/core/jsonrpc.c
---- a/core/jsonrpc.c
-+++ b/core/jsonrpc.c
-@@ -1162,7 +1162,7 @@
-                 );
-                 goto error;
-             }
--            struct bufferevent *client_io;
-+            struct bufferevent *client_io = NULL; // keep compilers happy...
-             if (!request->id) {
-                 // Ugly hack to behave correctly on jsonrpc notifications, it's
-                 // not worth it do it properly right now. It is especially ugly
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
@@ -230,16 +220,16 @@ diff --git a/core/pipe.c b/core/pipe.c
      free(pipe);
  }
  
-@@ -93,17 +94,14 @@
+@@ -93,17 +94,16 @@
          }
  
          if (!drain) {
-+        jsmntok_t *tokens = NULL;
-+        int ntokens = 0;
-+        jsmn_parser jsmn_ctx;
++            jsmntok_t *tokens = NULL;
++            int ntokens = 0;
++            jsmn_parser jsmn_ctx;
          next_request:
 -            jsmn_init(&pipe->client.jsmn_ctx);
-+            jsmn_init(&jsmn_ctx);
++            (void)0;
              const char *buf = (char *)evbuffer_pullup(pipe->read_buf, -1);
              ssize_t bufsz = evbuffer_get_length(pipe->read_buf);
 -            jsmnerr_t rv = jsmn_parse(
@@ -249,11 +239,13 @@ diff --git a/core/pipe.c b/core/pipe.c
 -                pipe->client.jsmn_tokens,
 -                LGTD_ARRAY_SIZE(pipe->client.jsmn_tokens)
 -            );
++        parse_after_realloc:
++            jsmn_init(&jsmn_ctx);
 +            jsmnerr_t rv = jsmn_parse(&jsmn_ctx, buf, bufsz, tokens, ntokens);
              switch (rv) {
              case JSMN_ERROR_NOMEM:
              case JSMN_ERROR_INVAL:
-@@ -122,17 +120,24 @@
+@@ -122,17 +122,25 @@
                  }
                  break;
              default:
@@ -282,13 +274,14 @@ diff --git a/core/pipe.c b/core/pipe.c
 +                        pipe->client.jsmn_tokens, ntokens, sizeof(*tokens)
 +                    );
 +                    tokens = pipe->client.jsmn_tokens;
++                    goto parse_after_realloc;
                  }
 -                break;
 +                goto next_request;
              }
          }
  
-@@ -172,7 +177,6 @@
+@@ -172,7 +180,6 @@
          return false;
      }
  
