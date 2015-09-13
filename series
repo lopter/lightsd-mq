@@ -1,7 +1,6 @@
 rename_install_prefix_into_prefix.patch
 add_unix_socket_support.patch
 stop_replying_to_jsonrpc_notifications.patch
-random_id_in_lightsc_py_payload.patch
 stop_using_a_global_struct_in_watchdog.patch
 backoff_to_passive_discovery_interval.patch
 use_reallocarray_for_jsmn_tokens.patch
