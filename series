@@ -1,15 +1,2 @@
-rename_install_prefix_into_prefix.patch
-add_unix_socket_support.patch
-stop_replying_to_jsonrpc_notifications.patch
-stop_using_a_global_struct_in_watchdog.patch
-backoff_to_passive_discovery_interval.patch
-use_reallocarray_for_jsmn_tokens.patch
-import_setproctitle_remove_bsd_dependency.patch
-add_privdrop_systemd_launchd.patch
-check_if_existing_pipe_is_fifo.patch
-fix_bulbs_refresh.patch
-create_parent_directories_for_sockets_and_pipes.patch
-rename_watchdog_into_discovery.patch
-add_rundir_option.patch
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
