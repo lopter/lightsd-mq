@@ -1,2 +1,3 @@
+fix_command_pipe_support.patch
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
