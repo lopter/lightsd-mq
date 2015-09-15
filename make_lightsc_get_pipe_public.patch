@@ -1,0 +1,74 @@
+# HG changeset patch
+# Parent  69dfde27d5fea0a9cdc60d570e9d01220b4c03e8
+Expose lightsc_get_pipe in lightsc.sh
+
+It's useful for batch requests with lightsc_make_request.
+
+Also an alert script example: sleep $((x * 60)) ; alert '"#kitchen"' is
+a favorite of mine.
+
+diff --git a/examples/alert b/examples/alert
+new file mode 100755
+--- /dev/null
++++ b/examples/alert
+@@ -0,0 +1,5 @@
++#!/bin/sh
++
++. `lightsd --prefix`/share/lightsd/lightsc.sh
++
++lightsc set_waveform ${*:-'"*"'} '"SQUARE"' 0 1.0 0.6 3500 500 15 0.5 true
+diff --git a/share/lightsc.sh.in b/share/lightsc.sh.in
+--- a/share/lightsc.sh.in
++++ b/share/lightsc.sh.in
+@@ -28,26 +28,6 @@
+ # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ # POSSIBILITY OF SUCH DAMAGE.
+ 
+-# Here is an example script that dims bulbs to a warm orange:
+-
+-# #!/bin/sh
+-#
+-# # Optional (default value: /run/lightsd.cmd):
+-# COMMAND_PIPE=/foo/bar/lightsd.cmd
+-#
+-# . /usr/lib/lightsd/lightsc.sh
+-#
+-# lightsc set_light_from_hsbk ${*:-'"*"'} 37.469443 1.0 0.05 3500 600
+-
+-# Here is how you could use it:
+-#
+-# - dim all the bulbs: orange
+-# - dim the bulb named kitchen: orange '"kitchen"'
+-# - dim the bulb named kitchen and the bulbs tagged bedroom:
+-#   orange '["kitchen", "#bedroom"]'
+-#
+-# You can also load this file directly in your shell rc configuration file.
+-#
+ # NOTE: Keep in mind that arguments must be JSON, you will have to enclose
+ #       tags and labels into double quotes '"likethis"'. Also keep in mind
+ #       that the pipe is write-only you cannot read any result back.
+@@ -79,7 +59,7 @@
+     fi
+ }
+ 
+-_lightsc_get_pipe() {
++lightsc_get_pipe() {
+     local pipe=${LIGHTSD_COMMAND_PIPE:-@LGTD_RUNTIME_DIRECTORY@/pipe}
+     if [ ! -p $pipe ] ; then
+         echo >&2 "$pipe cannot be found, is lightsd running?"
+@@ -90,7 +70,7 @@
+ 
+ # Can be used to build batch request:
+ #
+-# tee $COMMAND_PIPE <<EOF
++# tee $LIGTHSD_COMMAND_PIPE <<EOF
+ # [
+ #     $(lightsc_make_request set_light_from_hsbk ${*:-'"#tower"'} 37.469443 1.0 0.05 3500 600),
+ #     $(lightsc_make_request set_light_from_hsbk ${*:-'["candle","fugu"]'} 47.469443 0.2 0.05 3500 600),
+@@ -125,5 +105,5 @@
+         return 1
+     fi
+ 
+-    lightsc_make_request $* | tee `_lightsc_get_pipe` | _lightsc_jq
++    lightsc_make_request $* | tee `lightsc_get_pipe` | _lightsc_jq
+ }

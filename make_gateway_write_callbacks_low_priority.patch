@@ -1,0 +1,27 @@
+# HG changeset patch
+# Parent  377f21a88d8c9fbbc7b2803145ba6fbffd950dbb
+Always handle incoming LIFX packet first
+
+This will allow us to more correctly measure the gateways latencies and
+fix bugs.
+
+Also good to have the write callbacks executed last once we have can
+optimize LIFX packet queues.
+
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -83,6 +83,13 @@
+ 
+ enum { LGTD_ERROR_MSG_BUFSIZE = 2048 };
+ 
++enum {
++    LGTD_EVENT_PRIO_HIGH    = 0,
++    LGTD_EVENT_PRIO_LOW     = 1,
++    LGTD_EVENT_PRIO_DEFAULT = 1,
++    LGTD_EVENT_NPRIORITIES
++};
++
+ // FIXME: introspect sizeof(sockaddr_un.sun_path) with CMake to generate a
+ // reasonable value for that:
+ enum { LGTD_SOCKADDR_STRLEN = 128 };
