@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  377f21a88d8c9fbbc7b2803145ba6fbffd950dbb
+# Parent  06e7fa209a25f6d35805e6c1e72d785da659a739
 Always handle incoming LIFX packet first
 
 This will allow us to more correctly measure the gateways latencies and
@@ -8,6 +8,20 @@ fix bugs.
 Also good to have the write callbacks executed last once we have can
 optimize LIFX packet queues.
 
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -100,6 +100,10 @@
+ {
+     event_set_log_callback(lgtd_libevent_log);
+     lgtd_ev_base = event_base_new();
++    if (!lgtd_ev_base
++        || event_base_priority_init(lgtd_ev_base, LGTD_EVENT_NPRIORITIES)) {
++        lgtd_err(1, "can't initialize libevent");
++    }
+ }
+ 
+ static void
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
@@ -17,11 +31,69 @@ diff --git a/core/lightsd.h b/core/lightsd.h
  
 +enum {
 +    LGTD_EVENT_PRIO_HIGH    = 0,
-+    LGTD_EVENT_PRIO_LOW     = 1,
-+    LGTD_EVENT_PRIO_DEFAULT = 1,
++    LGTD_EVENT_PRIO_DEFAULT,
++    LGTD_EVENT_PRIO_LOW,
 +    LGTD_EVENT_NPRIORITIES
 +};
 +
  // FIXME: introspect sizeof(sockaddr_un.sun_path) with CMake to generate a
  // reasonable value for that:
  enum { LGTD_SOCKADDR_STRLEN = 128 };
+diff --git a/lifx/broadcast.c b/lifx/broadcast.c
+--- a/lifx/broadcast.c
++++ b/lifx/broadcast.c
+@@ -317,6 +317,13 @@
+         goto error;
+     }
+ 
++    err = event_priority_set(
++        lgtd_lifx_broadcast_endpoint.read_ev, LGTD_EVENT_PRIO_HIGH
++    );
++    if (err) {
++        goto error;
++    }
++
+     if (!event_add(lgtd_lifx_broadcast_endpoint.read_ev, NULL)) {
+         return true;
+     }
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -319,11 +319,13 @@
+         gw
+     );
+     gw->write_buf = evbuffer_new();
+-    if (!gw->write_ev || !gw->write_buf) {
+-        goto error_allocate;
+-    }
+     gw->peer = malloc(addrlen);
+-    if (!gw->peer) {
++    // We set a low priority on the write callback to be able to "correctly"
++    // measure the latency. In general, we want to process updates from the
++    // bulbs first: better chances of returning up-to-date data to the clients
++    // and to optimize what we're sending to the bulbs:
++    if (!gw->write_ev || !gw->write_buf || !gw->peer
++        || event_priority_set(gw->write_ev, LGTD_EVENT_PRIO_LOW) != 0) {
+         goto error_allocate;
+     }
+ 
+diff --git a/tests/core/mock_event2.h b/tests/core/mock_event2.h
+--- a/tests/core/mock_event2.h
++++ b/tests/core/mock_event2.h
+@@ -114,6 +114,16 @@
+ }
+ #endif
+ 
++#ifndef MOCKED_EVENT_PRIORITY_SET
++int
++event_priority_set(struct event *ev, int priority)
++{
++    (void)ev;
++    (void)priority;
++    return 0;
++}
++#endif
++
+ #ifndef MOCKED_EVENT_ACTIVE
+ void
+ event_active(struct event *ev, int res, short ncalls)

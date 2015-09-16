@@ -26,6 +26,15 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
+@@ -139,7 +139,7 @@
+ "                                       (can be repeated).\n"
+ "  [-f,--foreground]                    Stay in the foreground (default).\n"
+ "  [-d,--daemonize]                     Fork in the background.\n"
+-"  [-u,--user user]                     Drop privileges to this user (and the \n"
++"  [-u,--user user]                     Drop privileges to this user (and the\n"
+ "                                       group of this user if -g is missing).\n"
+ "  [-g,--group group]                   Drop privileges to this group (-g requires\n"
+ "                                       the -u option to be used).\n"
 @@ -160,6 +160,9 @@
  int
  main(int argc, char *argv[], char *envp[])
