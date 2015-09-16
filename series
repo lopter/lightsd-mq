@@ -1,7 +1,3 @@
-fix_progname.patch
-make_lightsc_get_pipe_public.patch
-fix_gateway_timeout_detection.patch
-write_docs.patch
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
