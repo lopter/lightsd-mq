@@ -1,0 +1,33 @@
+# HG changeset patch
+# Parent  ec8c5840194101c507ce3e155d1dc7c5d719bd62
+Cope with versions of CMake older than 2.8.11
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,5 +1,5 @@
+-# first version with TARGET_INCLUDE_DIRECTORIES:
+-CMAKE_MINIMUM_REQUIRED(VERSION 2.8.11)
++# it probably works with older versions but this the oldest tested one:
++CMAKE_MINIMUM_REQUIRED(VERSION 2.8.9)
+ 
+ PROJECT(LIGHTSD C)
+ 
+@@ -87,7 +87,16 @@
+ ADD_SUBDIRECTORY(compat)
+ ADD_SUBDIRECTORY(core)
+ ADD_SUBDIRECTORY(lifx)
+-ADD_SUBDIRECTORY(tests)
++# 2.8.11 is the first version with TARGET_INCLUDE_DIRECTORIES:
++IF (CMAKE_VERSION VERSION_GREATER 2.8.10)
++    ADD_SUBDIRECTORY(tests)
++ELSE ()
++    MESSAGE(
++        STATUS
++        "The tests suite requires CMake >= 2.8.11 "
++        "but you have ${CMAKE_VERSION}, disabling it"
++    )
++ENDIF ()
+ 
+ INSTALL(
+     FILES COPYING README.rst docs/protocol.rst

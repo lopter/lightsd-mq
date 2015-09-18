@@ -1,0 +1,24 @@
+# HG changeset patch
+# Parent  b429a8df7430d049d2c039a624f7e6cd8ac438e5
+
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -29,7 +29,7 @@
+ lgtd_lifx_wire_htolefloat(float f)
+ {
+     union { float f; uint32_t i; } u = { .f = f };
+-    htole32(u.i);
++    u.i = htole32(u.i);
+     return u.f;
+ }
+ 
+@@ -37,7 +37,7 @@
+ lgtd_lifx_wire_lefloattoh(float f)
+ {
+     union { float f; uint32_t i; } u = { .f = f };
+-    le32toh(u.i);
++    u.i = le32toh(u.i);
+     return u.f;
+ }
+ 
