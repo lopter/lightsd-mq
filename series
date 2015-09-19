@@ -1,7 +1,3 @@
-cope_with_old_cmake_versions.patch
-fix_float_endianness_conversion.patch
-document_unix_url.patch
-fix_status_line.patch
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
