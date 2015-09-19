@@ -1,0 +1,40 @@
+# HG changeset patch
+# Parent  2a9dee9d86403362693bc58f76cc47972ccff499
+Lookup for a socket in a build directory in lightsc.py
+
+Hopefully it will help people trying to build lightsd manually a little
+bit.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,7 +5,7 @@
+ 
+ SET(CPACK_PACKAGE_VERSION_MAJOR "1")
+ SET(CPACK_PACKAGE_VERSION_MINOR "0")
+-SET(CPACK_PACKAGE_VERSION_PATCH "1")
++SET(CPACK_PACKAGE_VERSION_PATCH "2")
+ SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+ 
+ MESSAGE(STATUS "CMake version: ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}.${CMAKE_PATCH_VERSION}")
+diff --git a/examples/lightsc.py b/examples/lightsc.py
+--- a/examples/lightsc.py
++++ b/examples/lightsc.py
+@@ -227,11 +227,14 @@
+     except Exception as ex:
+         print(
+             "Couldn't infer lightsd's runtime directory is lightsd installed? "
+-            "({})".format(ex),
++            "({})\nTrying build/socket...".format(ex),
+             file=sys.stderr
+         )
+-        sys.exit(1)
+-    lightsdrundir = lightsdrundir.decode(locale.getpreferredencoding()).strip()
++        lightscdir = os.path.realpath(__file__).split(os.path.sep)[:-2]
++        lightsdrundir = os.path.join(*[os.path.sep] + lightscdir + ["build"])
++    else:
++        encoding = locale.getpreferredencoding()
++        lightsdrundir = lightsdrundir.decode(encoding).strip()
+ 
+     parser = argparse.ArgumentParser(
+         description="lightsc.py is an interactive lightsd Python client"
