@@ -1,11 +1,20 @@
 # HG changeset patch
-# Parent  c59c6d37e2a83fa8a37aed9fe08e2fd09ebe46d7
+# Parent  b4a8bb3a5960a96540f6f925fdeac4a32fdcc114
 Document the unix:// scheme for lightsc.py's -u option
 
 diff --git a/docs/first-steps.rst b/docs/first-steps.rst
 --- a/docs/first-steps.rst
 +++ b/docs/first-steps.rst
-@@ -266,6 +266,12 @@
+@@ -259,13 +259,19 @@
+ 
+ Check out :doc:`lightsd's protocol </protocol>` to see everything you can do.
+ 
+-lightsc.py also accepts an url which lets you connect to any running lightsd,
+-e.g:
++lightsc.py also accepts an url which lets you connect to anything running
++lightsd, e.g:
+ 
+ ::
  
     lightsc.py -u tcp://localhost:1234
  
