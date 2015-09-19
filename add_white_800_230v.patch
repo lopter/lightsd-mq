@@ -1,0 +1,20 @@
+# HG changeset patch
+# Parent  18dec9a3b400712499161cd71779d64584f8e61d
+Add product id for the 230V version of the LIFX White 800
+
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -58,10 +58,11 @@
+     switch (product_id) {
+     case 0x1:
+     case 0x2:
+-        return "A21 (Original)";
++        return "A21 (Original 1000)";
+     case 0x3:
+         return "GU10 (Color 650)";
+     case 0xa:
++    case 0xb:
+         return "A19 (White 800)";
+     default:
+         return "Unknown";
