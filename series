@@ -1,6 +1,3 @@
-fix_openbsd_build.patch
-add_white_800_230v.patch
-add_changelog_docs_section.patch
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
