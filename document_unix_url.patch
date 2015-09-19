@@ -1,0 +1,20 @@
+# HG changeset patch
+# Parent  c59c6d37e2a83fa8a37aed9fe08e2fd09ebe46d7
+Document the unix:// scheme for lightsc.py's -u option
+
+diff --git a/docs/first-steps.rst b/docs/first-steps.rst
+--- a/docs/first-steps.rst
++++ b/docs/first-steps.rst
+@@ -266,6 +266,12 @@
+ 
+    lightsc.py -u tcp://localhost:1234
+ 
++Or, for an Unix socket:
++
++::
++
++    lightsc.py -u unix:///path/to/lightsd/socket
++
+ .. _lightsc.py: https://github.com/lopter/lightsd/blob/master/examples/lightsc.py
+ 
+ .. vim: set tw=80 spelllang=en spell:
