@@ -1,6 +1,15 @@
 # HG changeset patch
-# Parent  3f96fadba90258177499ced5af44f16bade6dc87
-Add the --syslog (-S) and --syslog-facility (-F) logging options
+# Parent  07d291b605ee086f2ab2b6ec52f504cc69482606
+Add the --syslog (-S), --syslog-facility (-F), --syslog-ident (-I) options
+
+-S diverts logging to syslog, supported facilities are:
+
+- daemon;
+- user;
+- local0 through 7.
+
+-I lets you tune the process identifier and defaults to lightsd
+(independently of progname).
 
 Closes GH-1.
 
@@ -275,21 +284,6 @@ diff --git a/core/daemon.c b/core/daemon.c
 +}
 +
 +void
-+lgtd_daemon_syslog_err(int eval, const char *fmt, va_list ap)
-+{
-+    char errfmt[LGTD_DAEMON_ERRFMT_SIZE];
-+    lgtd_daemon_setup_errfmt(fmt, errfmt, sizeof(errfmt));
-+
-+    va_list aq;
-+    va_copy(aq, ap);
-+    vsyslog(LOG_PID|LOG_ERR|lgtd_opts.syslog_facility, errfmt, aq);
-+    va_end(aq);
-+
-+    lgtd_cleanup();
-+    exit(eval);
-+}
-+
-+void
 +lgtd_daemon_syslog_open(const char *ident,
 +                        enum lgtd_verbosity level,
 +                        int facility)
@@ -302,6 +296,21 @@ diff --git a/core/daemon.c b/core/daemon.c
 +
 +    openlog(ident, LOG_PID, facility);
 +    setlogmask(LOG_UPTO(syslog_priorities[level]));
++}
++
++void
++lgtd_daemon_syslog_err(int eval, const char *fmt, va_list ap)
++{
++    char errfmt[LGTD_DAEMON_ERRFMT_SIZE];
++    lgtd_daemon_setup_errfmt(fmt, errfmt, sizeof(errfmt));
++
++    va_list aq;
++    va_copy(aq, ap);
++    vsyslog(LOG_ERR, errfmt, aq);
++    va_end(aq);
++
++    lgtd_cleanup();
++    exit(eval);
 +}
 +
 +void
