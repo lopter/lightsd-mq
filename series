@@ -1,4 +1,5 @@
 improve_lightsc_socket_lookup.patch
+add_syslog_support.patch
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux
