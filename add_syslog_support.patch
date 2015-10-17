@@ -1,13 +1,102 @@
 # HG changeset patch
-# Parent  1f3893f2eaddaae9e545a65594b37973f9a981de
+# Parent  c99f90e4902235536d7fdee1a9501ba8f893c921
 Add the --syslog (-S) and --syslog-facility (-F) logging options
 
 Closes GH-1.
 
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -13,6 +13,7 @@
+ ADD_EXECUTABLE(
+     lightsd
+     client.c
++    console.c
+     daemon.c
+     jsmn.c
+     jsonrpc.c
+diff --git a/core/daemon.h b/core/daemon.h
+--- a/core/daemon.h
++++ b/core/daemon.h
+@@ -27,3 +27,10 @@
+ void lgtd_daemon_set_group(const char *);
+ void lgtd_daemon_drop_privileges(void);
+ bool lgtd_daemon_makedirs(const char *);
++
++void lgtd_daemon_err(int, const char *, va_list);
++void lgtd_daemon_errx(int, const char *, va_list);
++void lgtd_daemon_warn(const char *, va_list);
++void lgtd_daemon_warnx(const char *, va_list);
++void lgtd_daemon_info(const char *, va_list);
++void lgtd_daemon_debug(const char *, va_list);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -32,6 +32,7 @@
+ #include <signal.h>
+ #include <string.h>
+ #include <strings.h>
++#include <syslog.h>
+ 
+ #include <event2/event.h>
+ #include <event2/event_struct.h>
+@@ -61,11 +62,15 @@
+     .verbosity = LGTD_WARN,
+ #endif
+     .user = NULL,
+-    .group = NULL
++    .group = NULL,
++    .syslog = false,
++    .syslog_facility = LOG_DAEMON
+ }; 
+ 
+ struct event_base *lgtd_ev_base = NULL;
+ 
++static int lgtd_last_signal_received = 0;
++
+ void
+ lgtd_cleanup(void)
+ {
+@@ -87,9 +92,9 @@
+ {
+     assert(ctx);
+ 
+-    lgtd_info(
+-        "received signal %d (%s), exiting...", signum, strsignal(signum)
+-    );
++    // NOTE: syslog isn't signal safe, don't log anything in this function.
++
++    lgtd_last_signal_received = signum;
+     event_del((struct event *)ctx);  // restore default behavior
+     event_base_loopbreak(lgtd_ev_base);
+     (void)events;
+@@ -301,6 +306,13 @@
+ 
+     event_base_dispatch(lgtd_ev_base);
+ 
++    if (lgtd_last_signal_received) {
++        lgtd_info(
++            "received signal %d (%s), exiting...",
++            lgtd_last_signal_received, strsignal(lgtd_last_signal_received)
++        );
++    }
++
+     lgtd_cleanup();
+ 
+     return 0;
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -126,14 +126,12 @@
+@@ -109,6 +109,8 @@
+     enum lgtd_verbosity verbosity;
+     const char          *user;
+     const char          *group;
++    bool                syslog;
++    int                 syslog_facility;
+ };
+ 
+ extern struct lgtd_opts lgtd_opts;
+@@ -126,14 +128,12 @@
  #define LGTD_PRINT_DURATION(secs, arr) \
      lgtd_print_duration((secs), (arr), sizeof((arr)))
  
@@ -31,39 +120,169 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 diff --git a/core/log.c b/core/log.c
 --- a/core/log.c
 +++ b/core/log.c
-@@ -165,9 +165,9 @@
+@@ -17,62 +17,24 @@
  
- void
- _lgtd_err(void (*errfn)(int, const char *, ...),
+ #include <sys/socket.h>
+ #include <sys/tree.h>
+-#include <sys/time.h>
+ #include <sys/un.h>
+ #include <arpa/inet.h>
+ #include <assert.h>
+ #include <endian.h>
+-#include <err.h>
+-#include <errno.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <time.h>
+ 
+ #include <event2/event.h>
+ 
+ #include "lifx/wire_proto.h"
+ #include "stats.h"
++#include "console.h"
+ #include "lightsd.h"
+ 
+-static void
+-lgtd_isotime_now(char *strbuf, int bufsz)
+-{
+-    assert(strbuf);
+-    assert(bufsz > 0);
+-
+-    struct timeval now;
+-    if (gettimeofday(&now, NULL) == -1) {
+-        goto error;
+-    }
+-    struct tm tm_now;
+-    if (!localtime_r(&now.tv_sec, &tm_now)) {
+-        goto error;
+-    }
+-    LGTD_TM_TO_ISOTIME(&tm_now, strbuf, bufsz, now.tv_usec);
+-    return;
+-error:
+-    strbuf[0] = '\0';
+-}
+-
+-static void
+-lgtd_log_header(const char *loglvl, bool showprogname)
+-{
+-    if (lgtd_opts.log_timestamps) {
+-        char timestr[64];
+-        lgtd_isotime_now(timestr, sizeof(timestr));
+-        fprintf(
+-            stderr, "[%s] [%s] %s",
+-            timestr, loglvl, showprogname ? "lightsd: " : ""
+-        );
+-        return;
+-    }
+-    fprintf(stderr, "[%s] %s", loglvl, showprogname ? "lightsd: " : "");
+-}
+-
+ char *
+ lgtd_iee8023mactoa(const uint8_t *addr, char *buf, int buflen)
+ {
+@@ -163,63 +125,39 @@
+     return buf;
+ }
+ 
+-void
+-_lgtd_err(void (*errfn)(int, const char *, ...),
 -           int eval,
 -           const char *fmt,
 -           ...)
-+          int eval,
-+          const char *fmt,
-+          va_list ap)
- {
-     int errsave = errno;
-     va_list ap;
-@@ -183,8 +183,21 @@
-     errfn(eval, errmsg);
+-{
+-    int errsave = errno;
+-    va_list ap;
+-    va_start(ap, fmt);
+-    // lgtd_cleanup is probably going to free some of the arguments we got, so
+-    // let's print to a buffer before we call err.
+-    char errmsg[LGTD_ERROR_MSG_BUFSIZE];
+-    vsnprintf(errmsg, sizeof(errmsg), fmt, ap);
+-    va_end(ap);
+-    lgtd_cleanup();
+-    lgtd_log_header("ERR", false);
+-    errno = errsave;
+-    errfn(eval, errmsg);
++#define ERRFN(fn)                           \
++void                                        \
++lgtd_##fn(int eval, const char *fmt, ...)   \
++{                                           \
++    va_list ap;                             \
++    va_start(ap, fmt);                      \
++    if (lgtd_opts.syslog) {                 \
++    } else {                                \
++        lgtd_console_##fn(eval, fmt, ap);   \
++    }                                       \
++    va_end(ap);                             \
  }
  
-+
- void
+-void
 -_lgtd_warn(void (*warnfn)(const char *, va_list), const char *fmt, ...)
-+lgtd_err(int eval, const char *fmt, ...)
-+{
+-{
+-    if (lgtd_opts.verbosity <= LGTD_WARN) {
+-        va_list ap;
+-        va_start(ap, fmt);
+-        lgtd_log_header("WARN", false);
+-        warnfn(fmt, ap);
+-        va_end(ap);
+-    }
++ERRFN(err);
++ERRFN(errx);
 +
-+}
-+
-+void
-+lgtd_errx(int eval, const char *fmt, ...)
-+{
-+
-+}
-+
-+void
-+_lgtd_warn(void (*warnfn)(int, const char *, ...), const char *fmt, va_list)
- {
-     if (lgtd_opts.verbosity <= LGTD_WARN) {
-         va_list ap;
++#define LOGFN(fn)                   \
++void                                \
++lgtd_##fn(const char *fmt, ...)     \
++{                                   \
++    va_list ap;                     \
++    va_start(ap, fmt);              \
++    if (lgtd_opts.syslog) {         \
++    } else {                        \
++        lgtd_console_##fn(fmt, ap); \
++    }                               \
++    va_end(ap);                     \
+ }
+ 
+-void
+-lgtd_info(const char *fmt, ...)
+-{
+-    if (lgtd_opts.verbosity <= LGTD_INFO) {
+-        va_list ap;
+-        va_start(ap, fmt);
+-        lgtd_log_header("INFO", true);
+-        vfprintf(stderr, fmt, ap);
+-        va_end(ap);
+-        fprintf(stderr, "\n");
+-    }
+-}
+-
+-void
+-lgtd_debug(const char *fmt, ...)
+-{
+-    if (lgtd_opts.verbosity <= LGTD_DEBUG) {
+-        va_list ap;
+-        va_start(ap, fmt);
+-        lgtd_log_header("DEBUG", true);
+-        vfprintf(stderr, fmt, ap);
+-        va_end(ap);
+-        fprintf(stderr, "\n");
+-    }
+-}
++LOGFN(warn);
++LOGFN(warnx);
++LOGFN(info);
++LOGFN(debug);
+ 
+ void
+ lgtd_libevent_log(int severity, const char *msg)
+@@ -227,7 +165,7 @@
+     switch (severity) {
+     case EVENT_LOG_DEBUG:   lgtd_debug("%s", msg); break;
+     case EVENT_LOG_MSG:     lgtd_info("%s", msg);  break;
+-    case EVENT_LOG_WARN:    lgtd_warnx("%s", msg)  break;
++    case EVENT_LOG_WARN:    lgtd_warnx("%s", msg); break;
+     case EVENT_LOG_ERR:     lgtd_warnx("%s", msg); break;
+     default:                                       break;
+     }
