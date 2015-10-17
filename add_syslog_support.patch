@@ -164,7 +164,7 @@ diff --git a/core/console.h b/core/console.h
 new file mode 100644
 --- /dev/null
 +++ b/core/console.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,31 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -188,8 +188,10 @@ new file mode 100644
 +# define __atttribute__(e)
 +#endif
 +
-+void lgtd_console_err(int, const char *, va_list);
-+void lgtd_console_errx(int, const char *, va_list);
++void lgtd_console_err(int, const char *, va_list)
++    __attribute__((noreturn));
++void lgtd_console_errx(int, const char *, va_list)
++    __attribute__((noreturn));
 +void lgtd_console_warn(const char *, va_list);
 +void lgtd_console_warnx(const char *, va_list);
 +void lgtd_console_info(const char *, va_list);
@@ -241,7 +243,7 @@ diff --git a/core/daemon.c b/core/daemon.c
 +        }
 +    }
 +
-+    errx(
++    lgtd_errx(
 +        1,
 +        "Invalid syslog facility %s (possible values: LOG_DAEMON, "
 +        "LOG_USER, LOG_LOCAL0 through 7)", facility
@@ -256,7 +258,7 @@ diff --git a/core/daemon.c b/core/daemon.c
 +    if (n - 1 + (int)sizeof(": %m") <= sz) {
 +        memcpy(errfmt + n - 1, ": %m", sizeof(": %m"));
 +    } else {
-+        errfmt[n] = 0;
++        errfmt[n] = '\0';
 +#ifndef NDEBUG
 +        abort();
 +#endif
@@ -331,8 +333,14 @@ diff --git a/core/daemon.c b/core/daemon.c
 diff --git a/core/daemon.h b/core/daemon.h
 --- a/core/daemon.h
 +++ b/core/daemon.h
-@@ -19,6 +19,8 @@
+@@ -17,8 +17,14 @@
  
+ #pragma once
+ 
++#ifndef __attribute__
++# define __atttribute__(e)
++#endif
++
  enum { LGTD_DAEMON_TITLE_SIZE = 2048 };
  
 +enum { LGTD_DAEMON_ERRFMT_SIZE = 4096 };
@@ -340,15 +348,17 @@ diff --git a/core/daemon.h b/core/daemon.h
  bool lgtd_daemon_unleash(void); // \_o<
  void lgtd_daemon_setup_proctitle(int, char *[], char *[]);
  void lgtd_daemon_update_proctitle(void);
-@@ -27,3 +29,12 @@
+@@ -27,3 +33,14 @@
  void lgtd_daemon_set_group(const char *);
  void lgtd_daemon_drop_privileges(void);
  bool lgtd_daemon_makedirs(const char *);
 +
 +
 +int lgtd_daemon_syslog_facilitytoi(const char *);
-+void lgtd_daemon_syslog_err(int, const char *, va_list);
-+void lgtd_daemon_syslog_errx(int, const char *, va_list);
++void lgtd_daemon_syslog_err(int, const char *, va_list)
++    __attribute__((noreturn));
++void lgtd_daemon_syslog_errx(int, const char *, va_list)
++    __attribute__((noreturn));
 +void lgtd_daemon_syslog_warn(const char *, va_list);
 +void lgtd_daemon_syslog_warnx(const char *, va_list);
 +void lgtd_daemon_syslog_info(const char *, va_list);
@@ -476,10 +486,10 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 -    __attribute__((format(printf, 2, 3)));
 -#define lgtd_warn(fmt, ...) _lgtd_warn(vwarn, (fmt), ##__VA_ARGS__);
 -#define lgtd_warnx(fmt, ...) _lgtd_warn(vwarnx, (fmt), ##__VA_ARGS__);
-+void lgtd_log_open(const char *);
-+void lgtd_log_close(void);
-+void lgtd_err(int, const char *, ...) __attribute__((format(printf, 2, 3)));
-+void lgtd_errx(int, const char *, ...) __attribute__((format(printf, 2, 3)));
++void lgtd_err(int, const char *, ...)
++    __attribute__((format(printf, 2, 3), noreturn));
++void lgtd_errx(int, const char *, ...)
++    __attribute__((format(printf, 2, 3), noreturn));
 +void lgtd_warn(const char *, ...) __attribute__((format(printf, 1, 2)));
 +void lgtd_warnx(const char *, ...) __attribute__((format(printf, 1, 2)));
  void lgtd_info(const char *, ...) __attribute__((format(printf, 1, 2)));
@@ -586,7 +596,7 @@ diff --git a/core/log.c b/core/log.c
 +    } else {                                    \
 +        lgtd_console_##fn(eval, fmt, ap);       \
 +    }                                           \
-+    va_end(ap);                                 \
++    /* not reached */                           \
  }
  
 -void
@@ -661,3 +671,106 @@ diff --git a/core/log.c b/core/log.c
      case EVENT_LOG_ERR:     lgtd_warnx("%s", msg); break;
      default:                                       break;
      }
+diff --git a/tests/core/mock_log.h b/tests/core/mock_log.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/mock_log.h
+@@ -0,0 +1,98 @@
++#pragma once
++
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++void
++lgtd_err(int eval, const char *fmt, ...)
++{
++    if (lgtd_opts.verbosity > LGTD_ERN) {
++        return;
++    }
++
++    fprintf(stderr, "ERR: ");
++    va_list ap;
++    va_start(fmt, ap);
++    vfprintf(stderr, fmt, ap);
++    va_end(ap);
++    fprintf(stderr, ": %s\n", strerror(errno));
++    exit(eval);
++}
++
++void
++lgtd_errx(int eval, const char *fmt, ...)
++{
++    if (lgtd_opts.verbosity > LGTD_ERN) {
++        return;
++    }
++
++    fprintf(stderr, "ERR: ");
++    va_list ap;
++    va_start(fmt, ap);
++    vfprintf(stderr, fmt, ap);
++    va_end(ap);
++    fputc("\n", stderr);
++    exit(eval);
++}
++
++void
++lgtd_warn(const char *fmt, ...)
++{
++    if (lgtd_opts.verbosity > LGTD_WARN) {
++        return;
++    }
++
++    fprintf(stderr, "WARN: ");
++    va_list ap;
++    va_start(fmt, ap);
++    vfprintf(stderr, fmt, ap);
++    va_end(ap);
++    fprintf(stderr, ": %s\n", strerror(errno));
++}
++
++void
++lgtd_warnx(const char *fmt, ...)
++{
++    if (lgtd_opts.verbosity > LGTD_WARN) {
++        return;
++    }
++
++    fprintf(stderr, "WARN: ");
++    va_list ap;
++    va_start(fmt, ap);
++    vfprintf(stderr, fmt, ap);
++    va_end(ap);
++    fputc("\n", stderr);
++}
++
++void
++lgtd_info(const char *fmt, ...)
++{
++    if (lgtd_opts.verbosity > LGTD_INFO) {
++        return;
++    }
++
++    fprintf(stderr, "INFO: ");
++    va_list ap;
++    va_start(fmt, ap);
++    vfprintf(stderr, fmt, ap);
++    va_end(ap);
++    fputc("\n", stderr);
++}
++
++void
++lgtd_debug(const char *fmt, ...)
++{
++    if (lgtd_opts.verbosity > LGTD_DEBUG) {
++        return;
++    }
++
++    fprintf(stderr, "DEBUG: ");
++    va_list ap;
++    va_start(fmt, ap);
++    vfprintf(stderr, fmt, ap);
++    va_end(ap);
++    fputc("\n", stderr);
++}
