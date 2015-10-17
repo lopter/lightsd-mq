@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c99f90e4902235536d7fdee1a9501ba8f893c921
+# Parent  36017e76125b81cf10f409eb692fa186e587f66d
 Add the --syslog (-S) and --syslog-facility (-F) logging options
 
 Closes GH-1.
@@ -19,7 +19,7 @@ diff --git a/core/console.c b/core/console.c
 new file mode 100644
 --- /dev/null
 +++ b/core/console.c
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,140 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -101,7 +101,7 @@ new file mode 100644
 +    lgtd_cleanup();
 +    lgtd_console_log_header("ERR", false);
 +    errno = errsave;
-+    err(eval, errmsg);
++    err(eval, "%s", errmsg);
 +}
 +
 +void
@@ -116,57 +116,49 @@ new file mode 100644
 +    va_end(aq);
 +    lgtd_cleanup();
 +    lgtd_console_log_header("ERR", false);
-+    errx(eval, errmsg);
++    errx(eval, "%s", errmsg);
 +}
 +
 +void
 +lgtd_console_warn(const char *fmt, va_list ap)
 +{
-+    if (lgtd_opts.verbosity <= LGTD_WARN) {
-+        va_list aq;
-+        va_copy(aq, ap);
-+        lgtd_console_log_header("WARN", false);
-+        vwarn(fmt, aq);
-+        va_end(aq);
-+    }
++    va_list aq;
++    va_copy(aq, ap);
++    lgtd_console_log_header("WARN", false);
++    vwarn(fmt, aq);
++    va_end(aq);
 +}
 +
 +void
 +lgtd_console_warnx(const char *fmt, va_list ap)
 +{
-+    if (lgtd_opts.verbosity <= LGTD_WARN) {
-+        va_list aq;
-+        va_copy(aq, ap);
-+        lgtd_console_log_header("WARN", false);
-+        vwarnx(fmt, aq);
-+        va_end(aq);
-+    }
++    va_list aq;
++    va_copy(aq, ap);
++    lgtd_console_log_header("WARN", false);
++    vwarnx(fmt, aq);
++    va_end(aq);
 +}
 +
 +void
 +lgtd_console_info(const char *fmt, va_list ap)
 +{
-+    if (lgtd_opts.verbosity <= LGTD_INFO) {
-+        va_list aq;
-+        va_copy(aq, ap);
-+        lgtd_console_log_header("INFO", true);
-+        vfprintf(stderr, fmt, aq);
-+        va_end(aq);
-+        fprintf(stderr, "\n");
-+    }
++    va_list aq;
++    va_copy(aq, ap);
++    lgtd_console_log_header("INFO", true);
++    vfprintf(stderr, fmt, aq);
++    va_end(aq);
++    fprintf(stderr, "\n");
 +}
 +
 +void
 +lgtd_console_debug(const char *fmt, va_list ap)
 +{
-+    if (lgtd_opts.verbosity <= LGTD_DEBUG) {
-+        va_list aq;
-+        va_copy(aq, ap);
-+        lgtd_console_log_header("DEBUG", true);
-+        vfprintf(stderr, fmt, aq);
-+        va_end(aq);
-+        fprintf(stderr, "\n");
-+    }
++    va_list aq;
++    va_copy(aq, ap);
++    lgtd_console_log_header("DEBUG", true);
++    vfprintf(stderr, fmt, aq);
++    va_end(aq);
++    fprintf(stderr, "\n");
 +}
 diff --git a/core/console.h b/core/console.h
 new file mode 100644
@@ -202,20 +194,165 @@ new file mode 100644
 +void lgtd_console_warnx(const char *, va_list);
 +void lgtd_console_info(const char *, va_list);
 +void lgtd_console_debug(const char *, va_list);
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -29,11 +29,13 @@
+ #include <grp.h>
+ #include <libgen.h>
+ #include <pwd.h>
++#include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <syslog.h>
+ #include <unistd.h>
+ 
+ #include <event2/util.h>
+@@ -368,3 +370,116 @@
+ 
+     return true;
+ }
++
++int
++lgtd_daemon_syslog_facilitytoi(const char *facility)
++{
++    struct {
++        const char  *name;
++        int         value;
++    } syslog_facilities[] = {
++        { "LOG_DAEMON", LOG_DAEMON },
++        { "LOG_USER",   LOG_USER   },
++        { "LOG_LOCAL0", LOG_LOCAL0 },
++        { "LOG_LOCAL1", LOG_LOCAL1 },
++        { "LOG_LOCAL2", LOG_LOCAL2 },
++        { "LOG_LOCAL3", LOG_LOCAL3 },
++        { "LOG_LOCAL4", LOG_LOCAL4 },
++        { "LOG_LOCAL5", LOG_LOCAL5 },
++        { "LOG_LOCAL6", LOG_LOCAL6 },
++        { "LOG_LOCAL7", LOG_LOCAL7 }
++    };
++
++    for (int i = 0; i != LGTD_ARRAY_SIZE(syslog_facilities); i++) {
++        if (!strcmp(facility, syslog_facilities[i].name)) {
++            return syslog_facilities[i].value;
++        }
++    }
++
++    errx(
++        1,
++        "Invalid syslog facility %s (possible values: LOG_DAEMON, "
++        "LOG_USER, LOG_LOCAL0 through 7)", facility
++    );
++}
++
++static void
++lgtd_daemon_setup_errfmt(const char *fmt, char *errfmt, int sz)
++{
++    int n = LGTD_MIN(sz - 1, (int)strlen(fmt) + 1);
++    memcpy(errfmt, fmt, n);
++    if (n - 1 + (int)sizeof(": %m") <= sz) {
++        memcpy(errfmt + n - 1, ": %m", sizeof(": %m"));
++    } else {
++        errfmt[n] = 0;
++#ifndef NDEBUG
++        abort();
++#endif
++    }
++}
++
++void
++lgtd_daemon_syslog_err(int eval, const char *fmt, va_list ap)
++{
++    char errfmt[LGTD_DAEMON_ERRFMT_SIZE];
++    lgtd_daemon_setup_errfmt(fmt, errfmt, sizeof(errfmt));
++
++    va_list aq;
++    va_copy(aq, ap);
++    vsyslog(LOG_PID|LOG_ERR|lgtd_opts.syslog_facility, errfmt, aq);
++    va_end(aq);
++
++    lgtd_cleanup();
++    exit(eval);
++}
++
++void
++lgtd_daemon_syslog_errx(int eval, const char *fmt, va_list ap)
++{
++    va_list aq;
++    va_copy(aq, ap);
++    vsyslog(LOG_PID|LOG_ERR|lgtd_opts.syslog_facility, fmt, aq);
++    va_end(aq);
++
++    lgtd_cleanup();
++    exit(eval);
++}
++
++void
++lgtd_daemon_syslog_warn(const char *fmt, va_list ap)
++{
++    char errfmt[LGTD_DAEMON_ERRFMT_SIZE];
++    lgtd_daemon_setup_errfmt(fmt, errfmt, sizeof(errfmt));
++
++    va_list aq;
++    va_copy(aq, ap);
++    vsyslog(LOG_PID|LOG_WARNING|lgtd_opts.syslog_facility, errfmt, aq);
++    va_end(aq);
++}
++
++void
++lgtd_daemon_syslog_warnx(const char *fmt, va_list ap)
++{
++    va_list aq;
++    va_copy(aq, ap);
++    vsyslog(LOG_PID|LOG_WARNING|lgtd_opts.syslog_facility, fmt, aq);
++    va_end(aq);
++}
++
++void
++lgtd_daemon_syslog_info(const char *fmt, va_list ap)
++{
++    va_list aq;
++    va_copy(aq, ap);
++    vsyslog(LOG_PID|LOG_INFO|lgtd_opts.syslog_facility, fmt, aq);
++    va_end(aq);
++}
++
++void
++lgtd_daemon_syslog_debug(const char *fmt, va_list ap)
++{
++    va_list aq;
++    va_copy(aq, ap);
++    vsyslog(LOG_PID|LOG_DEBUG|lgtd_opts.syslog_facility, fmt, aq);
++    va_end(aq);
++}
 diff --git a/core/daemon.h b/core/daemon.h
 --- a/core/daemon.h
 +++ b/core/daemon.h
-@@ -27,3 +27,10 @@
+@@ -19,6 +19,8 @@
+ 
+ enum { LGTD_DAEMON_TITLE_SIZE = 2048 };
+ 
++enum { LGTD_DAEMON_ERRFMT_SIZE = 4096 };
++
+ bool lgtd_daemon_unleash(void); // \_o<
+ void lgtd_daemon_setup_proctitle(int, char *[], char *[]);
+ void lgtd_daemon_update_proctitle(void);
+@@ -27,3 +29,12 @@
  void lgtd_daemon_set_group(const char *);
  void lgtd_daemon_drop_privileges(void);
  bool lgtd_daemon_makedirs(const char *);
 +
-+void lgtd_daemon_err(int, const char *, va_list);
-+void lgtd_daemon_errx(int, const char *, va_list);
-+void lgtd_daemon_warn(const char *, va_list);
-+void lgtd_daemon_warnx(const char *, va_list);
-+void lgtd_daemon_info(const char *, va_list);
-+void lgtd_daemon_debug(const char *, va_list);
++
++int lgtd_daemon_syslog_facilitytoi(const char *);
++void lgtd_daemon_syslog_err(int, const char *, va_list);
++void lgtd_daemon_syslog_errx(int, const char *, va_list);
++void lgtd_daemon_syslog_warn(const char *, va_list);
++void lgtd_daemon_syslog_warnx(const char *, va_list);
++void lgtd_daemon_syslog_info(const char *, va_list);
++void lgtd_daemon_syslog_debug(const char *, va_list);
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -257,7 +394,51 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      event_del((struct event *)ctx);  // restore default behavior
      event_base_loopbreak(lgtd_ev_base);
      (void)events;
-@@ -301,6 +306,13 @@
+@@ -143,7 +148,11 @@
+ "                                       group of this user if -g is missing).\n"
+ "  [-g,--group group]                   Drop privileges to this group (-g requires\n"
+ "                                       the -u option to be used).\n"
+-"  [-t,--no-timestamps]                 Disable timestamps in logs.\n"
++"  [-S,--syslog]                        Divert logging from the console to syslog.\n"
++"  [-F,--syslog-facility]               Facility to use with syslog (defaults to\n"
++"                                       LOG_DAEMON, other possible values are\n"
++"                                       LOG_USER and LOG_LOCAL0-7, see syslog(3)).\n"
++"  [-t,--no-timestamps]                 Disable timestamps in the console logs.\n"
+ "  [-h,--help]                          Display this.\n"
+ "  [-V,--version]                       Display version and build information.\n"
+ "  [-v,--verbosity debug|info|warning|error]\n"
+@@ -176,6 +185,8 @@
+         {"daemonize",       no_argument,       NULL, 'd'},
+         {"user",            required_argument, NULL, 'u'},
+         {"group",           required_argument, NULL, 'g'},
++        {"syslog",          no_argument,       NULL, 'S'},
++        {"syslog-facility", required_argument, NULL, 'F'},
+         {"no-timestamps",   no_argument,       NULL, 't'},
+         {"help",            no_argument,       NULL, 'h'},
+         {"verbosity",       required_argument, NULL, 'v'},
+@@ -184,7 +195,7 @@
+         {"rundir",          no_argument,       NULL, 'r'},
+         {NULL,              0,                 NULL, 0}
+     };
+-    const char short_opts[] = "l:c:s:fdu:g:thv:V";
++    const char short_opts[] = "l:c:s:fdu:g:SF:thv:V";
+ 
+     if (argc == 1) {
+         lgtd_usage(progname);
+@@ -226,6 +237,12 @@
+         case 'g':
+             lgtd_opts.group = optarg;
+             break;
++        case 'S':
++            lgtd_opts.syslog = true;
++            break;
++        case 'F':
++            lgtd_opts.syslog_facility = lgtd_daemon_syslog_facilitytoi(optarg);
++            break;
+         case 't':
+             lgtd_opts.log_timestamps = false;
+             break;
+@@ -301,6 +318,13 @@
  
      event_base_dispatch(lgtd_ev_base);
  
@@ -307,7 +488,7 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 diff --git a/core/log.c b/core/log.c
 --- a/core/log.c
 +++ b/core/log.c
-@@ -17,62 +17,24 @@
+@@ -17,62 +17,25 @@
  
  #include <sys/socket.h>
  #include <sys/tree.h>
@@ -331,6 +512,7 @@ diff --git a/core/log.c b/core/log.c
  #include "lifx/wire_proto.h"
  #include "stats.h"
 +#include "console.h"
++#include "daemon.h"
  #include "lightsd.h"
  
 -static void
@@ -371,7 +553,7 @@ diff --git a/core/log.c b/core/log.c
  char *
  lgtd_iee8023mactoa(const uint8_t *addr, char *buf, int buflen)
  {
-@@ -163,63 +125,39 @@
+@@ -163,63 +126,45 @@
      return buf;
  }
  
@@ -393,17 +575,18 @@ diff --git a/core/log.c b/core/log.c
 -    lgtd_log_header("ERR", false);
 -    errno = errsave;
 -    errfn(eval, errmsg);
-+#define ERRFN(fn)                           \
-+void                                        \
-+lgtd_##fn(int eval, const char *fmt, ...)   \
-+{                                           \
-+    va_list ap;                             \
-+    va_start(ap, fmt);                      \
-+    if (lgtd_opts.syslog) {                 \
-+    } else {                                \
-+        lgtd_console_##fn(eval, fmt, ap);   \
-+    }                                       \
-+    va_end(ap);                             \
++#define ERRFN(fn)                               \
++void                                            \
++lgtd_##fn(int eval, const char *fmt, ...)       \
++{                                               \
++    va_list ap;                                 \
++    va_start(ap, fmt);                          \
++    if (lgtd_opts.syslog) {                     \
++        lgtd_daemon_syslog_##fn(eval, fmt, ap); \
++    } else {                                    \
++        lgtd_console_##fn(eval, fmt, ap);       \
++    }                                           \
++    va_end(ap);                                 \
  }
  
 -void
@@ -419,17 +602,22 @@ diff --git a/core/log.c b/core/log.c
 +ERRFN(err);
 +ERRFN(errx);
 +
-+#define LOGFN(fn)                   \
-+void                                \
-+lgtd_##fn(const char *fmt, ...)     \
-+{                                   \
-+    va_list ap;                     \
-+    va_start(ap, fmt);              \
-+    if (lgtd_opts.syslog) {         \
-+    } else {                        \
-+        lgtd_console_##fn(fmt, ap); \
-+    }                               \
-+    va_end(ap);                     \
++#define LOGFN(level ,fn)                    \
++void                                        \
++lgtd_##fn(const char *fmt, ...)             \
++{                                           \
++    if (lgtd_opts.verbosity > (level)) {    \
++        return;                             \
++    }                                       \
++                                            \
++    va_list ap;                             \
++    va_start(ap, fmt);                      \
++    if (lgtd_opts.syslog) {                 \
++        lgtd_daemon_syslog_##fn(fmt, ap);   \
++    } else {                                \
++        lgtd_console_##fn(fmt, ap);         \
++    }                                       \
++    va_end(ap);                             \
  }
  
 -void
@@ -457,14 +645,14 @@ diff --git a/core/log.c b/core/log.c
 -        fprintf(stderr, "\n");
 -    }
 -}
-+LOGFN(warn);
-+LOGFN(warnx);
-+LOGFN(info);
-+LOGFN(debug);
++LOGFN(LGTD_WARN, warn);
++LOGFN(LGTD_WARN, warnx);
++LOGFN(LGTD_INFO, info);
++LOGFN(LGTD_DEBUG, debug);
  
  void
  lgtd_libevent_log(int severity, const char *msg)
-@@ -227,7 +165,7 @@
+@@ -227,7 +172,7 @@
      switch (severity) {
      case EVENT_LOG_DEBUG:   lgtd_debug("%s", msg); break;
      case EVENT_LOG_MSG:     lgtd_info("%s", msg);  break;
