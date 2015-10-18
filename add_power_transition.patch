@@ -1,12 +1,12 @@
 # HG changeset patch
-# Parent  c08f18bfdc1be4b4552333ef8c512e09ec453242
+# Parent  6bbe04a80ec580b9df82a14015da351795863889
 Add a transition argument to the power functions
 
 diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,98 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -32,21 +32,7 @@ new file mode 100644
 +struct lgtd_effect_list lgtd_effects = LIST_HEAD_INITIALIZER(&lgtd_effects);
 +
 +static void
-+lgtd_effect_remove(struct lgtd_effect *effect)
-+{
-+    assert(effect);
-+
-+    LIST_REMOVE(effect, link);
-+    lgtd_proto_target_list_clear(effect->targets);
-+    if (effect->timer) {
-+        lgtd_timer_stop(effect->timer);
-+    }
-+    free(effect->ctx);
-+    free(effect);
-+}
-+
-+static void
-+lgtd_effect_timer(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
++lgtd_effect_timer_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
 +{
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +
@@ -60,26 +46,34 @@ new file mode 100644
 +        }
 +    }
 +
-+    effect->apply(effect->targets, effect->ctx);
-+    lgtd_effect_remove(effect);
++    effect->apply(effect);
 +}
 +
-+static void
-+lgtd_effect_power_off(const struct lgtd_proto_target_list *targets,
-+                      void *ctx)
++void
++lgtd_effect_stop(struct lgtd_effect *effect)
 +{
-+    (void)ctx;
++    assert(effect);
 +
++    LIST_REMOVE(effect, link);
++    lgtd_proto_target_list_clear(effect->targets);
++    if (effect->timer) {
++        lgtd_timer_stop(effect->timer);
++    }
++    free(effect);
++}
++
++struct lgtd_effect *
++lgtd_effect_start(struct lgtd_proto_target_list *targets,
++                  int timer_flags,
++                  int timer_ms,
++                  int duration,
++                  void (*effect)(const struct lgtd_proto_target *, void *),
++                  void *ctx)
++{
 +    assert(targets);
++    assert(timer_ms >= 0);
++    assert(duration >= 0);
 +
-+    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
-+    lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
-+}
-+
-+const struct lgtd_effect *
-+lgtd_effect_timer_proto_power_off(struct lgtd_proto_target_list *targets,
-+                                  int delay)
-+{
 +    struct lgtd_effect *effect = calloc(1, sizeof(*effect));
 +    if (!effect) {
 +        return NULL;
@@ -87,10 +81,7 @@ new file mode 100644
 +
 +    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
 +    effect->timer = lgtd_timer_start(
-+        LGTD_TIMER_DEFAULT_FLAGS,
-+        delay,
-+        lgtd_effect_timer,
-+        timer_ctx
++        timer_flags, timer_ms, lgtd_effect_timer_callback, timer_ctx
 +    );
 +    if (!effect->timer) {
 +        free(effect);
@@ -98,7 +89,7 @@ new file mode 100644
 +    }
 +
 +    effect->created_at = lgtd_time_monotonic_msecs();
-+    effect->duration = delay;
++    effect->duration = duration;
 +    effect->apply = lgtd_effect_power_off;
 +    lgtd_proto_target_list_swap(&effect->targets, targets);
 +
@@ -108,17 +99,17 @@ new file mode 100644
 +}
 +
 +void
-+lgtd_effect_cancel_all(void)
++lgtd_effect_stop_all(void)
 +{
 +    while (!LIST_EMPTY(&lgtd_effects)) {
-+        lgtd_effect_remove(LIST_FIRST(&lgtd_effects));
++        lgtd_effect_stop(LIST_FIRST(&lgtd_effects));
 +    }
 +}
 diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,51 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -140,24 +131,280 @@ new file mode 100644
 +
 +enum { LGTD_EFFECT_STALE_THRESHOLD_MSECS = 60 * 1000 };
 +
++union lgtd_effect_ctx {
++    uint64_t    as_uint;
++    void        *as_ptr;
++};
++
 +struct lgtd_effect {
 +    LIST_ENTRY(lgtd_effect)         link;
 +    lgtd_time_mono_t                created_at;
-+    lgtd_time_mono_t                duration;
++    int                             duration;
 +    struct lgtd_timer               *timer;
++    void                            (*apply)(struct lgtd_effect *);
 +    struct lgtd_proto_target_list   targets;
-+    void                            *ctx;
-+    void                            (*apply)(const struct lgtd_proto_target_list,
-+                                             void *);
++    union lgtd_effect_ctx           ctx;
 +};
 +LGTD_HEAD(lgtd_effect_list, lgtd_effect);
 +
 +extern struct lgtd_effect_list lgtd_effects;
 +
-+uintptr_t lgtd_effect_id(const struct lgtd_effect *);
++static inline uintptr_t
++lgtd_effect_id(const struct lgtd_effect *effect)
++{
++    return (uintptr_t)effect;
++}
 +
-+const struct lgtd_effect *lgtd_proto_delay_power_off(struct lgtd_proto_target_list *,
-+                                                     int);
++struct lgtd_effect *lgtd_effect_start(struct lgtd_proto_target_list *,
++                                      int, // timer flags
++                                      int, // timer ms
++                                      union lgtd_effect_ctx);
++void lgtd_effect_stop(struct lgtd_effect *);
++void lgtd_effect_stop_all(void);
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -119,17 +119,6 @@
+ }
+ 
+ static bool
+-lgtd_jsonrpc_type_number(const jsmntok_t *t, const char *json)
+-{
+-    if (t->type != JSMN_PRIMITIVE) {
+-        return false;
+-    }
+-
+-    char c = json[t->start];
+-    return c == '-' || (c >= '0' && c <= '9');
+-}
+-
+-static bool
+ lgtd_jsonrpc_type_bool(const jsmntok_t *t, const char *json)
+ {
+     if (t->type != JSMN_PRIMITIVE) {
+@@ -177,20 +166,20 @@
+ }
+ 
+ static bool
+-lgtd_jsonrpc_type_string_number_or_null(const jsmntok_t *t,
+-                                        const char *json)
++lgtd_jsonrpc_type_string_integer_or_null(const jsmntok_t *t,
++                                         const char *json)
+ {
+-    return lgtd_jsonrpc_type_number(t, json)
++    return lgtd_jsonrpc_type_integer(t, json)
+         || lgtd_jsonrpc_type_null(t, json)
+         || lgtd_jsonrpc_type_string(t, json);
+ }
+ 
+ static bool
+-lgtd_jsonrpc_type_string_or_number(const jsmntok_t *t,
+-                                   const char *json)
++lgtd_jsonrpc_type_string_or_integer(const jsmntok_t *t,
++                                    const char *json)
+ {
+     return lgtd_jsonrpc_type_string(t, json)
+-        || lgtd_jsonrpc_type_number(t, json);
++        || lgtd_jsonrpc_type_integer(t, json);
+ }
+ 
+ static bool __attribute__((unused))
+@@ -201,10 +190,10 @@
+ }
+ 
+ static bool
+-lgtd_jsonrpc_type_string_number_or_array(const jsmntok_t *t, const char *json)
++lgtd_jsonrpc_type_string_integer_or_array(const jsmntok_t *t, const char *json)
+ {
+     return lgtd_jsonrpc_type_string(t, json)
+-        || lgtd_jsonrpc_type_number(t, json)
++        || lgtd_jsonrpc_type_integer(t, json)
+         || lgtd_jsonrpc_type_array(t, json);
+ }
+ 
+@@ -580,7 +569,7 @@
+             "id",
+             offsetof(struct lgtd_jsonrpc_request, id),
+             -1,
+-            lgtd_jsonrpc_type_string_number_or_null,
++            lgtd_jsonrpc_type_string_integer_or_null,
+             true
+         )
+     };
+@@ -631,7 +620,7 @@
+ 
+     for (int ti = target_ntokens; ti--;) {
+         int token_len = LGTD_JSONRPC_TOKEN_LEN(&target[ti]);
+-        if (lgtd_jsonrpc_type_string_or_number(&target[ti], client->json)) {
++        if (lgtd_jsonrpc_type_string_or_integer(&target[ti], client->json)) {
+             struct lgtd_proto_target *t = malloc(sizeof(*t) + token_len + 1);
+             if (!t) {
+                 lgtd_warn("can't allocate a new target");
+@@ -680,7 +669,7 @@
+             "target",
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target),
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target_ntokens),
+-            lgtd_jsonrpc_type_string_number_or_array,
++            lgtd_jsonrpc_type_string_integer_or_array,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+@@ -790,7 +779,7 @@
+             "target",
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, target),
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, target_ntokens),
+-            lgtd_jsonrpc_type_string_number_or_array,
++            lgtd_jsonrpc_type_string_integer_or_array,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+@@ -931,6 +920,72 @@
+ }
+ 
+ static bool
++lgtd_jsonrpc_extract_target_list_and_transition(struct lgtd_proto_target_list *targets,
++                                                int *transition,
++                                                struct lgtd_client *client)
++{
++    struct lgtd_jsonrpc_power_args {
++        const jsmntok_t *target;
++        int             target_ntokens;
++        const jsmntok_t *transition;
++    } params = { NULL, 0, NULL };
++    static const struct lgtd_jsonrpc_node schema[] = {
++        LGTD_JSONRPC_NODE(
++            "target",
++            offsetof(struct lgtd_jsonrpc_target_args, target),
++            offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
++            lgtd_jsonrpc_type_string_integer_or_array,
++            false
++        ),
++        LGTD_JSONRPC_NODE(
++            "transition",
++            offsetof(struct lgtd_jsonrpc_target_args, transition),
++            -1,
++            lgtd_jsonrpc_type_integer,
++            true
++        )
++    };
++
++    assert(transition);
++
++    struct lgtd_jsonrpc_request *req = client->current_request;
++    bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
++        &params, schema, 1, req->params, req->params_ntokens, client->json
++    );
++    if (!ok) {
++        lgtd_jsonrpc_send_error(
++            client, LGTD_JSONRPC_INVALID_PARAMS, "Invalid parameters"
++        );
++        return false;
++    }
++
++    return lgtd_jsonrpc_build_target_list(
++        targets, client, params.target, params.target_ntokens
++    );
++}
++
++#define CHECK_AND_CALL_POWER_METHOD(proto_method)                               \
++static void                                                                     \
++lgtd_jsonrpc_check_and_call_##proto_method(struct lgtd_client *client)          \
++{                                                                               \
++    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);   \
++    int transition;                                                             \
++    bool ok = lgtd_jsonrpc_extract_target_list_and_transition(                  \
++        &targets, &transition, client                                           \
++    );                                                                          \
++    if (!ok) {                                                                  \
++        return;                                                                 \
++    }                                                                           \
++                                                                                \
++    lgtd_proto_##proto_method(client, &targets);                                \
++    lgtd_proto_target_list_clear(&targets);                                     \
++}
++
++CHECK_AND_CALL_POWER_METHOD(power_on);
++CHECK_AND_CALL_POWER_METHOD(power_off);
++CHECK_AND_CALL_POWER_METHOD(power_toggle);
++
++static bool
+ lgtd_jsonrpc_extract_target_list(struct lgtd_proto_target_list *targets,
+                                  struct lgtd_client *client)
+ {
+@@ -943,7 +998,7 @@
+             "target",
+             offsetof(struct lgtd_jsonrpc_target_args, target),
+             offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
+-            lgtd_jsonrpc_type_string_number_or_array,
++            lgtd_jsonrpc_type_string_integer_or_array,
+             false
+         )
+     };
+@@ -964,25 +1019,19 @@
+     );
+ }
+ 
+-#define CHECK_AND_CALL_TARGETS_ONLY_METHOD(proto_method)                       \
+-static void                                                                    \
+-lgtd_jsonrpc_check_and_call_##proto_method(struct lgtd_client *client)         \
+-{                                                                              \
+-    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);  \
+-    bool ok = lgtd_jsonrpc_extract_target_list(&targets, client);              \
+-    if (!ok) {                                                                 \
+-        return;                                                                \
+-    }                                                                          \
+-                                                                               \
+-    lgtd_proto_##proto_method(client, &targets);                               \
+-    lgtd_proto_target_list_clear(&targets);                                    \
++static void
++lgtd_jsonrpc_check_and_call_get_light_state(struct lgtd_client *client)
++{
++    struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
++    bool ok = lgtd_jsonrpc_extract_target_list(&targets, client);
++    if (!ok) {
++        return;
++    }
++
++    lgtd_proto_get_light_state(client, &targets);
++    lgtd_proto_target_list_clear(&targets);
+ }
+ 
+-CHECK_AND_CALL_TARGETS_ONLY_METHOD(power_on);
+-CHECK_AND_CALL_TARGETS_ONLY_METHOD(power_off);
+-CHECK_AND_CALL_TARGETS_ONLY_METHOD(power_toggle);
+-CHECK_AND_CALL_TARGETS_ONLY_METHOD(get_light_state);
+-
+ static void
+ lgtd_jsonrpc_check_and_call_proto_tag_or_untag_or_set_label(
+         struct lgtd_client *client,
+@@ -1001,7 +1050,7 @@
+             "target",
+             offsetof(struct lgtd_jsonrpc_target_args, target),
+             offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
+-            lgtd_jsonrpc_type_string_number_or_array,
++            lgtd_jsonrpc_type_string_integer_or_array,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -51,6 +51,7 @@
+ #include "timer.h"
+ #include "listen.h"
+ #include "daemon.h"
++#include "effect.h"
+ #include "lightsd.h"
+ 
+ struct lgtd_opts lgtd_opts = {
+@@ -79,6 +80,7 @@
+     lgtd_listen_close_all();
+     lgtd_command_pipe_close_all();
+     lgtd_client_close_all();
++    lgtd_effect_stop_all();
+     lgtd_lifx_broadcast_close();
+     lgtd_lifx_gateway_close_all();
+     lgtd_timer_stop_all();
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
 +++ b/core/proto.h
@@ -170,3 +417,100 @@ diff --git a/core/proto.h b/core/proto.h
  const struct lgtd_proto_target *lgtd_proto_target_list_add(struct lgtd_client *,
                                                             struct lgtd_proto_target_list *,
                                                             const char *, int);
+diff --git a/effects/power_transition.c b/effects/power_transition.c
+new file mode 100644
+--- /dev/null
++++ b/effects/power_transition.c
+@@ -0,0 +1,60 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#include <assert.h>
++#include <stdint.h>
++
++#include "core/time_monotonic.h"
++#include "core/timer.h"
++#include "core/proto.h"
++#include "core/effect.h"
++#include "core/lightsd.h"
++#include "power_transition.h"
++
++static void
++lgtd_effect_power_transition_callback(struct lgtd_effect *effect)
++{
++    assert(targets);
++
++    enum lgtd_effect_power_transition_type state = effect->ctx.as_uint;
++    struct lgtd_lifx_packet_power_state pkt = {
++        .power = state == LGTD_EFFECT_POWER_TRANSITION_OFF ?
++            LGTD_LIFX_POWER_OFF : LGTD_LIFX_POWER_ON
++    };
++    lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
++
++    lgtd_effect_stop(effect);
++}
++
++const struct lgtd_effect *
++lgtd_effect_power_transition(struct lgtd_proto_target_list *targets,
++                             enum lgtd_effect_power_transition_type state,
++                             int transition)
++{
++    assert(targets);
++    assert(transition >= 0);
++
++    union lgtd_effect_ctx ctx = { .as_uint = state };
++    return lgtd_effect_start(
++        targets,
++        LGTD_TIMER_DEFAULT_FLAGS,
++        transition,
++        0,
++        lgtd_effect_power_transition_callback,
++        ctx
++    );
++}
+diff --git a/effects/power_transition.h b/effects/power_transition.h
+new file mode 100644
+--- /dev/null
++++ b/effects/power_transition.h
+@@ -0,0 +1,27 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#pragma once
++
++enum lgtd_effect_power_transition_type {
++    LGTD_EFFECT_POWER_TRANSITION_OFF,
++    LGTD_EFFECT_POWER_TRANSITION_ON,
++};
++
++const struct lgtd_effect *lgtd_effect_power_transition(struct lgtd_proto_target_list *,
++                                                       enum lgtd_effect_power_transition_type,
++                                                       enum lgtd_effect_ctx);
