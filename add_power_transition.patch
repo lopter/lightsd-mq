@@ -1,0 +1,172 @@
+# HG changeset patch
+# Parent  c08f18bfdc1be4b4552333ef8c512e09ec453242
+Add a transition argument to the power functions
+
+diff --git a/core/effect.c b/core/effect.c
+new file mode 100644
+--- /dev/null
++++ b/core/effect.c
+@@ -0,0 +1,107 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#include "time_monotonic.h"
++#include "timer.h"
++#include "proto.h"
++#include "effect.h"
++
++struct lgtd_effect_list lgtd_effects = LIST_HEAD_INITIALIZER(&lgtd_effects);
++
++static void
++lgtd_effect_remove(struct lgtd_effect *effect)
++{
++    assert(effect);
++
++    LIST_REMOVE(effect, link);
++    lgtd_proto_target_list_clear(effect->targets);
++    if (effect->timer) {
++        lgtd_timer_stop(effect->timer);
++    }
++    free(effect->ctx);
++    free(effect);
++}
++
++static void
++lgtd_effect_timer(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
++{
++    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
++
++    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++    if (now < effect_created_at + effect->duration) { // avoid overflow
++        lgtd_time_mono_t diff = now - effect->created_at + effect->duration;
++        // maybe the computer was sleepy
++        if (diff > LGTD_EFFECT_STALE_THRESHOLD) {
++            lgtd_effect_remove(effect);
++            return;
++        }
++    }
++
++    effect->apply(effect->targets, effect->ctx);
++    lgtd_effect_remove(effect);
++}
++
++static void
++lgtd_effect_power_off(const struct lgtd_proto_target_list *targets,
++                      void *ctx)
++{
++    (void)ctx;
++
++    assert(targets);
++
++    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
++    lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
++}
++
++const struct lgtd_effect *
++lgtd_effect_timer_proto_power_off(struct lgtd_proto_target_list *targets,
++                                  int delay)
++{
++    struct lgtd_effect *effect = calloc(1, sizeof(*effect));
++    if (!effect) {
++        return NULL;
++    }
++
++    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
++    effect->timer = lgtd_timer_start(
++        LGTD_TIMER_DEFAULT_FLAGS,
++        delay,
++        lgtd_effect_timer,
++        timer_ctx
++    );
++    if (!effect->timer) {
++        free(effect);
++        return NULL;
++    }
++
++    effect->created_at = lgtd_time_monotonic_msecs();
++    effect->duration = delay;
++    effect->apply = lgtd_effect_power_off;
++    lgtd_proto_target_list_swap(&effect->targets, targets);
++
++    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
++
++    return effect;
++}
++
++void
++lgtd_effect_cancel_all(void)
++{
++    while (!LIST_EMPTY(&lgtd_effects)) {
++        lgtd_effect_remove(LIST_FIRST(&lgtd_effects));
++    }
++}
+diff --git a/core/effect.h b/core/effect.h
+new file mode 100644
+--- /dev/null
++++ b/core/effect.h
+@@ -0,0 +1,39 @@
++// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#pragma omce
++
++enum { LGTD_EFFECT_STALE_THRESHOLD_MSECS = 60 * 1000 };
++
++struct lgtd_effect {
++    LIST_ENTRY(lgtd_effect)         link;
++    lgtd_time_mono_t                created_at;
++    lgtd_time_mono_t                duration;
++    struct lgtd_timer               *timer;
++    struct lgtd_proto_target_list   targets;
++    void                            *ctx;
++    void                            (*apply)(const struct lgtd_proto_target_list,
++                                             void *);
++};
++LGTD_HEAD(lgtd_effect_list, lgtd_effect);
++
++extern struct lgtd_effect_list lgtd_effects;
++
++uintptr_t lgtd_effect_id(const struct lgtd_effect *);
++
++const struct lgtd_effect *lgtd_proto_delay_power_off(struct lgtd_proto_target_list *,
++                                                     int);
+diff --git a/core/proto.h b/core/proto.h
+--- a/core/proto.h
++++ b/core/proto.h
+@@ -24,6 +24,8 @@
+ SLIST_HEAD(lgtd_proto_target_list, lgtd_proto_target);
+ 
+ void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *);
++void lgtd_proto_target_list_swap(struct lgtd_proto_target_list *,
++                                 struct lgtd_proto_target_list *);
+ const struct lgtd_proto_target *lgtd_proto_target_list_add(struct lgtd_client *,
+                                                            struct lgtd_proto_target_list *,
+                                                            const char *, int);

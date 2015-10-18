@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  7378fdd46971c8a345964ef18dc72cb102d3ce35
+# Parent  3f96fadba90258177499ced5af44f16bade6dc87
 Add the --syslog (-S) and --syslog-facility (-F) logging options
 
 Closes GH-1.
@@ -447,6 +447,22 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  lgtd_configure_libevent(void)
  {
      event_set_log_callback(lgtd_libevent_log);
+@@ -130,12 +148,12 @@
+ {
+     printf(
+ "Usage: %s ...\n\n"
+-"  [-l,--listen addr:port [+]]          Listen for JSON-RPC commands over TCP at\n"
++"  [-l,--listen addr:port]              Listen for JSON-RPC commands over TCP at\n"
+ "                                       this address (can be repeated).\n"
+-"  [-c,--comand-pipe /command/fifo [+]] Open an unidirectional JSON-RPC\n"
++"  [-c,--comand-pipe /command/fifo]     Open an unidirectional JSON-RPC\n"
+ "                                       command pipe at this location (can be\n"
+ "                                       repeated).\n"
+-"  [-s,--socket /unix/socket [+]]       Open an Unix socket at this location\n"
++"  [-s,--socket /unix/socket]           Open an Unix socket at this location\n"
+ "                                       (can be repeated).\n"
+ "  [-f,--foreground]                    Stay in the foreground (default).\n"
+ "  [-d,--daemonize]                     Fork in the background.\n"
 @@ -143,7 +161,13 @@
  "                                       group of this user if -g is missing).\n"
  "  [-g,--group group]                   Drop privileges to this group (-g requires\n"
@@ -454,8 +470,8 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 -"  [-t,--no-timestamps]                 Disable timestamps in logs.\n"
 +"  [-S,--syslog]                        Divert logging from the console to syslog.\n"
 +"  [-F,--syslog-facility]               Facility to use with syslog (defaults to\n"
-+"                                       LOG_DAEMON, other possible values are\n"
-+"                                       LOG_USER and LOG_LOCAL0-7, see syslog(3)).\n"
++"                                       daemon, other possible values are user and\n"
++"                                       local0-7, see syslog(3)).\n"
 +"  [-I,--syslog-ident]                  Identifier to use with syslog (defaults to\n"
 +"                                       lightsd).\n"
 +"  [-t,--no-timestamps]                 Disable timestamps in the console logs.\n"
@@ -525,7 +541,15 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -109,6 +109,9 @@
+@@ -103,12 +103,17 @@
+ }
+ #endif
+ 
++struct sockaddr;
++
+ struct lgtd_opts {
+     bool                foreground;
+     bool                log_timestamps;
      enum lgtd_verbosity verbosity;
      const char          *user;
      const char          *group;
@@ -535,7 +559,7 @@ diff --git a/core/lightsd.h b/core/lightsd.h
  };
  
  extern struct lgtd_opts lgtd_opts;
-@@ -126,16 +129,15 @@
+@@ -126,16 +131,15 @@
  #define LGTD_PRINT_DURATION(secs, arr) \
      lgtd_print_duration((secs), (arr), sizeof((arr)))
  
