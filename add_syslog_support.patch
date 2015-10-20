@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  07d291b605ee086f2ab2b6ec52f504cc69482606
+# Parent  413302f60073bd11ec01203026a917978dc567bb
 Add the --syslog (-S), --syslog-facility (-F), --syslog-ident (-I) options
 
 -S diverts logging to syslog, supported facilities are:
@@ -230,7 +230,7 @@ diff --git a/core/daemon.c b/core/daemon.c
  #include <unistd.h>
  
  #include <event2/util.h>
-@@ -368,3 +370,132 @@
+@@ -368,3 +370,135 @@
  
      return true;
  }
@@ -283,6 +283,8 @@ diff --git a/core/daemon.c b/core/daemon.c
 +    }
 +}
 +
++#pragma GCC diagnostic push // yes, I know, the assert below is stupid.
++#pragma GCC diagnostic ignored "-Wtautological-constant-out-of-range-compare"
 +void
 +lgtd_daemon_syslog_open(const char *ident,
 +                        enum lgtd_verbosity level,
@@ -297,6 +299,7 @@ diff --git a/core/daemon.c b/core/daemon.c
 +    openlog(ident, LOG_PID, facility);
 +    setlogmask(LOG_UPTO(syslog_priorities[level]));
 +}
++#pragma GCC diagnostic pop
 +
 +void
 +lgtd_daemon_syslog_err(int eval, const char *fmt, va_list ap)
