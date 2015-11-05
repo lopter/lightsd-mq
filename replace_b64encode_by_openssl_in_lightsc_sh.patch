@@ -1,0 +1,20 @@
+# HG changeset patch
+# Parent  6e10e203225d31fa5b46733d003c410b15a01136
+Replace `b64encode' by `openssl base64' in lightsc.sh
+
+Fixes things on OpenBSD, probably among other places.
+
+diff --git a/share/lightsc.sh b/share/lightsc.sh
+--- a/share/lightsc.sh
++++ b/share/lightsc.sh
+@@ -34,8 +34,8 @@
+ _lightsc_b64e() {
+     if type base64 >/dev/null 2>&1 ; then
+         base64
+-    elif type b64encode >/dev/null 2>&1 ; then
+-        b64encode
++    elif type openssl >/dev/null 2>&1 ; then
++        openssl base64
+     else
+         cat >/dev/null
+         echo null

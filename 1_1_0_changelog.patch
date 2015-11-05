@@ -1,0 +1,43 @@
+# HG changeset patch
+# Parent  780823d51b7d63b3de407a05322fa31f47f47e2b
+Update the changelog for 1.1.0
+
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -1,6 +1,35 @@
+ Changelog
+ =========
+ 
++1.1.0 (2015-11-07)
++------------------
++
++.. note::
++
++   The ``-f`` (``--foreground``) option is being deprecated with this release
++   and isn't documented anymore, lightsd starts in the foreground by default and
++   this option is not necessary, please stop using it.
++
++New features
++~~~~~~~~~~~~
++
++- Add syslog support via the ``--syslog`` and ``--syslog-facility`` options
++  (closes `GH-1`_);
++- Debian & OpenWRT packaging and installation instructions.
++
++.. _GH-1: https://github.com/lopter/lightsd/issues/1
++
++Fixes
++~~~~~
++
++- lightsc.sh: support OSes with openssl but without a base64 utility (closes
++  `GH-3`_);
++- lightsc.py: unix url support fixes and bump the receive buffer size to
++  accommodate people with many bulbs;
++- Add missing product ids/models.
++
++.. _GH-3: https://github.com/lopter/lightsd/issues/3
++
+ 1.0.1 (2015-09-18)
+ ------------------
+ 

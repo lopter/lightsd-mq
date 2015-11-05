@@ -1,0 +1,27 @@
+# HG changeset patch
+# Parent  475079c5b8b52b8f80198c6662a7a502211a5314
+Update LIFX product ids and models
+
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -58,12 +58,16 @@
+     switch (product_id) {
+     case 0x1:
+     case 0x2:
+-        return "A21 (Original 1000)";
++        return "Original 1000";
+     case 0x3:
+-        return "GU10 (Color 650)";
++        return "Color 650";
+     case 0xa:
+     case 0xb:
+-        return "A19 (White 800)";
++        return "White 800";
++    case 0x12:
++        return "White 900 BR30";
++    case 0x16:
++        return "Color 1000";
+     default:
+         return "Unknown";
+     }
