@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  475079c5b8b52b8f80198c6662a7a502211a5314
+# Parent  b138fc5aef2569ec22c0f056de4066910a4596c5
 Update LIFX product ids and models
 
 diff --git a/lifx/bulb.c b/lifx/bulb.c
@@ -24,4 +24,16 @@ diff --git a/lifx/bulb.c b/lifx/bulb.c
 +        return "Color 1000";
      default:
          return "Unknown";
+     }
+diff --git a/tests/lifx/gateway/test_gateway_handle_product_info.c b/tests/lifx/gateway/test_gateway_handle_product_info.c
+--- a/tests/lifx/gateway/test_gateway_handle_product_info.c
++++ b/tests/lifx/gateway/test_gateway_handle_product_info.c
+@@ -30,7 +30,7 @@
+         errx(1, "the product info weren't set correctly on the bulb");
+     }
+ 
+-    const char *expected_model = "GU10 (Color 650)";
++    const char *expected_model = "Color 650";
+     if (strcmp(b->model, expected_model)) {
+         errx(1, "model %s (expected %s)", b->model, expected_model);
      }
