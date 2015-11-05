@@ -1,0 +1,18 @@
+# HG changeset patch
+# Parent  ebcdf857320a647f10dccffee488147e6fe4e929
+Increase lightsc.py's receive buffer size to 64KiB
+
+This really need a proper read loop.
+
+diff --git a/examples/lightsc.py b/examples/lightsc.py
+--- a/examples/lightsc.py
++++ b/examples/lightsc.py
+@@ -76,7 +76,7 @@
+     def _execute_payload(self, payload):
+         self._socket.send(json.dumps(payload).encode("utf-8"))
+         # FIXME: proper read loop
+-        response = self._socket.recv(8192).decode("utf-8")
++        response = self._socket.recv(64 * 1024).decode("utf-8")
+         try:
+             response = json.loads(response)
+         except Exception:
