@@ -6,6 +6,7 @@ fix_lintian_warning.patch
 replace_b64encode_by_openssl_in_lightsc_sh.patch
 increase_lightsc_py_buffer_size.patch
 update_product_ids.patch
+document_dpkg_build.patch
 1_1_0_changelog.patch
 add_power_transition.patch
 make_gateway_write_callbacks_low_priority.patch #+future
