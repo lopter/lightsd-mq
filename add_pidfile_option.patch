@@ -1,6 +1,6 @@
 # HG changeset patch
 # Parent 4d0b811c1111b9cd8e17a3b521adfc78fe257f0e
-# Parent  1ebac809847f10f532c83bb7e827f02c557199b9
+# Parent  7089c12e43797dd2313055a687860face2a22417
 Add the -p (--pidfile) option
 
 Needed to properly support old school startup scripts.
@@ -331,8 +331,8 @@ new file mode 100644
 +        lgtd_errx(1, "got fd %d (expected 42)", fd);
 +    }
 +
-+    if (!buf || strcmp(buf, "1234")) {
-+        lgtd_errx(1, "writing pid %s (expected 1234)", buf);
++    if (!buf || strcmp((const char *)buf, "1234")) {
++        lgtd_errx(1, "writing pid %s (expected 1234)", (const char *)buf);
 +    }
 +
 +    if (nbytes != 4) {
