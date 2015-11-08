@@ -1,0 +1,210 @@
+# HG changeset patch
+# Parent  41c123383a622483dc2153d09693a5916804d220
+Add the -p (--pidfile) option
+
+Needed to properly support old school startup scripts.
+
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -371,6 +371,33 @@
+     return true;
+ }
+ 
++bool
++lgtd_daemon_write_pidfile(const char *filepath)
++{
++    assert(filepath);
++
++    char pidstr[32];
++    int pidlen = snprintf(pidstr, sizeof(pidstr), "%ju", (uintmax_t)getpid());
++    int written = 0;
++
++    mode_t mode = S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH;
++    int fd = open(filepath, O_CREAT|O_WRONLY|O_TRUNC, mode);
++    if (fd == -1) {
++        return false;
++    }
++
++    if (lgtd_user_info && lgtd_group_info
++        && fchown(fd, lgtd_user_info->pw_uid, lgtd_group_info->gr_gid) == -1) {
++        goto err;
++    }
++
++    written = write(fd, pidstr, (size_t)pidlen);
++
++err:
++    close(fd);
++    return written == pidlen;
++}
++
+ int
+ lgtd_daemon_syslog_facilitytoi(const char *facility)
+ {
+diff --git a/core/daemon.h b/core/daemon.h
+--- a/core/daemon.h
++++ b/core/daemon.h
+@@ -33,6 +33,7 @@
+ void lgtd_daemon_die_if_running_as_root_unless_requested(const char *);
+ void lgtd_daemon_set_user(const char *);
+ void lgtd_daemon_set_group(const char *);
++bool lgtd_daemon_write_pidfile(const char *);
+ void lgtd_daemon_drop_privileges(void);
+ bool lgtd_daemon_makedirs(const char *);
+ 
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -65,7 +65,8 @@
+     .group = NULL,
+     .syslog = false,
+     .syslog_facility = LOG_DAEMON,
+-    .syslog_ident = "lightsd"
++    .syslog_ident = "lightsd",
++    .pidfile = NULL
+ }; 
+ 
+ struct event_base *lgtd_ev_base = NULL;
+@@ -150,12 +151,13 @@
+ "Usage: %s ...\n\n"
+ "  [-l,--listen addr:port]              Listen for JSON-RPC commands over TCP at\n"
+ "                                       this address (can be repeated).\n"
+-"  [-c,--comand-pipe /command/fifo]     Open an unidirectional JSON-RPC\n"
++"  [-c,--command-pipe /command/fifo]    Open an unidirectional JSON-RPC\n"
+ "                                       command pipe at this location (can be\n"
+ "                                       repeated).\n"
+ "  [-s,--socket /unix/socket]           Open an Unix socket at this location\n"
+ "                                       (can be repeated).\n"
+ "  [-d,--daemonize]                     Fork in the background.\n"
++"  [-p,--pidfile /path/to/pid.file]     Write lightsd's pid in the given file.\n"
+ "  [-u,--user user]                     Drop privileges to this user (and the\n"
+ "                                       group of this user if -g is missing).\n"
+ "  [-g,--group group]                   Drop privileges to this group (-g requires\n"
+@@ -197,6 +199,7 @@
+         {"socket",          required_argument, NULL, 's'},
+         {"foreground",      no_argument,       NULL, 'f'},
+         {"daemonize",       no_argument,       NULL, 'd'},
++        {"pidfile",         required_argument, NULL, 'p'},
+         {"user",            required_argument, NULL, 'u'},
+         {"group",           required_argument, NULL, 'g'},
+         {"syslog",          no_argument,       NULL, 'S'},
+@@ -206,11 +209,11 @@
+         {"help",            no_argument,       NULL, 'h'},
+         {"verbosity",       required_argument, NULL, 'v'},
+         {"version",         no_argument,       NULL, 'V'},
+-        {"prefix",          no_argument,       NULL, 'p'},
++        {"prefix",          no_argument,       NULL, 'P'},
+         {"rundir",          no_argument,       NULL, 'r'},
+         {NULL,              0,                 NULL, 0}
+     };
+-    const char short_opts[] = "l:c:s:fdu:g:SF:I:thv:V";
++    const char short_opts[] = "l:c:s:fdp:u:g:SF:I:thv:V";
+ 
+     if (argc == 1) {
+         lgtd_usage(progname);
+@@ -246,6 +249,10 @@
+             break;
+         case 'd':
+             lgtd_opts.foreground = false;
++            break;
++        case 'p':
++            lgtd_opts.pidfile = optarg;
++            break;
+         case 'u':
+             lgtd_opts.user = optarg;
+             break;
+@@ -284,7 +291,7 @@
+             printf("%s %s\n", progname, LGTD_VERSION);
+             lgtd_cleanup();
+             return 0;
+-        case 'p':
++        case 'P':
+             printf(
+                 "%s%s\n", LGTD_INSTALL_PREFIX, LGTD_INSTALL_PREFIX[
+                     LGTD_ARRAY_SIZE(LGTD_INSTALL_PREFIX) - 1
+@@ -313,6 +320,11 @@
+     if (lgtd_opts.user) {
+         lgtd_daemon_set_user(lgtd_opts.user);
+         lgtd_daemon_set_group(lgtd_opts.group);
++        // create the pidfile before we drop privileges:
++        if (lgtd_opts.pidfile
++            && !lgtd_daemon_write_pidfile(lgtd_opts.pidfile)) {
++            lgtd_warn("couldn't write pidfile at %s", lgtd_opts.pidfile);
++        }
+         lgtd_daemon_drop_privileges();
+     } else if (lgtd_opts.group) {
+         lgtd_errx(1, "please, specify an user with the -u option");
+@@ -332,6 +344,11 @@
+         }
+     }
+ 
++    // update the pidfile after we've forked:
++    if (lgtd_opts.pidfile && !lgtd_daemon_write_pidfile(lgtd_opts.pidfile)) {
++        lgtd_warn("couldn't write pidfile at %s", lgtd_opts.pidfile);
++    }
++
+     lgtd_lifx_discovery_start();
+ 
+     // update at least once: so that if no bulbs are discovered we still get a
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -114,6 +114,7 @@
+     bool                syslog;
+     int                 syslog_facility;
+     const char          *syslog_ident;
++    const char          *pidfile;
+ };
+ 
+ extern struct lgtd_opts lgtd_opts;
+diff --git a/docs/first-steps.rst b/docs/first-steps.rst
+--- a/docs/first-steps.rst
++++ b/docs/first-steps.rst
+@@ -120,25 +120,28 @@
+ 
+    Usage: lightsd ...
+ 
+-     [-l,--listen addr:port [+]]          Listen for JSON-RPC commands over TCP at
+-                                          this address (can be repeated).
+-     [-c,--comand-pipe /command/fifo [+]] Open an unidirectional JSON-RPC
+-                                          command pipe at this location (can be
+-                                          repeated).
+-     [-s,--socket /unix/socket [+]]       Open an Unix socket at this location
+-                                          (can be repeated).
+-     [-d,--daemonize]                     Fork in the background.
+-     [-u,--user user]                     Drop privileges to this user (and the
+-                                          group of this user if -g is missing).
+-     [-g,--group group]                   Drop privileges to this group (-g requires
+-                                          the -u option to be used).
+-     [-S,--syslog]                        Divert logging from the console to syslog.
+-     [-F,--syslog-facility]               Facility to use with syslog (defaults to
+-                                          daemon, other possible values are user and
+-                                          local0-7, see syslog(3)).
+-     [-t,--no-timestamps]                 Disable timestamps in logs.
+-     [-h,--help]                          Display this.
+-     [-V,--version]                       Display version and build information.
++     [-l,--listen addr:port [+]]            Listen for JSON-RPC commands over TCP at
++                                            this address (can be repeated).
++     [-c,--command-pipe /command/fifo [+]]  Open an unidirectional JSON-RPC
++                                            command pipe at this location (can be
++                                            repeated).
++     [-s,--socket /unix/socket [+]]         Open an Unix socket at this location
++                                            (can be repeated).
++     [-d,--daemonize]                       Fork in the background.
++     [-p,--pidfile /path/to/pid.file]       Write lightsd's pid in the given file.
++     [-u,--user user]                       Drop privileges to this user (and the
++                                            group of this user if -g is missing).
++     [-g,--group group]                     Drop privileges to this group (-g requires
++                                            the -u option to be used).
++     [-S,--syslog]                          Divert logging from the console to syslog.
++     [-F,--syslog-facility]                 Facility to use with syslog (defaults to
++                                            daemon, other possible values are user and
++                                            local0-7, see syslog(3)).
++     [-I,--syslog-ident]                    Identifier to use with syslog (defaults to
++                                            lightsd).
++     [-t,--no-timestamps]                   Disable timestamps in logs.
++     [-h,--help]                            Display this.
++     [-V,--version]                         Display version and build information.
+      [-v,--verbosity debug|info|warning|error]
+ 
+    or,

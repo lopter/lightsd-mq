@@ -8,6 +8,7 @@ increase_lightsc_py_buffer_size.patch
 update_product_ids.patch
 document_dpkg_build.patch
 1_1_0_changelog.patch
+add_pidfile_option.patch
 add_power_transition.patch
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future
