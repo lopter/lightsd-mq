@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  0782bd73653ccf068ea786045e883db483dc2eff
+# Parent 71f4a109dbd96e47e1e59fb1b8a8acf78e52922e
 Lookup for a socket in a build directory in lightsc.py
 
 Hopefully it will help people trying to build lightsd manually a little
@@ -10,16 +10,17 @@ This also fixes relative path support for unix sockets.
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
-@@ -49,7 +49,7 @@
+@@ -49,7 +49,8 @@
  
          if parts.scheme == "unix":
              self._socket = socket.socket(socket.AF_UNIX)
 -            self._socket.connect(parts.path)
-+            self._socket.connect(os.path.join(parts.netloc, parts.path))
++            path = os.path.join(parts.netloc, parts.path).rstrip(os.path.sep)
++            self._socket.connect(path)
          elif parts.scheme == "tcp":
              self._socket = socket.create_connection((parts.hostname, parts.port))
          else:
-@@ -227,11 +227,14 @@
+@@ -227,11 +228,14 @@
      except Exception as ex:
          print(
              "Couldn't infer lightsd's runtime directory is lightsd installed? "
