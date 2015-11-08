@@ -1,11 +1,85 @@
 # HG changeset patch
-# Parent  cf31c95ce5e71589920af812717ae0d810cfeaf2
+# Parent  de7718dbc13557b6c6a48689999b50abcfa6ccc0
 Add build instructions for Debian like systems
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -24,6 +24,7 @@
+ # TODO: we need at least 2.0.19-stable because of the logging defines
+ FIND_PACKAGE(Event2 REQUIRED COMPONENTS core)
+ FIND_PACKAGE(Endian REQUIRED)
++FIND_PACKAGE(Sphinx)
+ 
+ INCLUDE(CheckFunctionExists)
+ INCLUDE(CheckVariableExists)
+diff --git a/CMakeScripts/FindSphinx.cmake b/CMakeScripts/FindSphinx.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/FindSphinx.cmake
+@@ -0,0 +1,3 @@
++IF (NOT SPHINX)
++
++ENDIF ()
+diff --git a/docs/first-steps.rst b/docs/first-steps.rst
+--- a/docs/first-steps.rst
++++ b/docs/first-steps.rst
+@@ -86,6 +86,31 @@
+ Try to :ref:`toggle your lights <toggle>` and read on some of the examples
+ bundled with lightsd.
+ 
++Linux (System V style)
++----------------------
++
++Start lightsd wiht:
++
++::
++
++   /etc/init.d/lightsd start
++
++Stop lightsd with:
++
++::
++
++   /etc/init.d/lightsd stop
++
++Check how lightsd is running with:
++
++::
++
++   ps aux | grep lightsd
++
++The logs will be logged to `syslogd(8)`_.
++
++.. _syslogd(8): http://manpages.debian.org/cgi-bin/man.cgi?query=syslogd&sektion=8
++
+ Manually (other systems)
+ ~~~~~~~~~~~~~~~~~~~~~~~~
+ 
 diff --git a/docs/installation.rst b/docs/installation.rst
 --- a/docs/installation.rst
 +++ b/docs/installation.rst
-@@ -58,11 +58,62 @@
+@@ -38,12 +38,12 @@
+ Installation (for Arch Linux)
+ -----------------------------
+ 
+-Make sure you have yaourt installed: https://archlinux.fr/yaourt-en (`wiki
++Make sure you have Yaourt installed: https://archlinux.fr/yaourt-en (`wiki
+ page`_).
+ 
+ ::
+ 
+-  yaourt -Sy lightsd
++  yaourt -Sya lightsd
+ 
+ Make sure to follow the post-installation instructions: replace ``$USER`` with
+ the user you usually use.
+@@ -54,15 +54,66 @@
+ 
+ ::
+ 
+-  yaourt -Sy ipython
++  yaourt -Sya ipython
  
  Read on :doc:`/first-steps` to see how to use lightsd.
  
