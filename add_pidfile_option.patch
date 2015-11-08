@@ -1,5 +1,6 @@
 # HG changeset patch
 # Parent 4d0b811c1111b9cd8e17a3b521adfc78fe257f0e
+# Parent  1ebac809847f10f532c83bb7e827f02c557199b9
 Add the -p (--pidfile) option
 
 Needed to properly support old school startup scripts.
@@ -311,7 +312,7 @@ new file mode 100644
 +    if (uid != 1000) {
 +        lgtd_errx(1, "god uid %d (expected 1000)", uid);
 +    }
-+    
++
 +    if (gid != 500) {
 +        lgtd_errx(1, "god gid %d (expected 500)", gid);
 +    }

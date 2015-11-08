@@ -1,26 +1,7 @@
 # HG changeset patch
-# Parent  d27ca4206c3a63db99ddc25b02117a8a9b8d96da
+# Parent  4808222207b94d31adc68ae38ae351035fa0249c
 Add build instructions for Debian like systems
 
-diff --git a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -24,6 +24,7 @@
- # TODO: we need at least 2.0.19-stable because of the logging defines
- FIND_PACKAGE(Event2 REQUIRED COMPONENTS core)
- FIND_PACKAGE(Endian REQUIRED)
-+FIND_PACKAGE(Sphinx)
- 
- INCLUDE(CheckFunctionExists)
- INCLUDE(CheckVariableExists)
-diff --git a/CMakeScripts/FindSphinx.cmake b/CMakeScripts/FindSphinx.cmake
-new file mode 100644
---- /dev/null
-+++ b/CMakeScripts/FindSphinx.cmake
-@@ -0,0 +1,3 @@
-+IF (NOT SPHINX)
-+
-+ENDIF ()
 diff --git a/docs/first-steps.rst b/docs/first-steps.rst
 --- a/docs/first-steps.rst
 +++ b/docs/first-steps.rst
