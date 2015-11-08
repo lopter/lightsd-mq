@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c514d06adcfb4c6cfbc918cb64aed9fe9570b030
+# Parent 4d0b811c1111b9cd8e17a3b521adfc78fe257f0e
 Add the -p (--pidfile) option
 
 Needed to properly support old school startup scripts.
@@ -57,7 +57,15 @@ diff --git a/core/daemon.h b/core/daemon.h
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
-@@ -65,7 +65,8 @@
+@@ -33,6 +33,7 @@
+ #include <string.h>
+ #include <strings.h>
+ #include <syslog.h>
++#include <unistd.h>
+ 
+ #include <event2/event.h>
+ #include <event2/event_struct.h>
+@@ -65,7 +66,8 @@
      .group = NULL,
      .syslog = false,
      .syslog_facility = LOG_DAEMON,
@@ -67,7 +75,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  }; 
  
  struct event_base *lgtd_ev_base = NULL;
-@@ -86,6 +87,9 @@
+@@ -86,6 +88,9 @@
  #if LIBEVENT_VERSION_NUMBER >= 0x02010100
      libevent_global_shutdown();
  #endif
@@ -77,7 +85,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  }
  
  static void
-@@ -150,12 +154,13 @@
+@@ -150,12 +155,13 @@
  "Usage: %s ...\n\n"
  "  [-l,--listen addr:port]              Listen for JSON-RPC commands over TCP at\n"
  "                                       this address (can be repeated).\n"
@@ -92,7 +100,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  "  [-u,--user user]                     Drop privileges to this user (and the\n"
  "                                       group of this user if -g is missing).\n"
  "  [-g,--group group]                   Drop privileges to this group (-g requires\n"
-@@ -197,6 +202,7 @@
+@@ -197,6 +203,7 @@
          {"socket",          required_argument, NULL, 's'},
          {"foreground",      no_argument,       NULL, 'f'},
          {"daemonize",       no_argument,       NULL, 'd'},
@@ -100,7 +108,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          {"user",            required_argument, NULL, 'u'},
          {"group",           required_argument, NULL, 'g'},
          {"syslog",          no_argument,       NULL, 'S'},
-@@ -206,11 +212,11 @@
+@@ -206,11 +213,11 @@
          {"help",            no_argument,       NULL, 'h'},
          {"verbosity",       required_argument, NULL, 'v'},
          {"version",         no_argument,       NULL, 'V'},
@@ -114,7 +122,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  
      if (argc == 1) {
          lgtd_usage(progname);
-@@ -246,6 +252,10 @@
+@@ -246,6 +253,10 @@
              break;
          case 'd':
              lgtd_opts.foreground = false;
@@ -125,7 +133,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          case 'u':
              lgtd_opts.user = optarg;
              break;
-@@ -284,7 +294,7 @@
+@@ -284,7 +295,7 @@
              printf("%s %s\n", progname, LGTD_VERSION);
              lgtd_cleanup();
              return 0;
@@ -134,7 +142,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
              printf(
                  "%s%s\n", LGTD_INSTALL_PREFIX, LGTD_INSTALL_PREFIX[
                      LGTD_ARRAY_SIZE(LGTD_INSTALL_PREFIX) - 1
-@@ -313,6 +323,11 @@
+@@ -313,6 +324,11 @@
      if (lgtd_opts.user) {
          lgtd_daemon_set_user(lgtd_opts.user);
          lgtd_daemon_set_group(lgtd_opts.group);
@@ -146,7 +154,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
          lgtd_daemon_drop_privileges();
      } else if (lgtd_opts.group) {
          lgtd_errx(1, "please, specify an user with the -u option");
-@@ -332,6 +347,11 @@
+@@ -332,6 +348,11 @@
          }
      }
  

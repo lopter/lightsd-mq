@@ -1,0 +1,19 @@
+# HG changeset patch
+# Parent 114e9a1d0a73ee418d32dcf74a9d110147df5e57
+Install examples in share/lightsd insted of share/doc/lightsd
+
+Because Debian thinks it's smart to compress files in /usr/share/doc,
+which creates a poor user experience for lightsc.py
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -109,7 +109,7 @@
+ )
+ INSTALL(
+     DIRECTORY examples
+-    DESTINATION share/doc/lightsd
++    DESTINATION share/lightsd
+     USE_SOURCE_PERMISSIONS
+     REGEX ".*\\.sw.$" EXCLUDE
+ )
