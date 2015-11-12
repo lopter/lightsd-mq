@@ -1,0 +1,182 @@
+# HG changeset patch
+# Parent  c128b73a419788def1f3d8a1b4520a842d65c14b
+Setup the LIFX client source to get unicast responses.
+
+This should significantly improve both latency and throughput.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,7 +5,7 @@
+ 
+ SET(CPACK_PACKAGE_VERSION_MAJOR "1")
+ SET(CPACK_PACKAGE_VERSION_MINOR "1")
+-SET(CPACK_PACKAGE_VERSION_PATCH "0")
++SET(CPACK_PACKAGE_VERSION_PATCH "1")
+ SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+ 
+ MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -400,6 +400,28 @@
+     return written == pidlen;
+ }
+ 
++uint32_t
++lgtd_daemon_randuint32(void)
++{
++    int fd = open("/dev/urandom", O_RDONLY);
++    if (fd == -1) {
++        lgtd_err(1, "couldn't open /dev/urandom");
++    }
++
++    uint32_t rv;
++    int nbytes = read(fd, &rv, sizeof(rv));
++    if (nbytes != sizeof(rv)) {
++        close(fd);
++        lgtd_err(
++            1, "couln't fetch %ju bytes from /dev/urandom",
++            sizeof((uintmax_t)rv)
++        );
++    }
++
++    close(fd);
++    return rv;
++}
++
+ int
+ lgtd_daemon_syslog_facilitytoi(const char *facility)
+ {
+diff --git a/core/daemon.h b/core/daemon.h
+--- a/core/daemon.h
++++ b/core/daemon.h
+@@ -36,6 +36,7 @@
+ bool lgtd_daemon_write_pidfile(const char *);
+ void lgtd_daemon_drop_privileges(void);
+ bool lgtd_daemon_makedirs(const char *);
++uint32_t lgtd_daemon_randuint32(void);
+ 
+ int lgtd_daemon_syslog_facilitytoi(const char *);
+ void lgtd_daemon_syslog_open(const char *, enum lgtd_verbosity, int);
+diff --git a/core/lightsd.c b/core/lightsd.c
+--- a/core/lightsd.c
++++ b/core/lightsd.c
+@@ -336,7 +336,7 @@
+ 
+     lgtd_daemon_die_if_running_as_root_unless_requested(lgtd_opts.user);
+ 
+-    lgtd_lifx_wire_load_packet_info_map();
++    lgtd_lifx_wire_setup();
+     if (!lgtd_lifx_discovery_setup() || !lgtd_lifx_broadcast_setup()) {
+         lgtd_err(1, "can't setup lightsd");
+     }
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -35,6 +35,7 @@
+ #include "core/time_monotonic.h"
+ #include "bulb.h"
+ #include "gateway.h"
++#include "core/daemon.h"
+ #include "core/lightsd.h"
+ 
+ const union lgtd_lifx_target LGTD_LIFX_UNSPEC_TARGET = { .tags = 0 };
+@@ -50,6 +51,8 @@
+    13, 18,  8, 12,  7,  6,  5, 63
+ };
+ 
++static uint32_t lgtd_lifx_client_id = 0;
++
+ static struct lgtd_lifx_packet_info_map lgtd_lifx_packet_info =
+     RB_INITIALIZER(&lgtd_lifx_packets_infos);
+ 
+@@ -95,7 +98,7 @@
+     );
+ }
+ 
+-void
++static void
+ lgtd_lifx_wire_load_packet_info_map(void)
+ {
+ #define DECODER(x)  ((void (*)(void *))(x))
+@@ -465,6 +468,15 @@
+     return RB_FIND(lgtd_lifx_packet_info_map, &lgtd_lifx_packet_info, &pkt_info);
+ }
+ 
++void
++lgtd_lifx_wire_setup(void)
++{
++    lgtd_lifx_wire_load_packet_info_map();
++    do {
++        lgtd_lifx_client_id = lgtd_daemon_randuint32();
++    } while (!lgtd_lifx_client_id);
++}
++
+ 
+ #define WAVEFORM_ENTRY(e) { .str = e, .len = sizeof(e) - 1 }
+ const struct lgtd_lifx_waveform_string_id lgtd_lifx_waveform_table[] = {
+@@ -534,6 +546,7 @@
+     }
+     hdr->at_time = htole64(hdr->at_time);
+     hdr->packet_type = htole16(hdr->packet_type);
++    hdr->source = htole32(hdr->source); // not strictly necessary but eh.
+ }
+ 
+ // Convert all the fields in the header to the host endianness.
+@@ -554,6 +567,7 @@
+     }
+     hdr->at_time = le64toh(hdr->at_time);
+     hdr->packet_type = le16toh(hdr->packet_type);
++    hdr->source = le32toh(hdr->source);
+ }
+ 
+ const struct lgtd_lifx_packet_info *
+@@ -564,6 +578,7 @@
+                             enum lgtd_lifx_packet_type packet_type)
+ {
+     assert(hdr);
++    assert(lgtd_lifx_client_id);
+ 
+     const struct lgtd_lifx_packet_info *pkt_info =
+         lgtd_lifx_wire_get_packet_info(packet_type);
+@@ -571,6 +586,7 @@
+     assert(pkt_info);
+ 
+     memset(hdr, 0, sizeof(*hdr));
++    hdr->source = lgtd_lifx_client_id;
+     hdr->size = pkt_info->size + sizeof(*hdr);
+     hdr->packet_type = packet_type;
+     if (site) {
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -61,8 +61,16 @@
+     //! - tagged: true when the target field holds tags;
+     //! - origin: LIFX internal use, should be 0.
+     uint16le_t      protocol;
+-    //! Here is what LIFXKit says about it, maybe it's related to zigbee:
+-    //! Message source identifier from NAT table (Internal LIFX use)
++    //! http://lan.developer.lifx.com/v2.0/docs/header-description
++    //! The source identifier allows each client to provide an unique value,
++    //! which will be included by the LIFX device in any message that is sent
++    //! in response to a message sent by the client. If the source identifier
++    //! is a non-zero value, then the LIFX device will send a unicast message
++    //! to the source IP address and port that the client used to send the
++    //! originating message. If the source identifier is a zero value, then the
++    //! LIFX device may send a broadcast message that can be received by all
++    //! clients on the same sub-net. See _ack_required_ and _res_required_
++    //! fields in the Frame Address.
+     uint32le_t      source;
+     union {
+         //! All targeted tags ORed together.
+@@ -392,7 +400,8 @@
+     lgtd_lifx_wire_print_nsec_timestamp((ts), (arr), sizeof((arr)))
+ 
+ const struct lgtd_lifx_packet_info *lgtd_lifx_wire_get_packet_info(enum lgtd_lifx_packet_type);
+-void lgtd_lifx_wire_load_packet_info_map(void);
++
++void lgtd_lifx_wire_setup(void);
+ 
+ const struct lgtd_lifx_packet_info *lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *,
+                                                                  enum lgtd_lifx_target_type,
