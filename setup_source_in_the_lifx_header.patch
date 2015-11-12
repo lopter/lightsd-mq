@@ -180,3 +180,150 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  
  const struct lgtd_lifx_packet_info *lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *,
                                                                   enum lgtd_lifx_target_type,
+diff --git a/tests/core/daemon/test_daemon_randuint32.c b/tests/core/daemon/test_daemon_randuint32.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/daemon/test_daemon_randuint32.c
+@@ -0,0 +1,94 @@
++#include <sys/types.h>
++
++int mock_open(const char *, int, ...);
++ssize_t mock_read(int, void *, size_t);
++int mock_close(int);
++
++#define open(fp, flags, ...) mock_open(fp, flags, ##__VA_ARGS__)
++#define read(fd, buf, sz) mock_read(fd, buf, sz)
++#define close(fd) mock_close(fd)
++
++#include "daemon.c"
++
++#include "mock_gateway.h"
++#include "mock_pipe.h"
++#include "mock_router.h"
++#include "mock_log.h"
++#include "mock_timer.h"
++
++static const int MOCK_RANDOM_NUMBER = 0x72616e64;
++
++int mock_open_call_count = 0;
++
++int
++mock_open(const char *fp, int flags, ...)
++{
++    mock_open_call_count++;
++
++    if (strcmp(fp, "/dev/urandom")) {
++        errx(1, "got fp %s (expected /dev/urandom)", fp);
++    }
++
++    if (flags != O_RDONLY) {
++        errx(1, "got flags %#x (expected %#x)", flags, O_RDONLY);
++    }
++
++    return 42;
++}
++
++int mock_read_call_count = 0;
++
++ssize_t
++mock_read(int fd, void *buf, size_t nbytes)
++{
++    mock_read_call_count++;
++
++    if (fd != 42) {
++        errx(1, "got fd %d (expected 42)", fd);
++    }
++
++    if (!buf) {
++        errx(1, "missing buf");
++    }
++
++    if (nbytes != 4) {
++        errx(1, "got nbytes %ju (expected 4)", (uintmax_t)nbytes);
++    }
++
++    memcpy(buf, &MOCK_RANDOM_NUMBER, sizeof(MOCK_RANDOM_NUMBER));
++
++    return nbytes;
++}
++
++int mock_close_call_count = 0;
++
++int
++mock_close(int fd)
++{
++    mock_close_call_count++;
++
++    if (fd != 42) {
++        errx(1, "got fd %d (expected 42)", fd);
++    }
++
++    return 0;
++}
++
++int
++main(void)
++{
++    if (lgtd_daemon_randuint32() != MOCK_RANDOM_NUMBER) {
++        errx(1, "got unexpected value from randuint32");
++    }
++    if (mock_open_call_count != 1) {
++        errx(1, "open wasn't once");
++    }
++    if (mock_read_call_count != 1) {
++        errx(1, "read wasn't once");
++    }
++    if (mock_close_call_count != 1) {
++        errx(1, "close wasn't once");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/daemon/test_daemon_writepidfile.c b/tests/core/daemon/test_daemon_writepidfile.c
+--- a/tests/core/daemon/test_daemon_writepidfile.c
++++ b/tests/core/daemon/test_daemon_writepidfile.c
+@@ -46,7 +46,7 @@
+     va_end(ap);
+ 
+     if (strcmp(fp, "/test.pid")) {
+-        lgtd_errx(1, "got fp %s (expected test.pid)", fp);
++        lgtd_errx(1, "got fp %s (expected /test.pid)", fp);
+     }
+ 
+     int expected_flags = O_CREAT|O_WRONLY|O_TRUNC;
+diff --git a/tests/core/mock_daemon.h b/tests/core/mock_daemon.h
+--- a/tests/core/mock_daemon.h
++++ b/tests/core/mock_daemon.h
+@@ -15,3 +15,11 @@
+     return true;
+ }
+ #endif
++
++#ifndef MOCKED_DAEMON_RANDUINT32
++uint32_t
++lgtd_daemon_randuint32(void)
++{
++    return 0x72616e64;
++}
++#endif
+diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
+--- a/tests/lifx/tests_shims.c
++++ b/tests/lifx/tests_shims.c
+@@ -15,6 +15,17 @@
+ 
+ struct event_base *lgtd_ev_base = NULL;
+ 
++const int LGTD_LIFX_DEBRUIJN_SEQUENCE[64] = {
++    0, 47,  1, 56, 48, 27,  2, 60,
++   57, 49, 41, 37, 28, 16,  3, 61,
++   54, 58, 35, 52, 50, 42, 21, 44,
++   38, 32, 29, 23, 17, 11,  4, 62,
++   46, 55, 26, 59, 40, 36, 15, 53,
++   34, 51, 20, 43, 31, 22, 10, 45,
++   25, 39, 14, 33, 19, 30,  9, 24,
++   13, 18,  8, 12,  7,  6,  5, 63
++};
++
+ void
+ lgtd_cleanup(void)
+ {
