@@ -71,10 +71,65 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      if (!lgtd_lifx_discovery_setup() || !lgtd_lifx_broadcast_setup()) {
          lgtd_err(1, "can't setup lightsd");
      }
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -131,6 +131,9 @@
+ char *lgtd_print_duration(uint64_t, char *, int);
+ #define LGTD_PRINT_DURATION(secs, arr) \
+     lgtd_print_duration((secs), (arr), sizeof((arr)))
++char* lgtd_print_nsec_timestamp(uint64_t, char *, int);
++#define LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(ts, arr) \
++    lgtd_print_nsec_timestamp((ts), (arr), sizeof((arr)))
+ 
+ void lgtd_log_setup(void);
+ 
+diff --git a/core/utils.c b/core/utils.c
+--- a/core/utils.c
++++ b/core/utils.c
+@@ -25,6 +25,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <time.h>
+ 
+ #include "lightsd.h"
+ 
+@@ -117,3 +118,22 @@
+     snprintf(&buf[i], bufsz - i, "%02d:%02d", hours, minutes);
+     return buf;
+ }
++
++char *
++lgtd_print_nsec_timestamp(uint64_t nsec_ts, char *buf, int bufsz)
++{
++    assert(buf);
++    assert(bufsz > 0);
++
++    time_t ts = LGTD_NSECS_TO_SECS(nsec_ts);
++
++    struct tm tm_utc;
++    if (gmtime_r(&ts, &tm_utc)) {
++        int64_t usecs = LGTD_NSECS_TO_USECS(nsec_ts - LGTD_SECS_TO_NSECS(ts));
++        LGTD_TM_TO_ISOTIME(&tm_utc, buf, bufsz, usecs);
++    } else {
++        buf[0] = '\0';
++    }
++
++    return buf;
++}
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
 +++ b/lifx/wire_proto.c
-@@ -35,6 +35,7 @@
+@@ -27,7 +27,6 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <time.h>
+ 
+ #include <event2/util.h>
+ 
+@@ -35,6 +34,7 @@
  #include "core/time_monotonic.h"
  #include "bulb.h"
  #include "gateway.h"
@@ -82,7 +137,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
  #include "core/lightsd.h"
  
  const union lgtd_lifx_target LGTD_LIFX_UNSPEC_TARGET = { .tags = 0 };
-@@ -50,6 +51,8 @@
+@@ -50,6 +50,8 @@
     13, 18,  8, 12,  7,  6,  5, 63
  };
  
@@ -91,7 +146,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
  static struct lgtd_lifx_packet_info_map lgtd_lifx_packet_info =
      RB_INITIALIZER(&lgtd_lifx_packets_infos);
  
-@@ -95,7 +98,7 @@
+@@ -95,7 +97,7 @@
      );
  }
  
@@ -100,7 +155,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
  lgtd_lifx_wire_load_packet_info_map(void)
  {
  #define DECODER(x)  ((void (*)(void *))(x))
-@@ -465,6 +468,15 @@
+@@ -465,6 +467,15 @@
      return RB_FIND(lgtd_lifx_packet_info_map, &lgtd_lifx_packet_info, &pkt_info);
  }
  
@@ -116,7 +171,33 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
  
  #define WAVEFORM_ENTRY(e) { .str = e, .len = sizeof(e) - 1 }
  const struct lgtd_lifx_waveform_string_id lgtd_lifx_waveform_table[] = {
-@@ -534,6 +546,7 @@
+@@ -493,25 +504,6 @@
+     return LGTD_LIFX_WAVEFORM_INVALID;
+ }
+ 
+-char *
+-lgtd_lifx_wire_print_nsec_timestamp(uint64_t nsec_ts, char *buf, int bufsz)
+-{
+-    assert(buf);
+-    assert(bufsz > 0);
+-
+-    time_t ts = LGTD_NSECS_TO_SECS(nsec_ts);
+-
+-    struct tm tm_utc;
+-    if (gmtime_r(&ts, &tm_utc)) {
+-        int64_t usecs = LGTD_NSECS_TO_USECS(nsec_ts - LGTD_SECS_TO_NSECS(ts));
+-        LGTD_TM_TO_ISOTIME(&tm_utc, buf, bufsz, usecs);
+-    } else {
+-        buf[0] = '\0';
+-    }
+-
+-    return buf;
+-}
+-
+ static void
+ lgtd_lifx_wire_encode_header(struct lgtd_lifx_packet_header *hdr, int flags)
+ {
+@@ -534,6 +526,7 @@
      }
      hdr->at_time = htole64(hdr->at_time);
      hdr->packet_type = htole16(hdr->packet_type);
@@ -124,7 +205,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
  }
  
  // Convert all the fields in the header to the host endianness.
-@@ -554,6 +567,7 @@
+@@ -554,6 +547,7 @@
      }
      hdr->at_time = le64toh(hdr->at_time);
      hdr->packet_type = le16toh(hdr->packet_type);
@@ -132,7 +213,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
  }
  
  const struct lgtd_lifx_packet_info *
-@@ -564,6 +578,7 @@
+@@ -564,6 +558,7 @@
                              enum lgtd_lifx_packet_type packet_type)
  {
      assert(hdr);
@@ -140,7 +221,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
  
      const struct lgtd_lifx_packet_info *pkt_info =
          lgtd_lifx_wire_get_packet_info(packet_type);
-@@ -571,6 +586,7 @@
+@@ -571,6 +566,7 @@
      assert(pkt_info);
  
      memset(hdr, 0, sizeof(*hdr));
@@ -170,8 +251,13 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
      uint32le_t      source;
      union {
          //! All targeted tags ORed together.
-@@ -392,7 +400,8 @@
-     lgtd_lifx_wire_print_nsec_timestamp((ts), (arr), sizeof((arr)))
+@@ -387,12 +395,10 @@
+          (tag_id_varname) = lgtd_lifx_wire_next_tag_id((tag_id_varname), (tags)))
+ 
+ enum lgtd_lifx_waveform_type lgtd_lifx_wire_waveform_string_id_to_type(const char *, int);
+-char* lgtd_lifx_wire_print_nsec_timestamp(uint64_t, char *, int);
+-#define LGTD_LIFX_WIRE_PRINT_NSEC_TIMESTAMP(ts, arr) \
+-    lgtd_lifx_wire_print_nsec_timestamp((ts), (arr), sizeof((arr)))
  
  const struct lgtd_lifx_packet_info *lgtd_lifx_wire_get_packet_info(enum lgtd_lifx_packet_type);
 -void lgtd_lifx_wire_load_packet_info_map(void);
@@ -799,28 +885,6 @@ diff --git a/tests/core/mock_daemon.h b/tests/core/mock_daemon.h
 +    return 0x72616e64;
 +}
 +#endif
-diff --git a/tests/core/pipe/CMakeLists.txt b/tests/core/pipe/CMakeLists.txt
---- a/tests/core/pipe/CMakeLists.txt
-+++ b/tests/core/pipe/CMakeLists.txt
-@@ -10,7 +10,6 @@
-     ${LIGHTSD_SOURCE_DIR}/core/utils.c
-     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
-     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
--    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
-     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
-     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
- )
-diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
---- a/tests/core/proto/CMakeLists.txt
-+++ b/tests/core/proto/CMakeLists.txt
-@@ -10,7 +10,6 @@
-     ${LIGHTSD_SOURCE_DIR}/core/utils.c
-     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
-     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
--    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
-     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
-     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
- )
 diff --git a/tests/core/mock_log.h b/tests/core/mock_log.h
 --- a/tests/core/mock_log.h
 +++ b/tests/core/mock_log.h
@@ -868,6 +932,28 @@ diff --git a/tests/core/mock_log.h b/tests/core/mock_log.h
      fprintf(stderr, "DEBUG: ");
      va_list ap;
      va_start(ap, fmt);
+diff --git a/tests/core/pipe/CMakeLists.txt b/tests/core/pipe/CMakeLists.txt
+--- a/tests/core/pipe/CMakeLists.txt
++++ b/tests/core/pipe/CMakeLists.txt
+@@ -10,7 +10,6 @@
+     ${LIGHTSD_SOURCE_DIR}/core/utils.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+-    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
+diff --git a/tests/core/proto/CMakeLists.txt b/tests/core/proto/CMakeLists.txt
+--- a/tests/core/proto/CMakeLists.txt
++++ b/tests/core/proto/CMakeLists.txt
+@@ -10,7 +10,6 @@
+     ${LIGHTSD_SOURCE_DIR}/core/utils.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/tagging.c
+-    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/../tests_utils.c
+ )
 diff --git a/tests/core/router/test_router_send_to_broadcast.c b/tests/core/router/test_router_send_to_broadcast.c
 --- a/tests/core/router/test_router_send_to_broadcast.c
 +++ b/tests/core/router/test_router_send_to_broadcast.c
@@ -961,18 +1047,29 @@ diff --git a/tests/core/tests_shims.c b/tests/core/tests_shims.c
  void
  lgtd_cleanup(void)
  {
+diff --git a/tests/lifx/gateway/CMakeLists.txt b/tests/lifx/gateway/CMakeLists.txt
+--- a/tests/lifx/gateway/CMakeLists.txt
++++ b/tests/lifx/gateway/CMakeLists.txt
+@@ -18,7 +18,6 @@
+     ${LIGHTSD_SOURCE_DIR}/lifx/broadcast.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/bulb.c
+     ${LIGHTSD_SOURCE_DIR}/lifx/discovery.c
+-    ${LIGHTSD_SOURCE_DIR}/lifx/wire_proto.c
+ )
+ 
+ FUNCTION(ADD_GATEWAY_TEST TEST_SOURCE)
 diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id.c b/tests/lifx/gateway/test_gateway_allocate_tag_id.c
 --- a/tests/lifx/gateway/test_gateway_allocate_tag_id.c
 +++ b/tests/lifx/gateway/test_gateway_allocate_tag_id.c
-@@ -42,7 +42,7 @@
+@@ -42,8 +42,6 @@
  int
  main(void)
  {
 -    lgtd_lifx_wire_load_packet_info_map();
-+    lgtd_lifx_wire_setup();
- 
+-
      struct lgtd_lifx_gateway gw;
      memset(&gw, 0, sizeof(gw));
+ 
 diff --git a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
 --- a/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
 +++ b/tests/lifx/gateway/test_gateway_allocate_tag_id_from_lifx_network.c
@@ -1217,7 +1314,7 @@ diff --git a/tests/lifx/mock_wire_proto.h b/tests/lifx/mock_wire_proto.h
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/mock_wire_proto.h
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,28 @@
 +#pragma once
 +
 +#ifndef MOCKED_LGTD_LIFX_WIRE_WAVEFORM_STRING_ID_TO_TYPE
@@ -1227,6 +1324,23 @@ new file mode 100644
 +    (void)s;
 +    (void)len;
 +    return LGTD_LIFX_WAVEFORM_INVALID;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_WIRE_SETUP_HEADER
++const struct lgtd_lifx_packet_info *lgtd_lifx_wire_setup_header(
++                                        struct lgtd_lifx_packet_header *hdr,
++                                        enum lgtd_lifx_target_type target_type,
++                                        union lgtd_lifx_target target,
++                                        const uint8_t *site,
++                                        enum lgtd_lifx_packet_type packet_type)
++{
++    (void)hdr;
++    (void)target_type;
++    (void)target;
++    (void)site;
++    (void)hdr;
++    (void)hdr;
 +}
 +#endif
 diff --git a/tests/lifx/tests_shims.c b/tests/lifx/tests_shims.c
