@@ -1,0 +1,472 @@
+# HG changeset patch
+# Parent  4134fe402abda2467a97c4acc98b794cde9ee414
+Finish refactoring tests around wire_proto.c
+
+This finishes what started the previous changeset: mock the wire_proto
+module and properly do unit testing.
+
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/proto/test_proto_set_light_from_hsbk.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk.c
+@@ -7,6 +7,7 @@
+ #include "mock_event2.h"
+ #include "mock_log.h"
+ #include "mock_timer.h"
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_LIGHT_COLOR
+ #include "mock_wire_proto.h"
+ #include "tests_utils.h"
+ 
+@@ -14,6 +15,18 @@
+ #define MOCKED_ROUTER_SEND
+ #include "tests_proto_utils.h"
+ 
++int lifx_wire_encode_light_color_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_light_color_call_count++;
++}
++
++int router_send_call_count = 0;
++
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+                  enum lgtd_lifx_packet_type pkt_type,
+@@ -34,31 +47,29 @@
+     }
+ 
+     struct lgtd_lifx_packet_light_color *light_color = pkt;
+-    int hue = le16toh(light_color->hue);
+-    int saturation = le16toh(light_color->saturation);
+-    int brightness = le16toh(light_color->brightness);
+-    int kelvin = le16toh(light_color->kelvin);
+-    int transition = htole32(light_color->transition);
++    if (light_color->hue != 42) {
++        errx(1, "got hue = %d (expected 42)", light_color->hue);
++    }
++    if (light_color->saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", light_color->saturation);
++    }
++    if (light_color->brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", light_color->brightness);
++    }
++    if (light_color->kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", light_color->kelvin);
++    }
++    if (light_color->transition != 150) {
++        errx(1, "got transition = %d (expected 150)", light_color->transition);
++    }
+ 
+-    if (hue != 42) {
+-        errx(1, "got hue = %d (expected 42)", hue);
+-    }
+-    if (saturation != 10000) {
+-        errx(1, "got saturation = %d (expected 10000)", saturation);
+-    }
+-    if (brightness != 20000) {
+-        errx(1, "got brightness = %d (expected 20000)", brightness);
+-    }
+-    if (kelvin != 4500) {
+-        errx(1, "got kelvin = %d (expected 4500)", kelvin);
+-    }
+-    if (transition != 150) {
+-        errx(1, "got transition = %d (expected 150)", transition);
+-    }
++    router_send_call_count++;
+ 
+     return true;
+ }
+ 
++int client_send_response_call_count = 0;
++
+ void
+ lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+@@ -69,6 +80,8 @@
+     if (strcmp(msg, "true")) {
+         errx(1, "unexpected response [%s] (expected [true])", msg);
+     }
++
++    client_send_response_call_count++;
+ }
+ 
+ int
+@@ -83,5 +96,24 @@
+         &client, targets, 42, 10000, 20000, 4500, 150
+     );
+ 
++    if (lifx_wire_encode_light_color_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_light_color_call_count = %d (expected 1)",
++            lifx_wire_encode_light_color_call_count
++        );
++    }
++    if (router_send_call_count != 1) {
++        errx(
++            1, "router_send_call_count = %d (expected 1)",
++            router_send_call_count
++        );
++    }
++    if (client_send_response_call_count != 1) {
++        errx(
++            1, "client_send_response_call_count = %d (expected 1)",
++            client_send_response_call_count
++        );
++    }
++
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+@@ -7,6 +7,7 @@
+ #include "mock_event2.h"
+ #include "mock_log.h"
+ #include "mock_timer.h"
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_LIGHT_COLOR
+ #include "mock_wire_proto.h"
+ #include "tests_utils.h"
+ 
+@@ -14,6 +15,18 @@
+ #define MOCKED_ROUTER_SEND
+ #include "tests_proto_utils.h"
+ 
++int lifx_wire_encode_light_color_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_light_color_call_count++;
++}
++
++int router_send_call_count = 0;
++
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+                  enum lgtd_lifx_packet_type pkt_type,
+@@ -34,31 +47,29 @@
+     }
+ 
+     struct lgtd_lifx_packet_light_color *light_color = pkt;
+-    int hue = le16toh(light_color->hue);
+-    int saturation = le16toh(light_color->saturation);
+-    int brightness = le16toh(light_color->brightness);
+-    int kelvin = le16toh(light_color->kelvin);
+-    int transition = htole32(light_color->transition);
++    if (light_color->hue != 42) {
++        errx(1, "got hue = %d (expected 42)", light_color->hue);
++    }
++    if (light_color->saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", light_color->saturation);
++    }
++    if (light_color->brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", light_color->brightness);
++    }
++    if (light_color->kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", light_color->kelvin);
++    }
++    if (light_color->transition != 150) {
++        errx(1, "got transition = %d (expected 150)", light_color->transition);
++    }
+ 
+-    if (hue != 42) {
+-        errx(1, "got hue = %d (expected 42)", hue);
+-    }
+-    if (saturation != 10000) {
+-        errx(1, "got saturation = %d (expected 10000)", saturation);
+-    }
+-    if (brightness != 20000) {
+-        errx(1, "got brightness = %d (expected 20000)", brightness);
+-    }
+-    if (kelvin != 4500) {
+-        errx(1, "got kelvin = %d (expected 4500)", kelvin);
+-    }
+-    if (transition != 150) {
+-        errx(1, "got transition = %d (expected 150)", transition);
+-    }
++    router_send_call_count++;
+ 
+     return false;
+ }
+ 
++int client_send_response_call_count = 0;
++
+ void
+ lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+@@ -69,6 +80,8 @@
+     if (strcmp(msg, "false")) {
+         errx(1, "unexpected response [%s] (expected [false])", msg);
+     }
++
++    client_send_response_call_count++;
+ }
+ 
+ int
+@@ -82,6 +95,24 @@
+     lgtd_proto_set_light_from_hsbk(
+         &client, targets, 42, 10000, 20000, 4500, 150
+     );
++    if (lifx_wire_encode_light_color_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_light_color_call_count = %d (expected 1)",
++            lifx_wire_encode_light_color_call_count
++        );
++    }
++    if (router_send_call_count != 1) {
++        errx(
++            1, "router_send_call_count = %d (expected 1)",
++            router_send_call_count
++        );
++    }
++    if (client_send_response_call_count != 1) {
++        errx(
++            1, "client_send_response_call_count = %d (expected 1)",
++            client_send_response_call_count
++        );
++    }
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
+--- a/tests/core/proto/test_proto_set_waveform.c
++++ b/tests/core/proto/test_proto_set_waveform.c
+@@ -7,6 +7,7 @@
+ #include "mock_event2.h"
+ #include "mock_log.h"
+ #include "mock_timer.h"
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_WAVEFORM
+ #include "mock_wire_proto.h"
+ #include "tests_utils.h"
+ 
+@@ -14,6 +15,18 @@
+ #define MOCKED_ROUTER_SEND
+ #include "tests_proto_utils.h"
+ 
++int lifx_wire_encode_waveform_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_waveform(struct lgtd_lifx_packet_waveform *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_waveform_call_count++;
++}
++
++int router_send_call_count = 0;
++
+ bool
+ lgtd_router_send(const struct lgtd_proto_target_list *targets,
+                  enum lgtd_lifx_packet_type pkt_type,
+@@ -34,46 +47,41 @@
+     }
+ 
+     struct lgtd_lifx_packet_waveform *waveform = pkt;
+-    enum lgtd_lifx_waveform_type waveform_type = waveform->waveform;
+-    int hue = le16toh(waveform->hue);
+-    int saturation = le16toh(waveform->saturation);
+-    int brightness = le16toh(waveform->brightness);
+-    int kelvin = le16toh(waveform->kelvin);
+-    int period = le32toh(waveform->period);
+-    float cycles = lgtd_lifx_wire_lefloattoh(waveform->cycles);
+-    int skew_ratio = le16toh(waveform->skew_ratio);
+-
+-    if (waveform_type != LGTD_LIFX_WAVEFORM_SAW) {
++    if (waveform->waveform != LGTD_LIFX_WAVEFORM_SAW) {
+         errx(
+             1, "got waveform = %d (expected %d)",
+-            waveform_type, LGTD_LIFX_WAVEFORM_SAW
++            waveform->waveform, LGTD_LIFX_WAVEFORM_SAW
+         );
+     }
+-    if (hue != 42) {
+-        errx(1, "got hue = %d (expected 42)", hue);
++    if (waveform->hue != 42) {
++        errx(1, "got hue = %d (expected 42)", waveform->hue);
+     }
+-    if (saturation != 10000) {
+-        errx(1, "got saturation = %d (expected 10000)", saturation);
++    if (waveform->saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", waveform->saturation);
+     }
+-    if (brightness != 20000) {
+-        errx(1, "got brightness = %d (expected 20000)", brightness);
++    if (waveform->brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", waveform->brightness);
+     }
+-    if (kelvin != 4500) {
+-        errx(1, "got kelvin = %d (expected 4500)", kelvin);
++    if (waveform->kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", waveform->kelvin);
+     }
+-    if (period != 200) {
+-        errx(1, "got period = %d (expected 200)", period);
++    if (waveform->period != 200) {
++        errx(1, "got period = %d (expected 200)", waveform->period);
+     }
+-    if (cycles != 10.) {
+-        errx(1, "got cycles = %f (expected 10)", cycles);
++    if (waveform->cycles != 10.) {
++        errx(1, "got cycles = %f (expected 10)", waveform->cycles);
+     }
+-    if (skew_ratio != 0) {
+-        errx(1, "got skew_ratio = %d (expected 0)", skew_ratio);
++    if (waveform->skew_ratio != 0) {
++        errx(1, "got skew_ratio = %d (expected 0)", waveform->skew_ratio);
+     }
+ 
++    router_send_call_count++;
++
+     return true;
+ }
+ 
++int client_send_response_call_count = 0;
++
+ void
+ lgtd_client_send_response(struct lgtd_client *client, const char *msg)
+ {
+@@ -84,6 +92,8 @@
+     if (strcmp(msg, "true")) {
+         errx(1, "unexpected response [%s] (expected [true])", msg);
+     }
++
++    client_send_response_call_count++;
+ }
+ 
+ int
+@@ -99,5 +109,24 @@
+         42, 10000, 20000, 4500, 200, 10., 0, false
+     );
+ 
++    if (lifx_wire_encode_waveform_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_waveform_call_count = %d (expected 1)",
++            lifx_wire_encode_waveform_call_count
++        );
++    }
++    if (router_send_call_count != 1) {
++        errx(
++            1, "router_send_call_count = %d (expected 1)",
++            router_send_call_count
++        );
++    }
++    if (client_send_response_call_count != 1) {
++        errx(
++            1, "client_send_response_call_count = %d (expected 1)",
++            client_send_response_call_count
++        );
++    }
++
+     return 0;
+ }
+diff --git a/tests/lifx/wire_proto/test_wire_proto_encode_light_color.c b/tests/lifx/wire_proto/test_wire_proto_encode_light_color.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/wire_proto/test_wire_proto_encode_light_color.c
+@@ -0,0 +1,43 @@
++#include <string.h>
++
++#include "wire_proto.c"
++#include "mock_daemon.h"
++#include "mock_gateway.h"
++#include "mock_log.h"
++
++int
++main(void)
++{
++    struct lgtd_lifx_packet_light_color pkt = {
++        .hue = 42,
++        .saturation = 10000,
++        .brightness = 20000,
++        .kelvin = 4500,
++        .transition = 150
++    };
++
++    lgtd_lifx_wire_encode_light_color(&pkt);
++
++    int hue = le16toh(pkt.hue);
++    int saturation = le16toh(pkt.saturation);
++    int brightness = le16toh(pkt.brightness);
++    int kelvin = le16toh(pkt.kelvin);
++    int transition = htole32(pkt.transition);
++    if (hue != 42) {
++        errx(1, "got hue = %d (expected 42)", hue);
++    }
++    if (saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", saturation);
++    }
++    if (brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", brightness);
++    }
++    if (kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", kelvin);
++    }
++    if (transition != 150) {
++        errx(1, "got transition = %d (expected 150)", transition);
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/wire_proto/test_wire_proto_encode_waveform.c b/tests/lifx/wire_proto/test_wire_proto_encode_waveform.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/wire_proto/test_wire_proto_encode_waveform.c
+@@ -0,0 +1,53 @@
++#include <string.h>
++
++#include "wire_proto.c"
++#include "mock_daemon.h"
++#include "mock_gateway.h"
++#include "mock_log.h"
++
++int
++main(void)
++{
++    struct lgtd_lifx_packet_waveform pkt = {
++        .hue = 42,
++        .saturation = 10000,
++        .brightness = 20000,
++        .kelvin = 4500,
++        .period = 200,
++        .cycles = 10.,
++        .skew_ratio = 5000
++    };
++
++    lgtd_lifx_wire_encode_waveform(&pkt);
++
++    int hue = le16toh(pkt.hue);
++    int saturation = le16toh(pkt.saturation);
++    int brightness = le16toh(pkt.brightness);
++    int kelvin = le16toh(pkt.kelvin);
++    int period = le32toh(pkt.period);
++    float cycles = lgtd_lifx_wire_lefloattoh(pkt.cycles);
++    int skew_ratio = le16toh(pkt.skew_ratio);
++    if (hue != 42) {
++        errx(1, "got hue = %d (expected 42)", hue);
++    }
++    if (saturation != 10000) {
++        errx(1, "got saturation = %d (expected 10000)", saturation);
++    }
++    if (brightness != 20000) {
++        errx(1, "got brightness = %d (expected 20000)", brightness);
++    }
++    if (kelvin != 4500) {
++        errx(1, "got kelvin = %d (expected 4500)", kelvin);
++    }
++    if (period != 200) {
++        errx(1, "got period = %d (expected 200)", period);
++    }
++    if (cycles != 10.) {
++        errx(1, "got cycles = %f (expected 10)", cycles);
++    }
++    if (skew_ratio != 5000) {
++        errx(1, "got skew_ratio = %d (expected 5000)", skew_ratio);
++    }
++
++    return 0;
++}
