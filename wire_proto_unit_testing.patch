@@ -35,7 +35,7 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/prot
  bool
  lgtd_router_send(const struct lgtd_proto_target_list *targets,
                   enum lgtd_lifx_packet_type pkt_type,
-@@ -34,31 +47,29 @@
+@@ -34,31 +47,35 @@
      }
  
      struct lgtd_lifx_packet_light_color *light_color = pkt;
@@ -44,6 +44,12 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/prot
 -    int brightness = le16toh(light_color->brightness);
 -    int kelvin = le16toh(light_color->kelvin);
 -    int transition = htole32(light_color->transition);
++    if (lifx_wire_encode_light_color_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_light_color_call_count = %d (expected 1)",
++            lifx_wire_encode_light_color_call_count
++        );
++    }
 +    if (light_color->hue != 42) {
 +        errx(1, "got hue = %d (expected 42)", light_color->hue);
 +    }
@@ -85,7 +91,7 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/prot
  void
  lgtd_client_send_response(struct lgtd_client *client, const char *msg)
  {
-@@ -69,6 +80,8 @@
+@@ -69,6 +86,8 @@
      if (strcmp(msg, "true")) {
          errx(1, "unexpected response [%s] (expected [true])", msg);
      }
@@ -94,16 +100,10 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/prot
  }
  
  int
-@@ -83,5 +96,24 @@
+@@ -83,5 +102,18 @@
          &client, targets, 42, 10000, 20000, 4500, 150
      );
  
-+    if (lifx_wire_encode_light_color_call_count != 1) {
-+        errx(
-+            1, "lifx_wire_encode_light_color_call_count = %d (expected 1)",
-+            lifx_wire_encode_light_color_call_count
-+        );
-+    }
 +    if (router_send_call_count != 1) {
 +        errx(
 +            1, "router_send_call_count = %d (expected 1)",
@@ -149,7 +149,7 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c 
  bool
  lgtd_router_send(const struct lgtd_proto_target_list *targets,
                   enum lgtd_lifx_packet_type pkt_type,
-@@ -34,31 +47,29 @@
+@@ -34,31 +47,35 @@
      }
  
      struct lgtd_lifx_packet_light_color *light_color = pkt;
@@ -158,6 +158,12 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c 
 -    int brightness = le16toh(light_color->brightness);
 -    int kelvin = le16toh(light_color->kelvin);
 -    int transition = htole32(light_color->transition);
++    if (lifx_wire_encode_light_color_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_light_color_call_count = %d (expected 1)",
++            lifx_wire_encode_light_color_call_count
++        );
++    }
 +    if (light_color->hue != 42) {
 +        errx(1, "got hue = %d (expected 42)", light_color->hue);
 +    }
@@ -199,7 +205,7 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c 
  void
  lgtd_client_send_response(struct lgtd_client *client, const char *msg)
  {
-@@ -69,6 +80,8 @@
+@@ -69,6 +86,8 @@
      if (strcmp(msg, "false")) {
          errx(1, "unexpected response [%s] (expected [false])", msg);
      }
@@ -208,16 +214,10 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c 
  }
  
  int
-@@ -82,6 +95,24 @@
-     lgtd_proto_set_light_from_hsbk(
+@@ -83,5 +102,18 @@
          &client, targets, 42, 10000, 20000, 4500, 150
      );
-+    if (lifx_wire_encode_light_color_call_count != 1) {
-+        errx(
-+            1, "lifx_wire_encode_light_color_call_count = %d (expected 1)",
-+            lifx_wire_encode_light_color_call_count
-+        );
-+    }
+ 
 +    if (router_send_call_count != 1) {
 +        errx(
 +            1, "router_send_call_count = %d (expected 1)",
@@ -230,7 +230,7 @@ diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c 
 +            client_send_response_call_count
 +        );
 +    }
- 
++
      return 0;
  }
 diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
@@ -263,7 +263,7 @@ diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_
  bool
  lgtd_router_send(const struct lgtd_proto_target_list *targets,
                   enum lgtd_lifx_packet_type pkt_type,
-@@ -34,46 +47,41 @@
+@@ -34,46 +47,47 @@
      }
  
      struct lgtd_lifx_packet_waveform *waveform = pkt;
@@ -277,6 +277,12 @@ diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_
 -    int skew_ratio = le16toh(waveform->skew_ratio);
 -
 -    if (waveform_type != LGTD_LIFX_WAVEFORM_SAW) {
++    if (lifx_wire_encode_waveform_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_waveform_call_count = %d (expected 1)",
++            lifx_wire_encode_waveform_call_count
++        );
++    }
 +    if (waveform->waveform != LGTD_LIFX_WAVEFORM_SAW) {
          errx(
              1, "got waveform = %d (expected %d)",
@@ -330,7 +336,7 @@ diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_
  void
  lgtd_client_send_response(struct lgtd_client *client, const char *msg)
  {
-@@ -84,6 +92,8 @@
+@@ -84,6 +98,8 @@
      if (strcmp(msg, "true")) {
          errx(1, "unexpected response [%s] (expected [true])", msg);
      }
@@ -339,16 +345,10 @@ diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_
  }
  
  int
-@@ -99,5 +109,24 @@
+@@ -99,5 +115,18 @@
          42, 10000, 20000, 4500, 200, 10., 0, false
      );
  
-+    if (lifx_wire_encode_waveform_call_count != 1) {
-+        errx(
-+            1, "lifx_wire_encode_waveform_call_count = %d (expected 1)",
-+            lifx_wire_encode_waveform_call_count
-+        );
-+    }
 +    if (router_send_call_count != 1) {
 +        errx(
 +            1, "router_send_call_count = %d (expected 1)",
@@ -470,16 +470,10 @@ diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests
  }
  
  int
-@@ -99,5 +109,24 @@
+@@ -99,5 +109,18 @@
          42, 10000, 20000, 4500, 200, 10., 0, false
      );
  
-+    if (lifx_wire_encode_waveform_call_count != 1) {
-+        errx(
-+            1, "lifx_wire_encode_waveform_call_count = %d (expected 1)",
-+            lifx_wire_encode_waveform_call_count
-+        );
-+    }
 +    if (router_send_call_count != 1) {
 +        errx(
 +            1, "router_send_call_count = %d (expected 1)",
@@ -495,6 +489,317 @@ diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests
 +
      return 0;
  }
+diff --git a/tests/core/proto/test_proto_tag_create.c b/tests/core/proto/test_proto_tag_create.c
+--- a/tests/core/proto/test_proto_tag_create.c
++++ b/tests/core/proto/test_proto_tag_create.c
+@@ -8,6 +8,8 @@
+ #include "mock_event2.h"
+ #include "mock_log.h"
+ #include "mock_timer.h"
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_TAG_LABELS
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_TAGS
+ #include "mock_wire_proto.h"
+ #include "tests_utils.h"
+ 
+@@ -23,6 +25,26 @@
+ static struct lgtd_router_device_list device_1_only =
+     SLIST_HEAD_INITIALIZER(&device_1_only);
+ 
++static int lifx_wire_encode_tag_labels_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_tag_labels(struct lgtd_lifx_packet_tag_labels *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_tag_labels_call_count++;
++}
++
++static int lifx_wire_encode_tags_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_tags(struct lgtd_lifx_packet_tags *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_tags_call_count++;
++}
++
+ static bool send_to_device_called = false;
+ 
+ void
+@@ -55,11 +77,16 @@
+     }
+ 
+     const struct lgtd_lifx_packet_tags *pkt_tags = pkt;
+-    uint64_t tags = le64toh(pkt_tags->tags);
+-    if (tags != 0x1) {
++    if (lifx_wire_encode_tags_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_tags_call_count = %d (expected 1)",
++            lifx_wire_encode_tags_call_count
++        );
++    }
++    if (pkt_tags->tags != 0x1) {
+         errx(
+             1, "invalid SET_TAGS payload=%#jx (expected %#x)",
+-            (uintmax_t)tags, 0x1
++            (uintmax_t)pkt_tags->tags, 0x1
+         );
+     }
+ 
+@@ -85,11 +112,18 @@
+     }
+ 
+     const struct lgtd_lifx_packet_tag_labels *pkt_tag_labels = pkt;
+-    uint64_t tags = le64toh(pkt_tag_labels->tags);
+-    if (tags != 0x1) {
+-        errx(1, "got tags %#jx (expected %#x)", (uintmax_t)tags, 0x1);
++    if (lifx_wire_encode_tag_labels_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_tag_labels_call_count = %d (expected 1)",
++            lifx_wire_encode_tag_labels_call_count
++        );
+     }
+-
++    if (pkt_tag_labels->tags != 0x1) {
++        errx(
++            1, "got tags %#jx (expected %#x)",
++            (uintmax_t)pkt_tag_labels->tags, 0x1
++        );
++    }
+     if (strcmp(pkt_tag_labels->label, "dub")) {
+         errx(1, "got label %s (expected dub)", pkt_tag_labels->label);
+     }
+diff --git a/tests/core/proto/test_proto_tag_update.c b/tests/core/proto/test_proto_tag_update.c
+--- a/tests/core/proto/test_proto_tag_update.c
++++ b/tests/core/proto/test_proto_tag_update.c
+@@ -8,6 +8,8 @@
+ #include "mock_event2.h"
+ #include "mock_log.h"
+ #include "mock_timer.h"
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_TAG_LABELS
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_TAGS
+ #include "mock_wire_proto.h"
+ #include "tests_utils.h"
+ 
+@@ -21,6 +23,26 @@
+ static struct lgtd_router_device_list devices =
+     SLIST_HEAD_INITIALIZER(&devices);
+ 
++static int lifx_wire_encode_tag_labels_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_tag_labels(struct lgtd_lifx_packet_tag_labels *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_tag_labels_call_count++;
++}
++
++static int lifx_wire_encode_tags_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_tags(struct lgtd_lifx_packet_tags *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_tags_call_count++;
++}
++
+ static bool send_to_device_called = false;
+ 
+ void
+@@ -57,12 +79,16 @@
+     }
+ 
+     const struct lgtd_lifx_packet_tags *pkt_tags = pkt;
+-    uint64_t tags = le64toh(pkt_tags->tags);
+-
+-    if (tags != 0x7) {
++    if (lifx_wire_encode_tags_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_tags_call_count = %d (expected 1)",
++            lifx_wire_encode_tags_call_count
++        );
++    }
++    if (pkt_tags->tags != 0x7) {
+         errx(
+             1, "invalid SET_TAGS payload=%#jx (expected %#x)",
+-            (uintmax_t)tags, 0x7
++            (uintmax_t)pkt_tags->tags, 0x7
+         );
+     }
+ 
+@@ -89,23 +115,28 @@
+     }
+ 
+     const struct lgtd_lifx_packet_tag_labels *pkt_tag_labels = pkt;
+-    uint64_t tags = le64toh(pkt_tag_labels->tags);
+ 
+     if (strcmp(pkt_tag_labels->label, "dub")) {
+         errx(1, "got label %s (expected dub)", pkt_tag_labels->label);
+     }
+ 
+     if (gw->site.as_integer == 42) {
+-        if (tags != 0x1) {
+-            errx(1, "got tags %#jx (expected %#x)", (uintmax_t)tags, 0x1);
++        if (pkt_tag_labels->tags != 0x1) {
++            errx(
++                1, "got tags %#jx (expected %#x)",
++                (uintmax_t)pkt_tag_labels->tags, 0x1
++            );
+         }
+         if (gateway_send_to_site_called_for_gw_1) {
+             errx(1, "LGTD_LIFX_SET_TAG_LABELS already called for gw 1");
+         }
+         gateway_send_to_site_called_for_gw_1 = true;
+     } else if (gw->site.as_integer == 44) {
+-        if (tags != 0x4) {
+-            errx(1, "got tags %#jx (expected %#x)", (uintmax_t)tags, 0x4);
++        if (pkt_tag_labels->tags != 0x4) {
++            errx(
++                1, "got tags %#jx (expected %#x)",
++                (uintmax_t)pkt_tag_labels->tags, 0x4
++            );
+         }
+         if (gateway_send_to_site_called_for_gw_2) {
+             errx(1, "LGTD_LIFX_SET_TAG_LABELS already called for gw 2");
+@@ -115,6 +146,19 @@
+         errx(1, "LGTD_LIFX_SET_TAG_LABELS received an invalid gateway");
+     }
+ 
++    int expected_tag_encode_tag_labels_call_count = (
++        (int)(gateway_send_to_site_called_for_gw_1 == true)
++        + (int)(gateway_send_to_site_called_for_gw_2 == true)
++    );
++    if (lifx_wire_encode_tag_labels_call_count
++        != expected_tag_encode_tag_labels_call_count) {
++        errx(
++            1, "lifx_wire_encode_tag_labels_call_count = %d (expected %d)",
++            lifx_wire_encode_tag_labels_call_count,
++            expected_tag_encode_tag_labels_call_count
++        );
++    }
++
+     return true;
+ }
+ 
+diff --git a/tests/core/proto/test_proto_untag.c b/tests/core/proto/test_proto_untag.c
+--- a/tests/core/proto/test_proto_untag.c
++++ b/tests/core/proto/test_proto_untag.c
+@@ -6,6 +6,7 @@
+ #include "mock_event2.h"
+ #include "mock_log.h"
+ #include "mock_timer.h"
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_TAGS
+ #include "mock_wire_proto.h"
+ #include "tests_utils.h"
+ 
+@@ -16,6 +17,16 @@
+ 
+ static bool device_list_free_called = false;
+ 
++static int lifx_wire_encode_tags_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_tags(struct lgtd_lifx_packet_tags *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_tags_call_count++;
++}
++
+ void
+ lgtd_router_device_list_free(struct lgtd_router_device_list *devices)
+ {
+@@ -125,10 +136,16 @@
+     }
+ 
+     struct lgtd_lifx_packet_tags *pkt_tags = pkt;
+-    if (le64toh(pkt_tags->tags) != 0x2) {
++    if (lifx_wire_encode_tags_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_tags_call_count = %d (expected 1)",
++            lifx_wire_encode_tags_call_count
++        );
++    }
++    if (pkt_tags->tags != 0x2) {
+         errx(
+             1, "invalid SET_TAGS payload=%#jx (expected %#x)",
+-            (uintmax_t)le64toh(pkt_tags->tags), 0x2
++            (uintmax_t)pkt_tags->tags, 0x2
+         );
+     }
+ 
+diff --git a/tests/lifx/gateway/test_gateway_update_tag_refcounts.c b/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
+--- a/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
++++ b/tests/lifx/gateway/test_gateway_update_tag_refcounts.c
+@@ -3,8 +3,19 @@
+ #include "test_gateway_utils.h"
+ #include "mock_log.h"
+ #include "mock_timer.h"
++#define MOCKED_LGTD_LIFX_WIRE_ENCODE_TAG_LABELS
+ #include "mock_wire_proto.h"
+ 
++static int lifx_wire_encode_tag_labels_call_count = 0;
++
++void
++lgtd_lifx_wire_encode_tag_labels(struct lgtd_lifx_packet_tag_labels *pkt)
++{
++    (void)pkt;
++
++    lifx_wire_encode_tag_labels_call_count++;
++}
++
+ int
+ main(void)
+ {
+@@ -73,11 +84,16 @@
+ 
+     struct lgtd_lifx_packet_tag_labels *pkt =
+         (void *)&gw_write_buf[sizeof(struct lgtd_lifx_packet_header)];
+-    uint64_t tags = le64toh(pkt->tags);
+-    if (tags != ~2ULL) {
++    if (lifx_wire_encode_tag_labels_call_count != 1) {
++        errx(
++            1, "lifx_wire_encode_tag_labels_call_count == %d (expected 1)",
++            lifx_wire_encode_tag_labels_call_count
++        );
++    }
++    if (pkt->tags != ~2ULL) {
+         errx(
+             1, "tags on LGTD_LIFX_SET_TAG_LABELS was %#jx (expected %#jx)",
+-            (uintmax_t)tags, (uintmax_t)~2ULL
++            (uintmax_t)pkt->tags, (uintmax_t)~2ULL
+         );
+     }
+     const char blank_label[LGTD_LIFX_LABEL_SIZE] = { 0 };
+diff --git a/tests/lifx/mock_wire_proto.h b/tests/lifx/mock_wire_proto.h
+--- a/tests/lifx/mock_wire_proto.h
++++ b/tests/lifx/mock_wire_proto.h
+@@ -353,11 +353,19 @@
+                             const uint8_t *site,
+                             enum lgtd_lifx_packet_type packet_type)
+ {
+-    (void)hdr;
+     (void)target_type;
+     (void)target;
+     (void)site;
+-    return lgtd_lifx_wire_get_packet_info(packet_type);
++
++    const struct lgtd_lifx_packet_info *pkt_info =
++        lgtd_lifx_wire_get_packet_info(packet_type);
++    hdr->size = pkt_info->size + sizeof(*hdr);
++    hdr->packet_type = packet_type;
++    if (site) {
++        memcpy(hdr->site, site, sizeof(hdr->site));
++    }
++
++    return pkt_info;
+ }
+ #endif
+ 
 diff --git a/tests/lifx/wire_proto/test_wire_proto_encode_light_color.c b/tests/lifx/wire_proto/test_wire_proto_encode_light_color.c
 new file mode 100644
 --- /dev/null
@@ -539,6 +844,68 @@ new file mode 100644
 +    }
 +    if (transition != 150) {
 +        errx(1, "got transition = %d (expected 150)", transition);
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/wire_proto/test_wire_proto_encode_tag_labels.c b/tests/lifx/wire_proto/test_wire_proto_encode_tag_labels.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/wire_proto/test_wire_proto_encode_tag_labels.c
+@@ -0,0 +1,29 @@
++#include <string.h>
++
++#include "wire_proto.c"
++#include "mock_daemon.h"
++#include "mock_gateway.h"
++#include "mock_log.h"
++
++int
++main(void)
++{
++    struct lgtd_lifx_packet_tag_labels pkt = { .tags = 0x2a, .label = "42" };
++
++    lgtd_lifx_wire_encode_tag_labels(&pkt);
++
++    if (pkt.tags != le64toh(0x2a)) {
++        errx(
++            1, "got tags = %#jx (expected %#jx)",
++            (uintmax_t)pkt.tags, (uintmax_t)le64toh(0x2a)
++        );
++    }
++    if (strcmp(pkt.label, "42")) {
++        errx(
++            1, "got label = %.*s (expected 42)",
++            (int)sizeof(pkt.label), pkt.label
++        );
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/wire_proto/test_wire_proto_encode_tags.c b/tests/lifx/wire_proto/test_wire_proto_encode_tags.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/wire_proto/test_wire_proto_encode_tags.c
+@@ -0,0 +1,23 @@
++#include <string.h>
++
++#include "wire_proto.c"
++#include "mock_daemon.h"
++#include "mock_gateway.h"
++#include "mock_log.h"
++
++int
++main(void)
++{
++    struct lgtd_lifx_packet_tags pkt = { .tags = 0x2a };
++
++    lgtd_lifx_wire_encode_tags(&pkt);
++
++    if (pkt.tags != le64toh(0x2a)) {
++        errx(
++            1, "got tags = %#jx (expected 0x2a)",
++            (uintmax_t)le64toh(pkt.tags)
++        );
 +    }
 +
 +    return 0;
