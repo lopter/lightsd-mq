@@ -5,6 +5,49 @@ Finish refactoring tests around wire_proto.c
 This finishes what started the previous changeset: mock the wire_proto
 module and properly do unit testing.
 
+diff --git a/core/daemon.c b/core/daemon.c
+--- a/core/daemon.c
++++ b/core/daemon.c
+@@ -414,7 +414,7 @@
+         close(fd);
+         lgtd_err(
+             1, "couln't fetch %ju bytes from /dev/urandom",
+-            sizeof((uintmax_t)rv)
++            (uintmax_t)sizeof(rv)
+         );
+     }
+ 
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -427,7 +427,14 @@
+ 
+     evbuffer_add(gw->write_buf, hdr, sizeof(*hdr));
+     if (pkt) {
+-        assert(pkt_info->size == le16toh(hdr->size) - sizeof(*hdr));
++#ifndef NDEBUG
++        // actually decode the header instead of just calling
++        // le16toh(hdr->size) so it's easier to mock things in the tests:
++        struct lgtd_lifx_packet_header decoded_hdr;
++        memcpy(&decoded_hdr, hdr, sizeof(decoded_hdr));
++        lgtd_lifx_wire_decode_header(&decoded_hdr);
++        assert(pkt_info->size == decoded_hdr.size - sizeof(*hdr));
++#endif
+         evbuffer_add(gw->write_buf, pkt, pkt_info->size);
+     }
+     gw->pkt_ring[gw->pkt_ring_head].size = sizeof(*hdr) + pkt_info->size;
+diff --git a/tests/core/daemon/test_daemon_randuint32.c b/tests/core/daemon/test_daemon_randuint32.c
+--- a/tests/core/daemon/test_daemon_randuint32.c
++++ b/tests/core/daemon/test_daemon_randuint32.c
+@@ -16,7 +16,7 @@
+ #include "mock_log.h"
+ #include "mock_timer.h"
+ 
+-static const int MOCK_RANDOM_NUMBER = 0x72616e64;
++static const uint32_t MOCK_RANDOM_NUMBER = 0x72616e64;
+ 
+ int mock_open_call_count = 0;
+ 
 diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/proto/test_proto_set_light_from_hsbk.c
 --- a/tests/core/proto/test_proto_set_light_from_hsbk.c
 +++ b/tests/core/proto/test_proto_set_light_from_hsbk.c
