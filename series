@@ -1,3 +1,4 @@
+fix_v2_protocol_handling.patch
 add_power_transition.patch
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future

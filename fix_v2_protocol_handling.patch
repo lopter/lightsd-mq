@@ -1,0 +1,961 @@
+# HG changeset patch
+# Parent  5cf24fa4f86b6dbd89e6955ce15b55ad59d9812e
+Fix LIFX v2 protocol handling
+
+- properly set res required;
+- properly listen on each gateway's socket;
+- improved traffic logging.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,7 +5,7 @@
+ 
+ SET(CPACK_PACKAGE_VERSION_MAJOR "1")
+ SET(CPACK_PACKAGE_VERSION_MINOR "1")
+-SET(CPACK_PACKAGE_VERSION_PATCH "1")
++SET(CPACK_PACKAGE_VERSION_PATCH "2")
+ SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+ 
+ MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
+diff --git a/lifx/broadcast.c b/lifx/broadcast.c
+--- a/lifx/broadcast.c
++++ b/lifx/broadcast.c
+@@ -51,104 +51,6 @@
+ };
+ 
+ static bool
+-lgtd_lifx_broadcast_handle_read(void)
+-{
+-    assert(lgtd_lifx_broadcast_endpoint.socket != -1);
+-
+-    while (true) {
+-        struct sockaddr_storage peer;
+-        // if we get back from recvfrom with a sockaddr_in the end of the struct
+-        // will not be initialized and we will be comparing unintialized stuff
+-        // in lgtd_lifx_gateway_get:
+-        memset(&peer, 0, sizeof(peer));
+-        ev_socklen_t addrlen = sizeof(peer);
+-        union {
+-            char buf[LGTD_LIFX_MAX_PACKET_SIZE];
+-            struct lgtd_lifx_packet_header hdr;
+-        } read;
+-        int nbytes = recvfrom(
+-            lgtd_lifx_broadcast_endpoint.socket,
+-            read.buf,
+-            sizeof(read.buf),
+-            0,
+-            (struct sockaddr *)&peer,
+-            &addrlen
+-        );
+-        if (nbytes == -1) {
+-            int error = EVUTIL_SOCKET_ERROR();
+-            if (error == EINTR) {
+-                continue;
+-            }
+-            if (error == EAGAIN) {
+-                return true;
+-            }
+-            lgtd_warn("can't receive broadcast packet");
+-            return false;
+-        }
+-
+-        lgtd_time_mono_t received_at = lgtd_time_monotonic_msecs();
+-        char peer_addr[INET6_ADDRSTRLEN];
+-        LGTD_SOCKADDRTOA((const struct sockaddr *)&peer, peer_addr);
+-
+-        if (nbytes < LGTD_LIFX_PACKET_HEADER_SIZE) {
+-            lgtd_warnx("broadcast packet too short from %s", peer_addr);
+-            return false;
+-        }
+-
+-        lgtd_lifx_wire_decode_header(&read.hdr);
+-        if (read.hdr.size != nbytes) {
+-            lgtd_warnx("incomplete broadcast packet from %s", peer_addr);
+-            return false;
+-        }
+-        int proto_version = read.hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK;
+-        if (proto_version != LGTD_LIFX_PROTOCOL_V1) {
+-            lgtd_warnx(
+-                "unsupported protocol %d from %s",
+-                read.hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK, peer_addr
+-            );
+-        }
+-        if (read.hdr.packet_type == LGTD_LIFX_GET_PAN_GATEWAY) {
+-            continue;
+-        }
+-
+-        const struct lgtd_lifx_packet_info *pkt_info =
+-            lgtd_lifx_wire_get_packet_info(read.hdr.packet_type);
+-        if (!pkt_info) {
+-            lgtd_warnx(
+-                "received unknown packet %#x from %s",
+-                read.hdr.packet_type, peer_addr
+-            );
+-            continue;
+-        }
+-        if (!(read.hdr.protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE)) {
+-            lgtd_warnx(
+-                "received non-addressable packet %s from %s",
+-                pkt_info->name, peer_addr
+-            );
+-            continue;
+-        }
+-        struct lgtd_lifx_gateway *gw;
+-        gw = lgtd_lifx_gateway_get((struct sockaddr *)&peer, addrlen);
+-        if (!gw && read.hdr.packet_type == LGTD_LIFX_PAN_GATEWAY) {
+-            gw = lgtd_lifx_gateway_open(
+-                (struct sockaddr *)&peer, addrlen, read.hdr.site, received_at
+-            );
+-            if (!gw) {
+-                lgtd_err(1, "can't allocate gateway");
+-            }
+-        }
+-        if (gw) {
+-            void *pkt = &read.buf[LGTD_LIFX_PACKET_HEADER_SIZE];
+-            gw->last_pkt_at = received_at;
+-            pkt_info->decode(pkt);
+-            pkt_info->handle(gw, &read.hdr, pkt);
+-        } else {
+-            lgtd_warnx("got packet from unknown gateway %s", peer_addr);
+-        }
+-    }
+-}
+-
+-static bool
+ lgtd_lifx_broadcast_handle_write(void)
+ {
+     assert(lgtd_lifx_broadcast_endpoint.socket != -1);
+@@ -209,7 +111,7 @@
+         goto error_reset;
+     }
+     if (events & EV_READ) {
+-        if (!lgtd_lifx_broadcast_handle_read()) {
++        if (!lgtd_lifx_wire_handle_receive(socket)) {
+             goto error_reset;
+         }
+     }
+diff --git a/lifx/discovery.h b/lifx/discovery.h
+--- a/lifx/discovery.h
++++ b/lifx/discovery.h
+@@ -19,7 +19,7 @@
+ 
+ enum lgtd_lifx_discovery_constants {
+     LGTD_LIFX_DISCOVERY_WATCHDOG_INTERVAL_MSECS = 500,
+-    LGTD_LIFX_DISCOVERY_DEVICE_TIMEOUT_MSECS = 3000,
++    LGTD_LIFX_DISCOVERY_DEVICE_TIMEOUT_MSECS = 30000,
+     LGTD_LIFX_DISCOVERY_DEVICE_FORCE_REFRESH_MSECS = 2000,
+     LGTD_LIFX_DISCOVERY_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000,
+     LGTD_LIFX_DISCOVERY_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000,
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -59,12 +59,12 @@
+ 
+     LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(gateways, -1);
+     lgtd_timer_stop(gw->refresh_timer);
+-    event_del(gw->write_ev);
++    event_del(gw->socket_ev);
+     if (gw->socket != -1) {
+         evutil_closesocket(gw->socket);
+         LIST_REMOVE(gw, link);
+     }
+-    event_free(gw->write_ev);
++    event_free(gw->socket_ev);
+     evbuffer_free(gw->write_buf);
+     for (int i = 0; i != LGTD_LIFX_GATEWAY_MAX_TAGS; i++) {
+         if (gw->tags[i]) {
+@@ -103,8 +103,8 @@
+ }
+ 
+ static void
+-lgtd_lifx_gateway_write_callback(evutil_socket_t socket,
+-                                 short events, void *ctx)
++lgtd_lifx_gateway_socket_event_callback(evutil_socket_t socket,
++                                        short events, void *ctx)
+ {
+     (void)socket;
+ 
+@@ -121,6 +121,10 @@
+         return;
+     }
+ 
++    if (events & EV_READ) {
++        lgtd_lifx_wire_handle_receive(gw->socket);
++    }
++
+     if (events & EV_WRITE) {
+         assert(gw->pkt_ring_tail >= 0);
+         assert(gw->pkt_ring_tail < (int)LGTD_ARRAY_SIZE(gw->pkt_ring));
+@@ -156,7 +160,7 @@
+         }
+ 
+         if (!evbuffer_get_length(gw->write_buf)) {
+-            event_del(gw->write_ev);
++            event_del(gw->socket_ev);
+         }
+     }
+ }
+@@ -311,15 +315,15 @@
+         goto error_connect;
+     }
+ 
+-    gw->write_ev = event_new(
++    gw->socket_ev = event_new(
+         lgtd_ev_base,
+         gw->socket,
+-        EV_WRITE|EV_PERSIST,
+-        lgtd_lifx_gateway_write_callback,
++        EV_READ|EV_WRITE|EV_PERSIST,
++        lgtd_lifx_gateway_socket_event_callback,
+         gw
+     );
+     gw->write_buf = evbuffer_new();
+-    if (!gw->write_ev || !gw->write_buf) {
++    if (!gw->socket_ev || !gw->write_buf) {
+         goto error_allocate;
+     }
+     gw->peer = malloc(addrlen);
+@@ -364,8 +368,8 @@
+ 
+ error_allocate:
+     lgtd_warn("can't allocate a new gateway bulb");
+-    if (gw->write_ev) {
+-        event_free(gw->write_ev);
++    if (gw->socket_ev) {
++        event_free(gw->socket_ev);
+     }
+     if (gw->write_buf) {
+         evbuffer_free(gw->write_buf);
+@@ -443,7 +447,7 @@
+     if (gw->pkt_ring_head == gw->pkt_ring_tail) {
+         gw->pkt_ring_full = true;
+     }
+-    event_add(gw->write_ev, NULL);
++    event_add(gw->socket_ev, NULL);
+ }
+ 
+ void
+@@ -499,6 +503,34 @@
+ }
+ 
+ void
++lgtd_lifx_gateway_handle_packet(struct lgtd_lifx_gateway *gw,
++                                const struct lgtd_lifx_packet_info *pkt_info,
++                                const struct lgtd_lifx_packet_header *hdr,
++                                const void *pkt,
++                                lgtd_time_mono_t received_at)
++{
++    assert(gw);
++    assert(pkt_info);
++    assert(hdr);
++    assert(pkt);
++    assert(received_at);
++
++    // gw->last_pkt_at is used to compute timeouts based on known
++    // traffic only:
++    if (pkt_info->handle != lgtd_lifx_wire_enosys_packet_handler) {
++        gw->last_pkt_at = received_at;
++    }
++    if (!strcmp(gw->peeraddr, "[::ffff:172.28.48.154]:56700")) {
++        char target[LGTD_LIFX_ADDR_STRLEN];
++        LGTD_LIFX_WIRE_PRINT_TARGET(hdr, target);
++        lgtd_info(
++            "%s <-- %s - target=%s", gw->peeraddr, pkt_info->name, target
++        );
++    }
++    pkt_info->handle(gw, hdr, pkt);
++}
++
++void
+ lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *gw,
+                                      const struct lgtd_lifx_packet_header *hdr,
+                                      const struct lgtd_lifx_packet_pan_gateway *pkt)
+@@ -689,8 +721,6 @@
+                                     const struct lgtd_lifx_packet_header *hdr,
+                                     const struct lgtd_lifx_packet_tag_labels *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     char addr[LGTD_LIFX_ADDR_STRLEN];
+     lgtd_debug(
+         "SET_TAG_LABELS <-- %s - %s label=%.*s, tags=%jx",
+@@ -713,8 +743,6 @@
+                               const struct lgtd_lifx_packet_header *hdr,
+                               const struct lgtd_lifx_packet_tags *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     char addr[LGTD_LIFX_ADDR_STRLEN];
+     lgtd_debug(
+         "SET_TAGS <-- %s - %s tags=%#jx",
+@@ -748,8 +776,6 @@
+                                   const struct lgtd_lifx_packet_header *hdr,
+                                   const struct lgtd_lifx_packet_ip_state *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     const char  *type;
+     enum lgtd_lifx_bulb_ips ip_id;
+     switch (hdr->packet_type) {
+@@ -788,8 +814,6 @@
+                                           const struct lgtd_lifx_packet_header *hdr,
+                                           const struct lgtd_lifx_packet_ip_firmware_info *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     const char  *type;
+     enum lgtd_lifx_bulb_ips ip_id;
+     switch (hdr->packet_type) {
+@@ -830,8 +854,6 @@
+                                       const struct lgtd_lifx_packet_header *hdr,
+                                       const struct lgtd_lifx_packet_product_info *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     char addr[LGTD_LIFX_ADDR_STRLEN];
+     lgtd_debug(
+         "PRODUCT_INFO <-- %s - %s "
+@@ -851,8 +873,6 @@
+                                       const struct lgtd_lifx_packet_header *hdr,
+                                       const struct lgtd_lifx_packet_runtime_info *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     char device_time[64], uptime[64], downtime[64], addr[LGTD_LIFX_ADDR_STRLEN];
+     lgtd_debug(
+         "PRODUCT_INFO <-- %s - %s time=%s, uptime=%s, downtime=%s",
+@@ -873,8 +893,6 @@
+                                     const struct lgtd_lifx_packet_header *hdr,
+                                     const struct lgtd_lifx_packet_label *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     char addr[LGTD_LIFX_ADDR_STRLEN];
+     lgtd_debug(
+         "BULB_LABEL <-- %s - %s label=%.*s",
+@@ -892,8 +910,6 @@
+                                        const struct lgtd_lifx_packet_header *hdr,
+                                        const struct lgtd_lifx_packet_ambient_light *pkt)
+ {
+-    assert(gw && hdr && pkt);
+-
+     char addr[LGTD_LIFX_ADDR_STRLEN];
+     lgtd_debug(
+         "AMBIENT_LIGHT <-- %s - %s ambient_light=%flx",
+diff --git a/lifx/gateway.h b/lifx/gateway.h
+--- a/lifx/gateway.h
++++ b/lifx/gateway.h
+@@ -21,7 +21,7 @@
+ // according to my own tests, aggressively polling a bulb doesn't raise its
+ // consumption at all (and it's interesting to note that a turned off bulb
+ // still draw about 2W in ZigBee and about 3W in WiFi).
+-enum { LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 800 };
++enum { LGTD_LIFX_GATEWAY_MIN_REFRESH_INTERVAL_MSECS = 2000 };
+ 
+ // You can't send more than one lifx packet per UDP datagram.
+ enum { LGTD_LIFX_GATEWAY_PACKET_RING_SIZE = 16 };
+@@ -75,7 +75,7 @@
+     int                             pkt_ring_head;
+     int                             pkt_ring_tail;
+     bool                            pkt_ring_full;
+-    struct event                    *write_ev;
++    struct event                    *socket_ev;
+     struct evbuffer                 *write_buf;
+     bool                            pending_refresh_req;
+     struct lgtd_timer               *refresh_timer;
+@@ -126,6 +126,11 @@
+ int lgtd_lifx_gateway_allocate_tag_id(struct lgtd_lifx_gateway *, int, const char *);
+ void lgtd_lifx_gateway_deallocate_tag_id(struct lgtd_lifx_gateway *, int);
+ 
++void lgtd_lifx_gateway_handle_packet(struct lgtd_lifx_gateway *,
++                                     const struct lgtd_lifx_packet_info *,
++                                     const struct lgtd_lifx_packet_header *,
++                                     const void *,
++                                     lgtd_time_mono_t);
+ void lgtd_lifx_gateway_handle_pan_gateway(struct lgtd_lifx_gateway *,
+                                           const struct lgtd_lifx_packet_header *,
+                                           const struct lgtd_lifx_packet_pan_gateway *);
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -21,6 +21,7 @@
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
++#include <errno.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -78,7 +79,7 @@
+     (void)pkt;
+ }
+ 
+-static void
++void
+ lgtd_lifx_wire_enosys_packet_handler(struct lgtd_lifx_gateway *gw,
+                                      const struct lgtd_lifx_packet_header *hdr,
+                                      const void *pkt)
+@@ -90,10 +91,12 @@
+     bool addressable = hdr->protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE;
+     bool tagged = hdr->protocol & LGTD_LIFX_PROTOCOL_TAGGED;
+     unsigned int protocol = hdr->protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK;
++    char target[LGTD_LIFX_ADDR_STRLEN];
++    LGTD_LIFX_WIRE_PRINT_TARGET(hdr, target);
+     lgtd_info(
+         "%s <-- %s - (Unimplemented, header info: "
+-        "addressable=%d, tagged=%d, protocol=%d)",
+-        pkt_info->name, gw->peeraddr, addressable, tagged, protocol
++        "addressable=%d, tagged=%d, protocol=%d, target=%s",
++        pkt_info->name, gw->peeraddr, addressable, tagged, protocol, target
+     );
+ }
+ 
+@@ -356,6 +359,21 @@
+         },
+         {
+             UNIMPLEMENTED,
++            .name = "GET_DUMMY_PAYLOAD",
++            .type = LGTD_LIFX_GET_DUMMY_PAYLOAD
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_DUMMY_PAYLOAD",
++            .type = LGTD_LIFX_SET_DUMMY_PAYLOAD
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_DUMMY_PAYLOAD",
++            .type = LGTD_LIFX_STATE_DUMMY_PAYLOAD
++        },
++        {
++            UNIMPLEMENTED,
+             .name = "GET_BULB_LABEL",
+             .type = LGTD_LIFX_GET_BULB_LABEL
+         },
+@@ -386,11 +404,91 @@
+         },
+         {
+             UNIMPLEMENTED,
++            .name = "STATE_FACTORY_TEST_MODE",
++            .type = LGTD_LIFX_STATE_FACTORY_TEST_MODE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_SITE",
++            .type = LGTD_LIFX_STATE_SITE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_REBOOT",
++            .type = LGTD_LIFX_STATE_REBOOT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_PAN_GATEWAY",
++            .type = LGTD_LIFX_SET_PAN_GATEWAY
++        },
++        {
++            UNIMPLEMENTED,
+             .name = "ACK",
+             .type = LGTD_LIFX_ACK
+         },
+         {
+             UNIMPLEMENTED,
++            .name = "SET_FACTORY_RESET",
++            .type = LGTD_LIFX_SET_FACTORY_RESET
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_FACTORY_RESET",
++            .type = LGTD_LIFX_STATE_FACTORY_RESET
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_LOCATION",
++            .type = LGTD_LIFX_GET_LOCATION
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_LOCATION",
++            .type = LGTD_LIFX_SET_LOCATION
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_LOCATION",
++            .type = LGTD_LIFX_STATE_LOCATION
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_GROUP",
++            .type = LGTD_LIFX_GET_GROUP
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_GROUP",
++            .type = LGTD_LIFX_SET_GROUP
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_GROUP",
++            .type = LGTD_LIFX_STATE_GROUP
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_OWNER",
++            .type = LGTD_LIFX_GET_OWNER
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_OWNER",
++            .type = LGTD_LIFX_SET_OWNER
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_OWNER",
++            .type = LGTD_LIFX_STATE_OWNER
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_FACTORY_TEST_MODE",
++            .type = LGTD_LIFX_GET_FACTORY_TEST_MODE
++        },
++        {
++            UNIMPLEMENTED,
+             .name = "ECHO_REQUEST",
+             .type = LGTD_LIFX_ECHO_REQUEST
+         },
+@@ -411,6 +509,126 @@
+         },
+         {
+             UNIMPLEMENTED,
++            .name = "SET_RGBW",
++            .type = LGTD_LIFX_SET_RGBW
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_RAIL_VOLTAGE",
++            .type = LGTD_LIFX_GET_RAIL_VOLTAGE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_RAIL_VOLTAGE",
++            .type = LGTD_LIFX_STATE_RAIL_VOLTAGE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_TEMPERATURE",
++            .type = LGTD_LIFX_GET_TEMPERATURE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_TEMPERATURE",
++            .type = LGTD_LIFX_STATE_TEMPERATURE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_CALIBRATION_COEFFICIENTS",
++            .type = LGTD_LIFX_SET_CALIBRATION_COEFFICIENTS
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_SIMPLE_EVENT",
++            .type = LGTD_LIFX_SET_SIMPLE_EVENT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_SIMPLE_EVENT",
++            .type = LGTD_LIFX_GET_SIMPLE_EVENT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_SIMPLE_EVENT",
++            .type = LGTD_LIFX_STATE_SIMPLE_EVENT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_POWER",
++            .type = LGTD_LIFX_GET_POWER
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_POWER",
++            .type = LGTD_LIFX_SET_POWER
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_POWER",
++            .type = LGTD_LIFX_STATE_POWER
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_WAVEFORM_OPTIONAL",
++            .type = LGTD_LIFX_SET_WAVEFORM_OPTIONAL
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "CONNECT_PLAIN",
++            .type = LGTD_LIFX_CONNECT_PLAIN
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "CONNECT_KEY",
++            .type = LGTD_LIFX_CONNECT_KEY
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_CONNECT",
++            .type = LGTD_LIFX_STATE_CONNECT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_AUTH_KEY",
++            .type = LGTD_LIFX_GET_AUTH_KEY
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_AUTH_KEY",
++            .type = LGTD_LIFX_SET_AUTH_KEY
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_AUTH_KEY",
++            .type = LGTD_LIFX_STATE_AUTH_KEY
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_KEEP_ALIVE",
++            .type = LGTD_LIFX_SET_KEEP_ALIVE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_KEEP_ALIVE",
++            .type = LGTD_LIFX_STATE_KEEP_ALIVE
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_HOST",
++            .type = LGTD_LIFX_SET_HOST
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_HOST",
++            .type = LGTD_LIFX_GET_HOST
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_HOST",
++            .type = LGTD_LIFX_STATE_HOST
++        },
++        {
++            UNIMPLEMENTED,
+             .name = "GET_WIFI_STATE",
+             .type = LGTD_LIFX_GET_WIFI_STATE
+         },
+@@ -436,8 +654,23 @@
+         },
+         {
+             UNIMPLEMENTED,
+-            .name = "ACCESS_POINT",
+-            .type = LGTD_LIFX_ACCESS_POINT
++            .name = "STATE_ACCESS_POINTS",
++            .type = LGTD_LIFX_STATE_ACCESS_POINTS
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "GET_ACCESS_POINT",
++            .type = LGTD_LIFX_GET_ACCESS_POINT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "STATE_ACCESS_POINT",
++            .type = LGTD_LIFX_STATE_ACCESS_POINT
++        },
++        {
++            UNIMPLEMENTED,
++            .name = "SET_ACCESS_POINT_BROADCAST",
++            .type = LGTD_LIFX_SET_ACCESS_POINT_BROADCAST
+         },
+         {
+             UNIMPLEMENTED,
+@@ -504,6 +737,114 @@
+     return LGTD_LIFX_WAVEFORM_INVALID;
+ }
+ 
++bool
++lgtd_lifx_wire_handle_receive(evutil_socket_t socket)
++{
++    assert(socket != -1);
++
++    while (true) {
++        struct sockaddr_storage peer;
++        // if we get back from recvfrom with a sockaddr_in the end of the struct
++        // will not be initialized and we will be comparing unintialized stuff
++        // in lgtd_lifx_gateway_get:
++        memset(&peer, 0, sizeof(peer));
++        ev_socklen_t addrlen = sizeof(peer);
++        union {
++            char buf[LGTD_LIFX_MAX_PACKET_SIZE];
++            struct lgtd_lifx_packet_header hdr;
++        } read;
++        int nbytes = recvfrom(
++            socket,
++            read.buf,
++            sizeof(read.buf),
++            0,
++            (struct sockaddr *)&peer,
++            &addrlen
++        );
++        if (nbytes == -1) {
++            int error = EVUTIL_SOCKET_ERROR();
++            if (error == EINTR) {
++                continue;
++            }
++            if (error == EAGAIN) {
++                return true;
++            }
++            lgtd_warn("can't receive broadcast packet");
++            return false;
++        }
++
++        lgtd_time_mono_t received_at = lgtd_time_monotonic_msecs();
++        char peer_addr[INET6_ADDRSTRLEN];
++        LGTD_SOCKADDRTOA((const struct sockaddr *)&peer, peer_addr);
++
++        if (nbytes < LGTD_LIFX_PACKET_HEADER_SIZE) {
++            lgtd_warnx("broadcast packet too short from %s", peer_addr);
++            return false;
++        }
++
++        lgtd_lifx_wire_decode_header(&read.hdr);
++        if (read.hdr.size != nbytes) {
++            lgtd_warnx("incomplete broadcast packet from %s", peer_addr);
++            return false;
++        }
++        int proto_version = read.hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK;
++        if (proto_version != LGTD_LIFX_PROTOCOL_V1) {
++            lgtd_warnx(
++                "unsupported protocol %d from %s",
++                read.hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK, peer_addr
++            );
++        }
++        if (read.hdr.packet_type == LGTD_LIFX_GET_PAN_GATEWAY) {
++            continue;
++        }
++
++        const struct lgtd_lifx_packet_info *pkt_info =
++            lgtd_lifx_wire_get_packet_info(read.hdr.packet_type);
++        if (!pkt_info) {
++            lgtd_warnx(
++                "received unknown packet %#x from %s",
++                read.hdr.packet_type, peer_addr
++            );
++            continue;
++        }
++        if (!(read.hdr.protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE)) {
++            lgtd_warnx(
++                "received non-addressable packet %s from %s",
++                pkt_info->name, peer_addr
++            );
++            continue;
++        }
++        struct lgtd_lifx_gateway *gw;
++        gw = lgtd_lifx_gateway_get((struct sockaddr *)&peer, addrlen);
++        if (!gw && read.hdr.packet_type == LGTD_LIFX_PAN_GATEWAY) {
++            gw = lgtd_lifx_gateway_open(
++                (struct sockaddr *)&peer, addrlen, read.hdr.site, received_at
++            );
++            if (!gw) {
++                lgtd_err(1, "can't allocate gateway");
++            }
++        }
++        if (gw) {
++            void *pkt = &read.buf[LGTD_LIFX_PACKET_HEADER_SIZE];
++            pkt_info->decode(pkt);
++            lgtd_lifx_gateway_handle_packet(
++                gw, pkt_info, &read.hdr, pkt, received_at
++            );
++        } else {
++            bool addressable = read.hdr.protocol & LGTD_LIFX_PROTOCOL_ADDRESSABLE;
++            bool tagged = read.hdr.protocol & LGTD_LIFX_PROTOCOL_TAGGED;
++            unsigned int protocol = read.hdr.protocol & LGTD_LIFX_PROTOCOL_VERSION_MASK;
++            char target[LGTD_LIFX_ADDR_STRLEN];
++            LGTD_LIFX_WIRE_PRINT_TARGET(&read.hdr, target);
++            lgtd_info(
++                "%s <-- %s - (Packet from unknown client or gateway, header "
++                "info: addressable=%d, tagged=%d, protocol=%d, target=%s)",
++                pkt_info->name, peer_addr, addressable, tagged, protocol, target
++            );
++        }
++    }
++}
++
+ static void
+ lgtd_lifx_wire_encode_header(struct lgtd_lifx_packet_header *hdr, int flags)
+ {
+@@ -575,7 +916,7 @@
+         assert(target_type == LGTD_LIFX_TARGET_ALL_DEVICES);
+     }
+ 
+-    int flags = LGTD_LIFX_ADDRESSABLE;
++    int flags = LGTD_LIFX_ADDRESSABLE|LGTD_LIFX_RES_REQUIRED;
+     switch (target_type) {
+     case LGTD_LIFX_TARGET_SITE:
+     case LGTD_LIFX_TARGET_ALL_DEVICES:
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -88,7 +88,12 @@
+     //! - res required: true when a response is required (the response type
+     //!   depends on the request type).
+     uint8_t         flags;
+-    //! Wrap-around sequence number, LIFX internal use.
++    //! The sequence number allows the client to provide a unique value, which
++    //! will be included by the LIFX device in any message that is sent in
++    //! response to a message sent by the client. This allows the client to
++    //! distinguish between different messages sent with the same source
++    //! identifier in the Frame. See _ack_required_ and _res_required_ fields in
++    //! the Frame Address.
+     uint8_t         seqn;
+     //! Apparently this is a unix epoch timestamp in milliseconds at which the
+     //! payload should be run.
+@@ -97,6 +102,14 @@
+     uint8_t         reserved[2];
+ };
+ 
++#define LGTD_LIFX_WIRE_PRINT_TARGET(hdr, buf) do {                              \
++    if ((hdr)->protocol & LGTD_LIFX_PROTOCOL_TAGGED) {                          \
++        snprintf((buf), sizeof((buf)), "%#jx", (uintmax_t)(hdr)->target.tags);  \
++    } else {                                                                    \
++        LGTD_IEEE8023MACTOA((hdr)->target.device_addr, (buf));                  \
++    }                                                                           \
++} while (0)
++
+ enum { LGTD_LIFX_PACKET_HEADER_SIZE = sizeof(struct lgtd_lifx_packet_header) };
+ 
+ enum lgtd_lifx_protocol {
+@@ -115,15 +128,15 @@
+ };
+ 
+ enum lgtd_lifx_flags {
++    LGTD_LIFX_FLAG_RES_REQUIRED = 1,
+     LGTD_LIFX_FLAG_ACK_REQUIRED = 1 << 1,
+-    LGTD_LIFX_FLAG_RES_REQUIRED = 1
+ };
+ 
+ // Let's define a maximum packet size just in case somebody sends us weird
+ // headers:
+ enum { LGTD_LIFX_MAX_PACKET_SIZE = 4096 };
+ 
+-enum lgtd_lifx_packet_type {
++enum lgtd_lifx_packet_type { // FIXME: normalize and prefix everything correctly
+     // Device
+     LGTD_LIFX_SET_SITE = 0x01,
+     LGTD_LIFX_GET_PAN_GATEWAY = 0x02,
+@@ -133,6 +146,9 @@
+     LGTD_LIFX_TIME_STATE = 0x06,
+     LGTD_LIFX_GET_RESET_SWITCH_STATE = 0x07,
+     LGTD_LIFX_RESET_SWITCH_STATE = 0x08,
++    LGTD_LIFX_GET_DUMMY_PAYLOAD = 0x09,
++    LGTD_LIFX_SET_DUMMY_PAYLOAD = 0x0a,
++    LGTD_LIFX_STATE_DUMMY_PAYLOAD = 0x0b,
+     LGTD_LIFX_GET_MESH_INFO = 0x0c,
+     LGTD_LIFX_MESH_INFO = 0x0d,
+     LGTD_LIFX_GET_MESH_FIRMWARE = 0x0e,
+@@ -162,11 +178,23 @@
+     LGTD_LIFX_REBOOT = 0x26,
+     LGTD_LIFX_SET_FACTORY_TEST_MODE = 0x27,
+     LGTD_LIFX_DISABLE_FACTORY_TEST_MODE = 0x28,
++    LGTD_LIFX_STATE_FACTORY_TEST_MODE = 0x29,
++    LGTD_LIFX_STATE_SITE = 0x2a,
++    LGTD_LIFX_STATE_REBOOT = 0x2b,
++    LGTD_LIFX_SET_PAN_GATEWAY = 0x2c,
+     LGTD_LIFX_ACK = 0x2d,
+-    LGTD_LIFX_GET_LOCATION = 0x30, // I wonder what 0x31 and 0x34 are...
++    LGTD_LIFX_SET_FACTORY_RESET = 0x2e,
++    LGTD_LIFX_STATE_FACTORY_RESET = 0x2f,
++    LGTD_LIFX_GET_LOCATION = 0x30,
++    LGTD_LIFX_SET_LOCATION = 0x31,
+     LGTD_LIFX_STATE_LOCATION = 0x32,
+     LGTD_LIFX_GET_GROUP = 0x33, // TODO: replace GET/SET_TAG_LABELS ?
++    LGTD_LIFX_SET_GROUP = 0x34,
+     LGTD_LIFX_STATE_GROUP = 0x35,
++    LGTD_LIFX_GET_OWNER = 0x36,
++    LGTD_LIFX_SET_OWNER = 0x37,
++    LGTD_LIFX_STATE_OWNER = 0x38,
++    LGTD_LIFX_GET_FACTORY_TEST_MODE = 0x39,
+     LGTD_LIFX_ECHO_REQUEST = 0x3a,
+     LGTD_LIFX_ECHO_RESPONSE = 0x3b,
+     // Light
+@@ -175,21 +203,42 @@
+     LGTD_LIFX_SET_WAVEFORM = 0x67,
+     LGTD_LIFX_SET_DIM_ABSOLUTE = 0x68,
+     LGTD_LIFX_SET_DIM_RELATIVE = 0x69,
++    LGTD_LIFX_SET_RGBW = 0x6a,
+     LGTD_LIFX_LIGHT_STATUS = 0x6b,
++    LGTD_LIFX_GET_RAIL_VOLTAGE = 0x6c,
++    LGTD_LIFX_STATE_RAIL_VOLTAGE = 0x6d,
++    LGTD_LIFX_GET_TEMPERATURE = 0x6e,
++    LGTD_LIFX_STATE_TEMPERATURE = 0x6f,
++    LGTD_LIFX_SET_CALIBRATION_COEFFICIENTS = 0x70,
++    LGTD_LIFX_SET_SIMPLE_EVENT = 0x71,
++    LGTD_LIFX_GET_SIMPLE_EVENT = 0x72,
++    LGTD_LIFX_STATE_SIMPLE_EVENT = 0x73,
++    LGTD_LIFX_GET_POWER = 0x74,
++    LGTD_LIFX_SET_POWER = 0x75,
++    LGTD_LIFX_STATE_POWER = 0x76,
++    LGTD_LIFX_SET_WAVEFORM_OPTIONAL = 0x77,
+     // Wan
+     LGTD_LIFX_CONNECT_PLAIN = 0xc9,
+     LGTD_LIFX_CONNECT_KEY = 0xca,
+     LGTD_LIFX_STATE_CONNECT = 0xcb,
+-    LGTD_LIFX_SUB = 0xcc,
+-    LGTD_LIFX_UNSUB = 0xcd,
+-    LGTD_LIFX_STATE_SUB = 0xcd,
++    LGTD_LIFX_GET_AUTH_KEY = 0xcc,
++    LGTD_LIFX_SET_AUTH_KEY = 0xcd,
++    LGTD_LIFX_STATE_AUTH_KEY = 0xce,
++    LGTD_LIFX_SET_KEEP_ALIVE = 0xcf,
++    LGTD_LIFX_STATE_KEEP_ALIVE = 0xd0,
++    LGTD_LIFX_SET_HOST = 0xd1,
++    LGTD_LIFX_GET_HOST = 0xd2,
++    LGTD_LIFX_STATE_HOST = 0xd3,
+     // Wifi
+     LGTD_LIFX_GET_WIFI_STATE = 0x12d,
+     LGTD_LIFX_SET_WIFI_STATE = 0x12e,
+     LGTD_LIFX_WIFI_STATE = 0x12f,
+     LGTD_LIFX_GET_ACCESS_POINTS = 0x130,
+     LGTD_LIFX_SET_ACCESS_POINTS = 0x131,
+-    LGTD_LIFX_ACCESS_POINT = 0x132,
++    LGTD_LIFX_STATE_ACCESS_POINTS = 0x132,
++    LGTD_LIFX_GET_ACCESS_POINT = 0x133,
++    LGTD_LIFX_STATE_ACCESS_POINT = 0x134,
++    LGTD_LIFX_SET_ACCESS_POINT_BROADCAST = 0x135,
+     // Sensor
+     LGTD_LIFX_GET_AMBIENT_LIGHT = 0x191,
+     LGTD_LIFX_STATE_AMBIENT_LIGHT = 0x192,
+@@ -400,13 +449,20 @@
+ 
+ void lgtd_lifx_wire_setup(void);
+ 
++bool lgtd_lifx_wire_handle_receive(evutil_socket_t);
++
+ const struct lgtd_lifx_packet_info *lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *,
+-                                                                 enum lgtd_lifx_target_type,
+-                                                                 union lgtd_lifx_target,
+-                                                                 const uint8_t *,
+-                                                                 enum lgtd_lifx_packet_type);
++                                                                enum lgtd_lifx_target_type,
++                                                                union lgtd_lifx_target,
++                                                                const uint8_t *,
++                                                                enum lgtd_lifx_packet_type);
+ void lgtd_lifx_wire_decode_header(struct lgtd_lifx_packet_header *);
+ 
++
++void lgtd_lifx_wire_enosys_packet_handler(struct lgtd_lifx_gateway *,
++                                          const struct lgtd_lifx_packet_header *,
++                                          const void *);
++
+ void lgtd_lifx_wire_decode_pan_gateway(struct lgtd_lifx_packet_pan_gateway *);
+ void lgtd_lifx_wire_encode_pan_gateway(struct lgtd_lifx_packet_pan_gateway *);
+ void lgtd_lifx_wire_decode_light_status(struct lgtd_lifx_packet_light_status *);
