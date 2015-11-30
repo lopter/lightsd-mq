@@ -1,7 +1,3 @@
-bump_bulb_timeout.patch
-improve_traffic_logging.patch
-fix_v2_protocol_handling.patch
-update_docs.patch
 add_power_transition.patch
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future
