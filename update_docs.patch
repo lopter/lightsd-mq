@@ -1,0 +1,102 @@
+# HG changeset patch
+# Parent  1b34ee3b6211bf6ea6cb106d184cc11544b47c11
+Update docs for 1.1.2
+
+Thanks a lot to /u/nullcompany for his feedback about the protocol
+documentation:
+
+https://www.reddit.com/r/lifx/comments/3s82yy/restrict_from_the_cloud/cxfnxlf
+
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -1,9 +1,22 @@
+ Changelog
+ =========
+ 
++1.1.2 (2015-11-30)
++------------------
++
++- Fix LIFX LAN protocol V2 handling (properly set RES_REQUIRED and properly
++  listen on each gateway's socket);
++- The bulb timeout has been increased from 3 to 20s;
++- Improved LIFX traffic logging.
++
+ 1.1.1 (2015-11-17)
+ ------------------
+ 
++.. warning::
++
++   This release broke the compatibility with the LIFX LAN protocol "v2", please
++   upgrade to 1.1.2.
++
+ - Greatly improve responsiveness by setting the LIFX source identifier [#]_.
+ - Fix parallel builds in the Debian package & fix the homebrew formulae for OS X
+   10.11 (El Capitan).
+diff --git a/docs/known-issues.rst b/docs/known-issues.rst
+--- a/docs/known-issues.rst
++++ b/docs/known-issues.rst
+@@ -1,12 +1,13 @@
+ Known issues
+ ============
+ 
+-The White 800 appears to be less reliable than the LIFX Original or Color 650.
+-The grouping (tagging) code of the LIFX White 800 in particular appears to be
+-bugged: after a tagging operation the LIFX White 800 keep saying it has no tags.
++Severe issues have been seen with firmwares released with new bulbs models
++during 2015, lightsd appears to make those bulbs crash [#]_ after some period of
++time; original bulbs with older firmware will not have those issues. It's
++interesting to note that both original and newer bulbs are served the same
++traffic by lightsd which might point out regressions in LIFX's firmwares.
+ 
+-The Color 650 with the firmware 2.1 appears to completely hang sometimes and
+-you have to restart it, the official LIFX app appears to be affected too.
++.. [#] Forcing you to turn them off and back on using a regular light switch.
+ 
+ Power ON/OFF are the only commands with auto-retry, i.e: lightsd will keep
+ sending the command to the bulb until its state changes. This is not implemented
+diff --git a/docs/protocol.rst b/docs/protocol.rst
+--- a/docs/protocol.rst
++++ b/docs/protocol.rst
+@@ -13,17 +13,30 @@
+ (identifying a target as explained in the following table), or an array of
+ strings (targets).
+ 
+-+-----------------------------+-----------------------------------------------+
+-| ``*``                       | targets all bulbs                             |
+-+-----------------------------+-----------------------------------------------+
+-| ``#TagName``                | targets bulbs tagged with *TagName*           |
+-+-----------------------------+-----------------------------------------------+
+-| ``124f31a5``                | directly target the bulb with the given id    |
+-+-----------------------------+-----------------------------------------------+
+-| ``label``                   | directly target the bulb with the given label |
+-+-----------------------------+-----------------------------------------------+
+-| ``[#TagName, 123f31a5]``    | composite target (JSON array)                 |
+-+-----------------------------+-----------------------------------------------+
+++-----------------------------+------------------------------------------------+
++| ``*``                       | targets all bulbs                              |
+++-----------------------------+------------------------------------------------+
++| ``#TagName``                | targets bulbs tagged with *TagName*            |
+++-----------------------------+------------------------------------------------+
++| ``124f31a5``                | directly target the bulb with the given id     |
++|                             | (mac addr, see below)                          |
+++-----------------------------+------------------------------------------------+
++| ``label``                   | directly target the bulb with the given Label  |
+++-----------------------------+------------------------------------------------+
++| ``[#TagName, 123f31a5]``    | composite target (JSON array)                  |
+++-----------------------------+------------------------------------------------+
++
++The mac address (id) of each bulb can be found with get_light_state_ under the
++``_lifx`` map, e.g:
++
++::
++
++   "_lifx": {
++       "addr": "d0:73:d5:02:e5:30",
++       "gateway": {
++           […]
++
++This bulb has id ``d073d502e530``.
+ 
+ .. note::
+ 
