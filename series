@@ -1,3 +1,5 @@
+bump_bulb_timeout.patch
+improve_traffic_logging.patch
 fix_v2_protocol_handling.patch
 add_power_transition.patch
 make_gateway_write_callbacks_low_priority.patch #+future

@@ -1,0 +1,16 @@
+# HG changeset patch
+# Parent  c59415c0f2951c9e84aa69aa1d8b3ed91da545d3
+Bump the bulb timeout from 3s to 20s
+
+diff --git a/lifx/discovery.h b/lifx/discovery.h
+--- a/lifx/discovery.h
++++ b/lifx/discovery.h
+@@ -19,7 +19,7 @@
+ 
+ enum lgtd_lifx_discovery_constants {
+     LGTD_LIFX_DISCOVERY_WATCHDOG_INTERVAL_MSECS = 500,
+-    LGTD_LIFX_DISCOVERY_DEVICE_TIMEOUT_MSECS = 3000,
++    LGTD_LIFX_DISCOVERY_DEVICE_TIMEOUT_MSECS = 20000,
+     LGTD_LIFX_DISCOVERY_DEVICE_FORCE_REFRESH_MSECS = 2000,
+     LGTD_LIFX_DISCOVERY_ACTIVE_DISCOVERY_INTERVAL_MSECS = 2000,
+     LGTD_LIFX_DISCOVERY_PASSIVE_DISCOVERY_INTERVAL_MSECS = 10000,
