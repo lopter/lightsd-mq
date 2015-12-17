@@ -8,15 +8,24 @@ diff --git a/docs/first-steps.rst b/docs/first-steps.rst
  
     examples/toggle
  
-+Here is the source code of this example, the next section covers it:
++Here is the source code of this example, it uses a small client —lightsc.sh— the
++next section covers it:
 +
 +.. literalinclude:: ../examples/toggle
 +   :language: sh
-+   :linenos:
 +
  .. _examples:
  
  Using lightsc.sh
+@@ -279,6 +285,8 @@
+ 
+ Build a batch request manually:
+ 
++.. pygmentize sucks on heredocs:
++
+ ::
+ 
+    tee `lightsc_get_pipe` <<EOF
 diff --git a/docs/installation.rst b/docs/installation.rst
 --- a/docs/installation.rst
 +++ b/docs/installation.rst
@@ -32,7 +41,7 @@ diff --git a/docs/installation.rst b/docs/installation.rst
     build-essential cmake libevent-dev git ca-certificates ipython3 fakeroot wget devscripts debhelper
  
 -Download and extract the release:
-+Download and extract lightsd |release|:
++Download and extract lightsd:
  
  .. parsed-literal::
  
