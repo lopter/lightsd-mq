@@ -1,19 +1,21 @@
 # HG changeset patch
-# Parent  9e0ac123ffa7d0b32c5ee1e3bc800190cbf8ac52
+# Parent  bfa59be534ab65b5caff5b25d70a1d9fa961bfbb
 Add a transition argument to the power functions
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -4,7 +4,7 @@
+@@ -4,8 +4,8 @@
  PROJECT(LIGHTSD C)
  
  SET(CPACK_PACKAGE_VERSION_MAJOR "1")
 -SET(CPACK_PACKAGE_VERSION_MINOR "1")
+-SET(CPACK_PACKAGE_VERSION_PATCH "2")
 +SET(CPACK_PACKAGE_VERSION_MINOR "2")
- SET(CPACK_PACKAGE_VERSION_PATCH "0")
++SET(CPACK_PACKAGE_VERSION_PATCH "0")
  SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
  
+ MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
 diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
@@ -49,7 +51,7 @@ new file mode 100644
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +
 +    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
-+    if (now < effect_created_at + effect->duration) { // avoid overflow
++    if (now < effect->created_at + effect->duration) { // avoid overflow
 +        lgtd_time_mono_t diff = now - effect->created_at + effect->duration;
 +        // maybe the computer was sleepy
 +        if (diff > LGTD_EFFECT_STALE_THRESHOLD) {
@@ -121,7 +123,7 @@ diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,52 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -170,6 +172,7 @@ new file mode 100644
 +struct lgtd_effect *lgtd_effect_start(struct lgtd_proto_target_list *,
 +                                      int, // timer flags
 +                                      int, // timer ms
++                                      int, // duration
 +                                      union lgtd_effect_ctx);
 +void lgtd_effect_stop(struct lgtd_effect *);
 +void lgtd_effect_stop_all(void);
@@ -270,7 +273,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -931,6 +920,72 @@
+@@ -931,6 +920,89 @@
  }
  
  static bool
@@ -304,18 +307,35 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 +
 +    struct lgtd_jsonrpc_request *req = client->current_request;
 +    bool ok = lgtd_jsonrpc_extract_and_validate_params_against_schema(
-+        &params, schema, 1, req->params, req->params_ntokens, client->json
++        &params,
++        schema,
++        LGTD_ARRAY_SIZE(schema),
++        req->params,
++        req->params_ntokens,
++        client->json
 +    );
 +    if (!ok) {
-+        lgtd_jsonrpc_send_error(
-+            client, LGTD_JSONRPC_INVALID_PARAMS, "Invalid parameters"
-+        );
-+        return false;
++        goto error_invalid_params;
++    }
++
++    if (params.transition) {
++        *transition = strtol(&client->json[params.transition->start], NULL, 10);
++        if (*transition < 0 || errno == ERANGE) {
++            goto error_invalid_params;
++        }
++    } else {
++        *transition = 0;
 +    }
 +
 +    return lgtd_jsonrpc_build_target_list(
 +        targets, client, params.target, params.target_ntokens
 +    );
++
++error_invalid_params:
++    lgtd_jsonrpc_send_error(
++        client, LGTD_JSONRPC_INVALID_PARAMS, "Invalid parameters"
++    );
++    return false;
 +}
 +
 +#define CHECK_AND_CALL_POWER_METHOD(proto_method)                               \
@@ -343,7 +363,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  lgtd_jsonrpc_extract_target_list(struct lgtd_proto_target_list *targets,
                                   struct lgtd_client *client)
  {
-@@ -943,7 +998,7 @@
+@@ -943,7 +1015,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_target_args, target),
              offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
@@ -352,7 +372,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          )
      };
-@@ -964,25 +1019,19 @@
+@@ -964,25 +1036,19 @@
      );
  }
  
@@ -389,7 +409,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  static void
  lgtd_jsonrpc_check_and_call_proto_tag_or_untag_or_set_label(
          struct lgtd_client *client,
-@@ -1001,7 +1050,7 @@
+@@ -1001,7 +1067,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_target_args, target),
              offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
@@ -398,6 +418,15 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
+@@ -1103,7 +1169,7 @@
+ {
+     static const struct lgtd_jsonrpc_method methods[] = {
+         LGTD_JSONRPC_METHOD(
+-            "power_on", 1, // t
++            "power_on", 2, // t
+             lgtd_jsonrpc_check_and_call_power_on
+         ),
+         LGTD_JSONRPC_METHOD(
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -405,7 +434,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  #include "timer.h"
  #include "listen.h"
  #include "daemon.h"
-+#include "effect.h"
++//#include "effect.h"
  #include "lightsd.h"
  
  struct lgtd_opts lgtd_opts = {
@@ -413,14 +442,14 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      lgtd_listen_close_all();
      lgtd_command_pipe_close_all();
      lgtd_client_close_all();
-+    lgtd_effect_stop_all();
++//  lgtd_effect_stop_all();
      lgtd_lifx_broadcast_close();
      lgtd_lifx_gateway_close_all();
      lgtd_timer_stop_all();
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -59,10 +59,41 @@
+@@ -59,22 +59,54 @@
  }
  
  void
@@ -456,14 +485,19 @@ diff --git a/core/proto.c b/core/proto.c
  {
      assert(targets);
 +    assert(transition >= 0);
-+
-+    if (transition) {
-+        return;
-+    }
  
-     struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
-     SEND_RESULT(
-@@ -72,9 +103,11 @@
+-    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
+-    SEND_RESULT(
+-        client, lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt)
+-    );
++    bool ok;
++    struct lgtd_lifx_packet_power pkt = {
++        .power = LGTD_LIFX_POWER_ON, .transition = transition
++    };
++    ok = lgtd_router_send(targets, LGTD_LIFX_SET_POWER, &pkt);
++
++    SEND_RESULT(client, ok);
+ }
  
  void
  lgtd_proto_power_toggle(struct lgtd_client *client,
@@ -476,7 +510,7 @@ diff --git a/core/proto.c b/core/proto.c
  
      struct lgtd_router_device_list *devices = NULL;
      devices = lgtd_router_targets_to_devices(targets);
-@@ -85,6 +118,10 @@
+@@ -85,6 +117,10 @@
          return;
      }
  
@@ -487,7 +521,7 @@ diff --git a/core/proto.c b/core/proto.c
      struct lgtd_router_device *device;
      SLIST_FOREACH(device, devices, link) {
          struct lgtd_lifx_bulb *bulb = device->device;
-@@ -101,9 +138,15 @@
+@@ -101,14 +137,19 @@
  
  void
  lgtd_proto_power_off(struct lgtd_client *client,
@@ -503,7 +537,14 @@ diff --git a/core/proto.c b/core/proto.c
 +    }
  
      struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
-     SEND_RESULT(
+-    SEND_RESULT(
+-        client, lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt)
+-    );
++    bool ok = lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
++    SEND_RESULT(client, ok);
+ }
+ 
+ void
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
 +++ b/core/proto.h
@@ -533,7 +574,7 @@ diff --git a/core/proto.h b/core/proto.h
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 --- a/docs/protocol.rst
 +++ b/docs/protocol.rst
-@@ -35,25 +35,33 @@
+@@ -48,25 +48,33 @@
  Available methods
  -----------------
  
@@ -684,3 +725,105 @@ new file mode 100644
 +const struct lgtd_effect *lgtd_effect_power_transition(struct lgtd_proto_target_list *,
 +                                                       enum lgtd_effect_power_transition_type,
 +                                                       enum lgtd_effect_ctx);
+diff --git a/examples/lightsc.py b/examples/lightsc.py
+--- a/examples/lightsc.py
++++ b/examples/lightsc.py
+@@ -168,13 +168,15 @@
+             transient=transient
+         )
+ 
+-    def power_on(self, target):
++    def power_on(self, target, transition=None):
++        if transition:
++            return self._jsonrpc_call("power_on", [target, transition])
+         return self._jsonrpc_call("power_on", {"target": target})
+ 
+-    def power_off(self, target):
++    def power_off(self, target, transition=None):
+         return self._jsonrpc_call("power_off", {"target": target})
+ 
+-    def power_toggle(self, target):
++    def power_toggle(self, target, transition=None):
+         return self._jsonrpc_call("power_toggle", {"target": target})
+ 
+     def get_light_state(self, target):
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -205,6 +205,21 @@
+         },
+         {
+             REQUEST_ONLY,
++            .name = "SET_POWER", // like SET_POWER_STATE but with transition support
++            .type = LGTD_LIFX_SET_POWER,
++            .size = sizeof(struct lgtd_lifx_packet_power),
++            .encode = ENCODER(lgtd_lifx_wire_encode_power)
++        },
++        {
++            RESPONSE_ONLY,
++            .name = "STATE_POWER", // same thing as POWER_STATE
++            .type = LGTD_LIFX_STATE_POWER,
++            .size = sizeof(struct lgtd_lifx_packet_power_state),
++            .decode = DECODER(lgtd_lifx_wire_decode_power_state),
++            .handle = HANDLER(lgtd_lifx_gateway_handle_power_state)
++        },
++        {
++            REQUEST_ONLY,
+             .name = "SET_TAGS",
+             .type = LGTD_LIFX_SET_TAGS,
+             .size = sizeof(struct lgtd_lifx_packet_tags),
+@@ -559,16 +574,6 @@
+         },
+         {
+             UNIMPLEMENTED,
+-            .name = "SET_POWER",
+-            .type = LGTD_LIFX_SET_POWER
+-        },
+-        {
+-            UNIMPLEMENTED,
+-            .name = "STATE_POWER",
+-            .type = LGTD_LIFX_STATE_POWER
+-        },
+-        {
+-            UNIMPLEMENTED,
+             .name = "SET_WAVEFORM_OPTIONAL",
+             .type = LGTD_LIFX_SET_WAVEFORM_OPTIONAL
+         },
+@@ -960,6 +965,14 @@
+ }
+ 
+ void
++lgtd_lifx_wire_encode_power(struct lgtd_lifx_packet_power *pkt)
++{
++    assert(pkt);
++
++    pkt->transition = htole32(pkt->transition);
++}
++
++void
+ lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *pkt)
+ {
+     assert(pkt);
+diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
+--- a/lifx/wire_proto.h
++++ b/lifx/wire_proto.h
+@@ -264,6 +264,11 @@
+     LGTD_LIFX_POWER_ON = 0xffff
+ };
+ 
++struct lgtd_lifx_packet_power {
++    uint16_t    power; // see enum lgtd_lifx_power_state
++    uint32le_t  transition; // msecs
++};
++
+ struct lgtd_lifx_packet_power_state {
+     uint16_t    power; // see enum lgtd_lifx_power_state
+ };
+@@ -468,6 +473,7 @@
+ void lgtd_lifx_wire_decode_light_status(struct lgtd_lifx_packet_light_status *);
+ void lgtd_lifx_wire_encode_light_status(struct lgtd_lifx_packet_light_status *);
+ void lgtd_lifx_wire_decode_power_state(struct lgtd_lifx_packet_power_state *);
++void lgtd_lifx_wire_encode_power(struct lgtd_lifx_packet_power *);
+ 
+ void lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *);
+ void lgtd_lifx_wire_encode_waveform(struct lgtd_lifx_packet_waveform *);

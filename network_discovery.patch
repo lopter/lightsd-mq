@@ -1,0 +1,6 @@
+# HG changeset patch
+# Parent  bfa59be534ab65b5caff5b25d70a1d9fa961bfbb
+Discover NICs connect to LANs and only discover bulbs on those
+
+Closes GH-2.
+
