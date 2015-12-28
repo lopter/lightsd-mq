@@ -58,7 +58,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,145 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -76,8 +76,20 @@ new file mode 100644
 +// You should have received a copy of the GNU General Public License
 +// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
 +
++#include <sys/queue.h>
++#include <sys/tree.h>
++#include <assert.h>
++#include <endian.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <time.h>
++
++#include <event2/event.h>
++
 +#include "time_monotonic.h"
 +#include "timer.h"
++#include "lifx/wire_proto.h"
 +#include "proto.h"
 +#include "effect.h"
 +
@@ -109,13 +121,15 @@ new file mode 100644
 +static void
 +lgtd_effect_timer_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
 +{
++    (void)timer;
++
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +
 +    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
 +    if (now < effect->created_at + effect->duration) { // avoid overflow
 +        lgtd_time_mono_t diff = now - effect->created_at + effect->duration;
 +        // maybe the computer was sleepy
-+        if (diff > LGTD_EFFECT_STALE_THRESHOLD) {
++        if (diff > LGTD_EFFECT_STALE_THRESHOLD_MSECS) {
 +            lgtd_effect_stop(effect);
 +            return;
 +        }
@@ -126,11 +140,11 @@ new file mode 100644
 +
 +struct lgtd_effect *
 +lgtd_effect_start(int duration,
-+                  void (*duration_cb)(struct lgtd_effect *),
++                  void (*duration_cb)(const struct lgtd_effect *),
 +                  int timer_flags,
 +                  int timer_ms,
-+                  void (*apply_cb)(struct lgtd_effect *),
-+                  void *ctx)
++                  void (*apply_cb)(const struct lgtd_effect *),
++                  union lgtd_effect_ctx ctx)
 +{
 +    struct lgtd_effect *effect = calloc(1, sizeof(*effect));
 +    if (!effect) {
@@ -139,6 +153,9 @@ new file mode 100644
 +
 +    effect->created_at = lgtd_time_monotonic_msecs();
 +    effect->duration = duration;
++    effect->duration_cb = duration_cb;
++    effect->apply_cb = apply_cb;
++    effect->ctx = ctx;
 +    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
 +
 +    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
@@ -533,14 +550,14 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
-@@ -31,6 +31,7 @@
- #include <event2/util.h>
- 
- #include "lifx/wire_proto.h"
+@@ -39,6 +39,7 @@
+ #include "client.h"
+ #include "lifx/gateway.h"
+ #include "proto.h"
 +#include "effects/power_transition.h"
- #include "time_monotonic.h"
- #include "lifx/bulb.h"
- #include "lifx/tagging.h"
+ #include "router.h"
+ #include "lightsd.h"
+ 
 @@ -58,23 +59,47 @@
      }
  }
@@ -595,7 +612,7 @@ diff --git a/core/proto.c b/core/proto.c
  
      struct lgtd_router_device_list *devices = NULL;
      devices = lgtd_router_targets_to_devices(targets);
-@@ -85,30 +110,78 @@
+@@ -85,30 +110,80 @@
          return;
      }
  
@@ -626,7 +643,9 @@ diff --git a/core/proto.c b/core/proto.c
 +                bulb->addr, target->target, LGTD_LIFX_ADDR_STRLEN
 +            );
 +            SLIST_INSERT_HEAD(
-+                bulb->state.power ? &targets_to_turn_off : &targets_to_turn_on
++                bulb->state.power ? &targets_to_turn_off : &targets_to_turn_on,
++                target,
++                link
 +            );
 +        } else {
 +            struct lgtd_lifx_packet_power_state pkt = {
@@ -687,7 +706,16 @@ diff --git a/core/proto.c b/core/proto.c
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
 +++ b/core/proto.h
-@@ -24,6 +24,7 @@
+@@ -17,6 +17,8 @@
+ 
+ #pragma once
+ 
++struct lgtd_client;
++
+ struct lgtd_proto_target {
+     SLIST_ENTRY(lgtd_proto_target)  link;
+     char                            target[];
+@@ -24,6 +26,7 @@
  SLIST_HEAD(lgtd_proto_target_list, lgtd_proto_target);
  
  void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *);
@@ -695,7 +723,7 @@ diff --git a/core/proto.h b/core/proto.h
  const struct lgtd_proto_target *lgtd_proto_target_list_add(struct lgtd_client *,
                                                             struct lgtd_proto_target_list *,
                                                             const char *, int);
-@@ -36,9 +37,9 @@
+@@ -36,9 +39,9 @@
                               enum lgtd_lifx_waveform_type,
                               int, int, int, int,
                               int, float, int, bool);
@@ -785,7 +813,7 @@ diff --git a/effects/power_transition.c b/effects/power_transition.c
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.c
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,202 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -809,6 +837,8 @@ new file mode 100644
 +#include <endian.h>
 +#include <stdbool.h>
 +#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
 +#include <time.h>
 +
 +#include <event2/event.h>
@@ -819,7 +849,9 @@ new file mode 100644
 +#include "core/time_monotonic.h"
 +#include "core/timer.h"
 +#include "lifx/wire_proto.h"
++#include "lifx/bulb.h"
 +#include "core/proto.h"
++#include "core/router.h"
 +#include "core/effect.h"
 +#include "core/lightsd.h"
 +#include "power_transition.h"
@@ -842,14 +874,14 @@ new file mode 100644
 +{
 +    assert(effect);
 +
-+    struct lgtd_effect_power_transition_ctx = effect->ctx.as_ptr;
++    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
 +
 +    struct lgtd_effect_power_transition_target *target;
 +    SLIST_FOREACH(target, &ctx->targets, link) {
 +        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(target->device_id);
 +        if (!bulb) {
 +            char addr[LGTD_LIFX_ADDR_LENGTH];
-+            LGTD_IEEE8023MACTOA(device_id.as_array, addr)
++            LGTD_IEEE8023MACTOA(bulb->addr, addr);
 +            lgtd_warn(
 +                "bulb %s is unavailable: can't restore its original brightness "
 +                "after a power transition", addr
@@ -882,10 +914,12 @@ new file mode 100644
 +{
 +    assert(effect);
 +
-+    struct lgtd_effect_power_transition_ctx = effect->ctx.as_ptr;
++    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
 +
 +    struct lgtd_effect_power_transition_target *target;
 +    SLIST_FOREACH(target, &ctx->targets, link) {
++        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(target->device_id);
++        assert(bulb);
 +        struct lgtd_lifx_packet_light_color pkt_set_brightness_to_zero = {
 +            .hue = bulb->state.hue,
 +            .saturation = bulb->state.saturation,
@@ -905,7 +939,7 @@ new file mode 100644
 +        struct lgtd_lifx_packet_light_color pkt_fade_out = {
 +            .hue = bulb->state.hue,
 +            .saturation = bulb->state.saturation,
-+            .brightness = target_brightness,
++            .brightness = target->initial_brightness,
 +            .kelvin = bulb->state.kelvin,
 +            .transition = ctx->duration
 +        };
@@ -967,7 +1001,7 @@ new file mode 100644
 +    }
 +    union lgtd_effect_ctx effect_ctx = { .as_ptr = ctx };
 +    const struct lgtd_effect *effect = lgtd_effect_start(
-+        duration, duration_cb 0, 0, apply_cb, effect_ctx
++        duration, duration_cb, 0, 0, apply_cb, effect_ctx
 +    );
 +    if (effect) {
 +        return effect;
@@ -1024,11 +1058,11 @@ new file mode 100644
 +struct lgtd_effect_power_transition_ctx {
 +    struct lgtd_effect_power_transition_target_list targets;
 +    int                                             duration;
-+}
++};
 +
 +const struct lgtd_effect *lgtd_effect_power_transition(const struct lgtd_proto_target_list *,
 +                                                       enum lgtd_effect_power_transition_type,
-+                                                       enum lgtd_effect_ctx);
++                                                       int);
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
