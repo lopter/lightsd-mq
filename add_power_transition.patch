@@ -58,7 +58,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,128 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -83,6 +83,29 @@ new file mode 100644
 +
 +struct lgtd_effect_list lgtd_effects = LIST_HEAD_INITIALIZER(&lgtd_effects);
 +
++void
++lgtd_effect_stop(struct lgtd_effect *effect)
++{
++    assert(effect);
++
++    LIST_REMOVE(effect, link);
++    if (effect->timer) {
++        lgtd_timer_stop(effect->timer);
++    }
++    free(effect);
++}
++
++static void
++lgtd_effect_duration_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
++{
++    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
++    if (effect->duration_cb) {
++        effect->duration_cb(effect);
++    }
++    lgtd_timer_stop(timer);
++    lgtd_effect_stop(effect);
++}
++
 +static void
 +lgtd_effect_timer_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
 +{
@@ -93,61 +116,68 @@ new file mode 100644
 +        lgtd_time_mono_t diff = now - effect->created_at + effect->duration;
 +        // maybe the computer was sleepy
 +        if (diff > LGTD_EFFECT_STALE_THRESHOLD) {
-+            lgtd_effect_remove(effect);
++            lgtd_effect_stop(effect);
 +            return;
 +        }
 +    }
 +
-+    effect->apply(effect);
-+}
-+
-+void
-+lgtd_effect_stop(struct lgtd_effect *effect)
-+{
-+    assert(effect);
-+
-+    LIST_REMOVE(effect, link);
-+    lgtd_proto_target_list_clear(effect->targets);
-+    if (effect->timer) {
-+        lgtd_timer_stop(effect->timer);
-+    }
-+    free(effect);
++    effect->apply_cb(effect);
 +}
 +
 +struct lgtd_effect *
-+lgtd_effect_start(struct lgtd_proto_target_list *targets,
++lgtd_effect_start(int duration,
++                  void (*duration_cb)(struct lgtd_effect *),
 +                  int timer_flags,
 +                  int timer_ms,
-+                  int duration,
-+                  void (*effect)(const struct lgtd_proto_target *, void *),
++                  void (*apply_cb)(struct lgtd_effect *),
 +                  void *ctx)
 +{
-+    assert(targets);
-+    assert(timer_ms >= 0);
-+    assert(duration >= 0);
-+
 +    struct lgtd_effect *effect = calloc(1, sizeof(*effect));
 +    if (!effect) {
 +        return NULL;
 +    }
 +
-+    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
-+    effect->timer = lgtd_timer_start(
-+        timer_flags, timer_ms, lgtd_effect_timer_callback, timer_ctx
-+    );
-+    if (!effect->timer) {
-+        free(effect);
-+        return NULL;
-+    }
-+
 +    effect->created_at = lgtd_time_monotonic_msecs();
 +    effect->duration = duration;
-+    effect->apply = lgtd_effect_power_off;
-+    lgtd_proto_target_list_swap(&effect->targets, targets);
-+
 +    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
 +
++    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
++
++    struct lgtd_timer *duration_timer = NULL;
++    if (duration) {
++        duration_timer = lgtd_timer_start(
++            LGTD_TIMER_DEFAULT_FLAGS,
++            duration,
++            lgtd_effect_duration_callback,
++            timer_ctx
++        );
++        if (!duration_timer) {
++            goto err;
++        }
++    }
++
++    if (timer_ms) {
++        effect->timer = lgtd_timer_start(
++            timer_flags, timer_ms, lgtd_effect_timer_callback, timer_ctx
++        );
++        if (!effect->timer) {
++            goto err;
++        }
++    } else {
++        effect->apply_cb(effect);
++    }
++
 +    return effect;
++
++err:
++    if (duration_timer) {
++        lgtd_timer_stop(duration_timer);
++    }
++    if (effect->timer) {
++        lgtd_timer_stop(effect->timer);
++    }
++    free(effect);
++    return NULL;
 +}
 +
 +void
@@ -161,7 +191,7 @@ diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,53 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -192,9 +222,9 @@ new file mode 100644
 +    LIST_ENTRY(lgtd_effect)         link;
 +    lgtd_time_mono_t                created_at;
 +    int                             duration;
++    void                            (*duration_cb)(const struct lgtd_effect *);
 +    struct lgtd_timer               *timer;
-+    void                            (*apply)(struct lgtd_effect *);
-+    struct lgtd_proto_target_list   targets;
++    void                            (*apply_cb)(const struct lgtd_effect *);
 +    union lgtd_effect_ctx           ctx;
 +};
 +LIST_HEAD(lgtd_effect_list, lgtd_effect);
@@ -207,10 +237,11 @@ new file mode 100644
 +    return (uintptr_t)effect;
 +}
 +
-+struct lgtd_effect *lgtd_effect_start(struct lgtd_proto_target_list *,
++struct lgtd_effect *lgtd_effect_start(int, // duration
++                                      void (*)(const struct lgtd_effect *), // duration cb
 +                                      int, // timer flags
 +                                      int, // timer ms
-+                                      int, // duration
++                                      void (*)(const struct lgtd_effect *), // apply cb
 +                                      union lgtd_effect_ctx);
 +void lgtd_effect_stop(struct lgtd_effect *);
 +void lgtd_effect_stop_all(void);
@@ -484,6 +515,21 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      lgtd_lifx_broadcast_close();
      lgtd_lifx_gateway_close_all();
      lgtd_timer_stop_all();
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -121,9 +121,9 @@
+ extern struct event_base *lgtd_ev_base;
+ extern const char *lgtd_progname;
+ 
+-char *lgtd_iee8023mactoa(const uint8_t *addr, char *buf, int buflen);
++char *lgtd_ieee8023mactoa(const uint8_t *addr, char *buf, int buflen);
+ #define LGTD_IEEE8023MACTOA(addr, buf) \
+-    lgtd_iee8023mactoa((addr), (buf), sizeof(buf))
++    lgtd_ieee8023mactoa((addr), (buf), sizeof(buf))
+ char *lgtd_sockaddrtoa(const struct sockaddr *, char *buf, int buflen);
+ #define LGTD_SOCKADDRTOA(addr, buf) \
+     lgtd_sockaddrtoa((addr), (buf), sizeof(buf))
 diff --git a/core/proto.c b/core/proto.c
 --- a/core/proto.c
 +++ b/core/proto.c
@@ -495,21 +541,10 @@ diff --git a/core/proto.c b/core/proto.c
  #include "time_monotonic.h"
  #include "lifx/bulb.h"
  #include "lifx/tagging.h"
-@@ -59,22 +60,55 @@
+@@ -58,23 +59,47 @@
+     }
  }
  
- void
-+lgtd_proto_target_list_swap(struct lgtd_proto_target_list *left,
-+                            struct lgtd_proto_target_list *right)
-+{
-+    assert(left && right); // pun pun pun
-+
-+    struct lgtd_proto_target_list buf;
-+    memcpy(&buf, left, sizeof(buf));
-+    memcpy(left, right, sizeof(*left));
-+    memcpy(right, &buf, sizeof(*right));
-+}
-+
 +int
 +lgtd_proto_target_list_len(const struct lgtd_proto_target_list *targets)
 +{
@@ -523,7 +558,7 @@ diff --git a/core/proto.c b/core/proto.c
 +    return len;
 +}
 +
-+void
+ void
  lgtd_proto_power_on(struct lgtd_client *client,
 -                    const struct lgtd_proto_target_list *targets)
 +                    const struct lgtd_proto_target_list *targets,
@@ -538,9 +573,12 @@ diff --git a/core/proto.c b/core/proto.c
 -    );
 +    bool ok;
 +    if (transition) {
++        ok = lgtd_effect_power_transition(
++            targets, LGTD_EFFECT_POWER_TRANSITION_ON, transition
++        );
 +    } else {
 +        struct lgtd_lifx_packet_power pkt = { .power = LGTD_LIFX_POWER_ON };
-+        ok = lgtd_router_send(targets, LGTD_LIFX_SET_POWER, &pkt);
++        ok = lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
 +    }
 +
 +    SEND_RESULT(client, ok);
@@ -557,18 +595,63 @@ diff --git a/core/proto.c b/core/proto.c
  
      struct lgtd_router_device_list *devices = NULL;
      devices = lgtd_router_targets_to_devices(targets);
-@@ -85,6 +119,10 @@
+@@ -85,30 +110,78 @@
          return;
      }
  
-+    if (transition) {
-+        return;
-+    }
++    struct lgtd_proto_target_list targets_to_turn_off =
++        SLIST_HEAD_INITIALIZER(&targets_to_turn_off);
++    struct lgtd_proto_target_list targets_to_turn_on =
++        SLIST_HEAD_INITIALIZER(&targets_to_turn_on);
 +
++    bool ok = true;
      struct lgtd_router_device *device;
      SLIST_FOREACH(device, devices, link) {
          struct lgtd_lifx_bulb *bulb = device->device;
-@@ -101,14 +139,27 @@
+-        struct lgtd_lifx_packet_power_state pkt = {
+-            .power = ~bulb->state.power
+-        };
+-        lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_POWER_STATE, &pkt);
++        if (transition) {
++            struct lgtd_proto_target *target = malloc(
++                offsetof(struct lgtd_proto_target, target)
++                + LGTD_LIFX_ADDR_STRLEN
++            );
++            if (!target) {
++                lgtd_warn("couldn't toggle bulbs");
++                ok = false;
++                break;
++            }
++            lgtd_ieee8023mactoa(
++                bulb->addr, target->target, LGTD_LIFX_ADDR_STRLEN
++            );
++            SLIST_INSERT_HEAD(
++                bulb->state.power ? &targets_to_turn_off : &targets_to_turn_on
++            );
++        } else {
++            struct lgtd_lifx_packet_power_state pkt = {
++                .power = ~bulb->state.power
++            };
++            lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_POWER_STATE, &pkt);
++        }
+     }
+ 
+-    SEND_RESULT(client, true);
++    if (transition) {
++        ok = lgtd_effect_power_transition(
++            &targets_to_turn_on, LGTD_EFFECT_POWER_TRANSITION_ON, transition
++        );
++        lgtd_proto_target_list_clear(&targets_to_turn_on);
++        ok = ok && lgtd_effect_power_transition(
++            &targets_to_turn_off, LGTD_EFFECT_POWER_TRANSITION_ON, transition
++        );
++        lgtd_proto_target_list_clear(&targets_to_turn_off);
++    }
++
++    SEND_RESULT(client, ok);
+ 
+     lgtd_router_device_list_free(devices);
+ }
  
  void
  lgtd_proto_power_off(struct lgtd_client *client,
@@ -589,7 +672,7 @@ diff --git a/core/proto.c b/core/proto.c
 +
 +    bool ok;
 +    if (transition) {
-+        ok = !!lgtd_effect_power_transition_off(
++        ok = lgtd_effect_power_transition(
 +            targets, LGTD_EFFECT_POWER_TRANSITION_OFF, transition
 +        );
 +    } else {
@@ -604,17 +687,15 @@ diff --git a/core/proto.c b/core/proto.c
 diff --git a/core/proto.h b/core/proto.h
 --- a/core/proto.h
 +++ b/core/proto.h
-@@ -24,6 +24,9 @@
+@@ -24,6 +24,7 @@
  SLIST_HEAD(lgtd_proto_target_list, lgtd_proto_target);
  
  void lgtd_proto_target_list_clear(struct lgtd_proto_target_list *);
-+void lgtd_proto_target_list_swap(struct lgtd_proto_target_list *,
-+                                 struct lgtd_proto_target_list *);
 +int lgtd_proto_target_list_len(const struct lgtd_proto_target_list *);
  const struct lgtd_proto_target *lgtd_proto_target_list_add(struct lgtd_client *,
                                                             struct lgtd_proto_target_list *,
                                                             const char *, int);
-@@ -36,9 +39,9 @@
+@@ -36,9 +37,9 @@
                               enum lgtd_lifx_waveform_type,
                               int, int, int, int,
                               int, float, int, bool);
@@ -627,6 +708,18 @@ diff --git a/core/proto.h b/core/proto.h
  void lgtd_proto_get_light_state(struct lgtd_client *, const struct lgtd_proto_target_list *);
  void lgtd_proto_tag(struct lgtd_client *, const struct lgtd_proto_target_list *, const char *);
  void lgtd_proto_untag(struct lgtd_client *, const struct lgtd_proto_target_list *, const char *);
+diff --git a/core/utils.c b/core/utils.c
+--- a/core/utils.c
++++ b/core/utils.c
+@@ -30,7 +30,7 @@
+ #include "lightsd.h"
+ 
+ char *
+-lgtd_iee8023mactoa(const uint8_t *addr, char *buf, int buflen)
++lgtd_ieee8023mactoa(const uint8_t *addr, char *buf, int buflen)
+ {
+     assert(addr);
+     assert(buf);
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 --- a/docs/protocol.rst
 +++ b/docs/protocol.rst
@@ -692,7 +785,7 @@ diff --git a/effects/power_transition.c b/effects/power_transition.c
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.c
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,196 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -711,7 +804,9 @@ new file mode 100644
 +// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +#include <sys/queue.h>
++#include <sys/tree.h>
 +#include <assert.h>
++#include <endian.h>
 +#include <stdbool.h>
 +#include <stdint.h>
 +#include <time.h>
@@ -730,25 +825,28 @@ new file mode 100644
 +#include "power_transition.h"
 +
 +static void
-+lgtd_effect_power_transition_off_callback(struct lgtd_effect *effect)
++lgtd_effect_power_transition_clear_target_list(struct lgtd_effect_power_transition_target_list *targets)
++{
++    assert(targets);
++
++    while (!SLIST_EMPTY(targets)) {
++        struct lgtd_effect_power_transition_target *target;
++        target = SLIST_FIRST(targets);
++        SLIST_REMOVE_HEAD(targets, link);
++        free(target);
++    }
++}
++
++static void
++lgtd_effect_power_transition_off_duration_callback(const struct lgtd_effect *effect)
 +{
 +    assert(effect);
 +
-+    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
-+    assert(ctx->type == LGTD_EFFECT_POWER_TRANSITION_OFF);
++    struct lgtd_effect_power_transition_ctx = effect->ctx.as_ptr;
 +
-+    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_OFF };
-+    lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt);
-+
-+    while (!SLIST_EMPTY(&ctx->targets)) {
-+        struct lgtd_effect_power_transition_target *target;
-+        target = SLIST_FIRST(&cts->targets);
-+
-+        union { // XXX: really need to turn everyting in uint64be_t
-+            uint64be_t  as_integer;
-+            uint8_t     as_array;
-+        } device_id = { .as_integer = target->device_id };
-+        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(&device_id.as_array);
++    struct lgtd_effect_power_transition_target *target;
++    SLIST_FOREACH(target, &ctx->targets, link) {
++        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(target->device_id);
 +        if (!bulb) {
 +            char addr[LGTD_LIFX_ADDR_LENGTH];
 +            LGTD_IEEE8023MACTOA(device_id.as_array, addr)
@@ -770,40 +868,119 @@ new file mode 100644
 +            };
 +            lgtd_lifx_wire_encode_light_color(&pkt_light_color);
 +            lgtd_router_send_to_device(
-+                bulb,
-+                LGTD_LIFX_SET_LIGHT_COLOR,
-+                &pkt_light_color
++                bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt_light_color
 +            );
 +        }
-+
-+        SLIST_REMOVE_HEAD(&ctx->targets);
-+        free(target);
 +    }
 +
-+    free(effect->ctx);
-+    lgtd_effect_stop(effect);
++    lgtd_effect_power_transition_clear_target_list(&ctx->targets);
++    free(ctx);
 +}
 +
 +static void
-+lgtd_effect_power_transition_on_callback(struct lgtd_effect *effect)
++lgtd_effect_power_transition_on_apply_callback(const struct lgtd_effect *effect)
++{
++    assert(effect);
++
++    struct lgtd_effect_power_transition_ctx = effect->ctx.as_ptr;
++
++    struct lgtd_effect_power_transition_target *target;
++    SLIST_FOREACH(target, &ctx->targets, link) {
++        struct lgtd_lifx_packet_light_color pkt_set_brightness_to_zero = {
++            .hue = bulb->state.hue,
++            .saturation = bulb->state.saturation,
++            .brightness = 0,
++            .kelvin = bulb->state.kelvin
++        };
++        lgtd_lifx_wire_encode_light_color(&pkt_set_brightness_to_zero);
++        lgtd_router_send_to_device(
++            bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt_set_brightness_to_zero
++        );
++
++        struct lgtd_lifx_packet_power pkt_power_on = {
++            .power = LGTD_LIFX_POWER_ON
++        };
++        lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_POWER, &pkt_power_on);
++
++        struct lgtd_lifx_packet_light_color pkt_fade_out = {
++            .hue = bulb->state.hue,
++            .saturation = bulb->state.saturation,
++            .brightness = target_brightness,
++            .kelvin = bulb->state.kelvin,
++            .transition = ctx->duration
++        };
++        lgtd_lifx_wire_encode_light_color(&pkt_fade_out);
++        lgtd_router_send_to_device(
++            bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt_fade_out
++        );
++    }
++
++    lgtd_effect_power_transition_clear_target_list(&ctx->targets);
++    free(ctx);
++}
 +
 +const struct lgtd_effect *
-+lgtd_effect_power_transition(struct lgtd_proto_target_list *targets,
++lgtd_effect_power_transition(const struct lgtd_proto_target_list *targets,
 +                             enum lgtd_effect_power_transition_type state,
 +                             int duration)
 +{
 +    assert(targets);
-+    assert(transition >= 0);
++    assert(duration >= 0);
 +
-+    union lgtd_effect_ctx ctx = { .as_ptr = state };
-+    return lgtd_effect_start(
-+        targets,
-+        LGTD_TIMER_DEFAULT_FLAGS,
-+        duration,
-+        0,
-+        lgtd_effect_power_transition_off_callback,
-+        ctx
++    struct lgtd_router_device_list *devices = NULL;
++    devices = lgtd_router_targets_to_devices(targets);
++    if (!devices) {
++        goto error;
++    }
++
++    struct lgtd_effect_power_transition_ctx *ctx;
++    ctx = calloc(1, sizeof(*ctx));
++    if (!ctx) {
++        goto error;
++    }
++    ctx->duration = duration;
++
++    while (!SLIST_EMPTY(devices)) {
++        struct lgtd_router_device *device = SLIST_FIRST(devices);
++        struct lgtd_lifx_bulb *bulb = device->device;
++
++        struct lgtd_effect_power_transition_target *target;
++        target = calloc(1, sizeof(*target));
++        if (!target) {
++            goto error;
++        }
++        memcpy(target->device_id, bulb->addr, sizeof(target->device_id));
++        target->initial_brightness = bulb->state.brightness;
++        SLIST_INSERT_HEAD(&ctx->targets, target, link);
++
++        SLIST_REMOVE_HEAD(devices, link);
++        free(device);
++    }
++    free(devices);
++
++    void (*duration_cb)(const struct lgtd_effect *) = NULL;
++    void (*apply_cb)(const struct lgtd_effect *) = NULL;
++    if (state == LGTD_EFFECT_POWER_TRANSITION_OFF) {
++        duration_cb = lgtd_effect_power_transition_off_duration_callback;
++    } else {
++        apply_cb = lgtd_effect_power_transition_on_apply_callback;
++    }
++    union lgtd_effect_ctx effect_ctx = { .as_ptr = ctx };
++    const struct lgtd_effect *effect = lgtd_effect_start(
++        duration, duration_cb 0, 0, apply_cb, effect_ctx
 +    );
++    if (effect) {
++        return effect;
++    }
++
++error:
++    lgtd_warn("can't start a power transition");
++    if (ctx) {
++        lgtd_effect_power_transition_clear_target_list(&ctx->targets);
++    }
++    if (devices) {
++        lgtd_router_device_list_free(devices);
++    }
 +}
 diff --git a/effects/power_transition.h b/effects/power_transition.h
 new file mode 100644
@@ -836,7 +1013,7 @@ new file mode 100644
 +
 +struct lgtd_effect_power_transition_target {
 +    SLIST_ENTRY(lgtd_effect_power_transition_target)    link;
-+    uint64be_t                                          device_id;
++    uint8_t                                             device_id[LGTD_LIFX_ADDR_LENGTH];
 +    uint16_t                                            initial_brightness;
 +};
 +SLIST_HEAD(
@@ -845,11 +1022,11 @@ new file mode 100644
 +);
 +
 +struct lgtd_effect_power_transition_ctx {
-+    enum lgtd_effect_power_transition_type              type;
-+    struct lgtd_effect_power_transition_target_list     targets;
-+};
++    struct lgtd_effect_power_transition_target_list targets;
++    int                                             duration;
++}
 +
-+const struct lgtd_effect *lgtd_effect_power_transition(struct lgtd_proto_target_list *,
++const struct lgtd_effect *lgtd_effect_power_transition(const struct lgtd_proto_target_list *,
 +                                                       enum lgtd_effect_power_transition_type,
 +                                                       enum lgtd_effect_ctx);
 diff --git a/examples/lightsc.py b/examples/lightsc.py
@@ -916,7 +1093,28 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
              .name = "SET_WAVEFORM_OPTIONAL",
              .type = LGTD_LIFX_SET_WAVEFORM_OPTIONAL
          },
-@@ -960,6 +965,14 @@
+@@ -941,8 +946,6 @@
+     pkt->brightness = le16toh(pkt->brightness);
+     pkt->kelvin = le16toh(pkt->kelvin);
+     pkt->dim = le16toh(pkt->dim);
+-    // The bulbs actually return power values between 0 and 0xffff, not sure
+-    // what the intermediate values mean, let's pull them down to 0:
+     if (pkt->power != LGTD_LIFX_POWER_ON) {
+         pkt->power = LGTD_LIFX_POWER_OFF;
+     }
+@@ -954,12 +957,26 @@
+ {
+     assert(pkt);
+ 
++    // StatePower does uses the full 0-65535 range, and its value isn't related
++    // to the brightness or the power level, but is instead related to the
++    // transition in SetPower: if you do SetPower with a 4s transition at t 0s
++    // StatePower will be 0 at t 2s StatePower will be 32767 and at t 4s
++    // StatePower will be 65535 not matter what the targeted brightness is.
++    // See https://github.com/lopter/lightsd/issues/5
+     if (pkt->power != LGTD_LIFX_POWER_ON) {
+         pkt->power = LGTD_LIFX_POWER_OFF;
+     }
  }
  
  void
