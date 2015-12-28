@@ -20,7 +20,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  ADD_SUBDIRECTORY(compat)
  ADD_SUBDIRECTORY(core)
-+#ADD_SUBDIRECTORY(effects)
++ADD_SUBDIRECTORY(effects)
  ADD_SUBDIRECTORY(lifx)
  
  # 2.8.11 is the first version with TARGET_INCLUDE_DIRECTORIES:
@@ -41,10 +41,19 @@ diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
      client.c
      console.c
      daemon.c
-+#   effect.c
++    effect.c
      jsmn.c
      jsonrpc.c
      listen.c
+@@ -30,7 +30,7 @@
+ )
+ 
+ TARGET_LINK_LIBRARIES(
+-    lightsd lifx ${EVENT2_CORE_LIBRARY} ${TIME_MONOTONIC_LIBRARY}
++    lightsd effects lifx ${EVENT2_CORE_LIBRARY} ${TIME_MONOTONIC_LIBRARY}
+ )
+ 
+ INSTALL(TARGETS lightsd RUNTIME DESTINATION bin)
 diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
@@ -463,7 +472,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  #include "timer.h"
  #include "listen.h"
  #include "daemon.h"
-+//#include "effect.h"
++#include "effect.h"
  #include "lightsd.h"
  
  struct lgtd_opts lgtd_opts = {
@@ -471,7 +480,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      lgtd_listen_close_all();
      lgtd_command_pipe_close_all();
      lgtd_client_close_all();
-+    //lgtd_effect_stop_all();
++    lgtd_effect_stop_all();
      lgtd_lifx_broadcast_close();
      lgtd_lifx_gateway_close_all();
      lgtd_timer_stop_all();
@@ -482,11 +491,11 @@ diff --git a/core/proto.c b/core/proto.c
  #include <event2/util.h>
  
  #include "lifx/wire_proto.h"
-+//#include "effects/power_transition.h"
++#include "effects/power_transition.h"
  #include "time_monotonic.h"
  #include "lifx/bulb.h"
  #include "lifx/tagging.h"
-@@ -59,22 +60,59 @@
+@@ -59,22 +60,55 @@
  }
  
  void
@@ -526,16 +535,13 @@ diff --git a/core/proto.c b/core/proto.c
 -    struct lgtd_lifx_packet_power_state pkt = { .power = LGTD_LIFX_POWER_ON };
 -    SEND_RESULT(
 -        client, lgtd_router_send(targets, LGTD_LIFX_SET_POWER_STATE, &pkt)
+-    );
 +    bool ok;
-+//  if (transition) {
-+//  } else {
-+        struct lgtd_lifx_packet_power pkt = { .power = 16384 };
++    if (transition) {
++    } else {
++        struct lgtd_lifx_packet_power pkt = { .power = LGTD_LIFX_POWER_ON };
 +        ok = lgtd_router_send(targets, LGTD_LIFX_SET_POWER, &pkt);
-+    lgtd_info(
-+        "sending POWER_STATE = %hu, (%f)",
-+        pkt.power, pkt.power * 100. / UINT16_MAX
-     );
-+//  }
++    }
 +
 +    SEND_RESULT(client, ok);
  }
@@ -551,7 +557,7 @@ diff --git a/core/proto.c b/core/proto.c
  
      struct lgtd_router_device_list *devices = NULL;
      devices = lgtd_router_targets_to_devices(targets);
-@@ -85,6 +123,10 @@
+@@ -85,6 +119,10 @@
          return;
      }
  
@@ -562,7 +568,7 @@ diff --git a/core/proto.c b/core/proto.c
      struct lgtd_router_device *device;
      SLIST_FOREACH(device, devices, link) {
          struct lgtd_lifx_bulb *bulb = device->device;
-@@ -101,14 +143,27 @@
+@@ -101,14 +139,27 @@
  
  void
  lgtd_proto_power_off(struct lgtd_client *client,
@@ -582,14 +588,14 @@ diff --git a/core/proto.c b/core/proto.c
 +    }
 +
 +    bool ok;
-+//  if (transition) {
-+//      ok = !!lgtd_effect_power_transition_off(
-+//          targets, LGTD_EFFECT_POWER_TRANSITION_OFF, transition
-+//      );
-+//  } else {
++    if (transition) {
++        ok = !!lgtd_effect_power_transition_off(
++            targets, LGTD_EFFECT_POWER_TRANSITION_OFF, transition
++        );
++    } else {
 +        struct lgtd_lifx_packet_power pkt = { .power = LGTD_LIFX_POWER_OFF };
 +        ok = lgtd_router_send(targets, LGTD_LIFX_SET_POWER, &pkt);
-+//  }
++    }
 +
 +    SEND_RESULT(client, ok);
  }
@@ -910,18 +916,7 @@ diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
              .name = "SET_WAVEFORM_OPTIONAL",
              .type = LGTD_LIFX_SET_WAVEFORM_OPTIONAL
          },
-@@ -954,12 +959,25 @@
- {
-     assert(pkt);
- 
-+    lgtd_info(
-+        "received POWER_STATE = %hu, (%f)",
-+        pkt->power, pkt->power * 100. / UINT16_MAX
-+    );
-+
-     if (pkt->power != LGTD_LIFX_POWER_ON) {
-         pkt->power = LGTD_LIFX_POWER_OFF;
-     }
+@@ -960,6 +965,14 @@
  }
  
  void
