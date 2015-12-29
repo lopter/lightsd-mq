@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  bfa59be534ab65b5caff5b25d70a1d9fa961bfbb
+# Parent  87ea0f02cb6990de202d043b7ff05c9dbca83296
 Add a transition argument to the power functions
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -533,35 +533,6 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -1103,23 +1169,23 @@
- {
-     static const struct lgtd_jsonrpc_method methods[] = {
-         LGTD_JSONRPC_METHOD(
--            "power_on", 1, // t
-+            "power_on", 2, // t, [transition]
-             lgtd_jsonrpc_check_and_call_power_on
-         ),
-         LGTD_JSONRPC_METHOD(
--            "power_off", 1, // t
-+            "power_off", 2, // t, [transition]
-             lgtd_jsonrpc_check_and_call_power_off
-         ),
-         LGTD_JSONRPC_METHOD(
--            "power_toggle", 1, // t
-+            "power_toggle", 2, // t, [transition]
-             lgtd_jsonrpc_check_and_call_power_toggle
-         ),
-         LGTD_JSONRPC_METHOD(
--            "set_light_from_hsbk", 6, // t, h, s, b, k, t
-+            "set_light_from_hsbk", 6, // t, h, s, b, k, [transition]
-             lgtd_jsonrpc_check_and_call_set_light_from_hsbk
-         ),
-         LGTD_JSONRPC_METHOD(
--            // t, waveform, h, s, b, k, period, cycles, skew_ratio, transient
-+            // t, waveform, h, s, b, k, period, cycles, skew_ratio, [transient]
-             "set_waveform", 10,
-             lgtd_jsonrpc_check_and_call_set_waveform
-         ),
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
@@ -682,7 +653,7 @@ diff --git a/core/proto.c b/core/proto.c
  
      struct lgtd_router_device_list *devices = NULL;
      devices = lgtd_router_targets_to_devices(targets);
-@@ -85,33 +131,58 @@
+@@ -85,33 +131,67 @@
          return;
      }
  
@@ -709,8 +680,11 @@ diff --git a/core/proto.c b/core/proto.c
 +                ok = false;
 +                break;
 +            }
-+            lgtd_ieee8023mactoa(
-+                bulb->addr, target->target, LGTD_LIFX_ADDR_STRLEN
++            snprintf(
++                target->target, LGTD_LIFX_ADDR_STRLEN,
++                "%02x%02x%02x%02x%02x%02x",
++                bulb->addr[0], bulb->addr[1], bulb->addr[2], bulb->addr[3],
++                bulb->addr[4], bulb->addr[5]
 +            );
 +            SLIST_INSERT_HEAD(
 +                bulb->state.power ? &targets_to_turn_off : &targets_to_turn_on,
@@ -727,14 +701,20 @@ diff --git a/core/proto.c b/core/proto.c
  
 -    SEND_RESULT(client, true);
 +    if (transition) {
-+        ok = lgtd_effect_power_transition(
-+            &targets_to_turn_on, LGTD_EFFECT_POWER_TRANSITION_ON, transition
-+        );
-+        lgtd_proto_target_list_clear(&targets_to_turn_on);
-+        ok = ok && lgtd_effect_power_transition(
-+            &targets_to_turn_off, LGTD_EFFECT_POWER_TRANSITION_ON, transition
-+        );
-+        lgtd_proto_target_list_clear(&targets_to_turn_off);
++        if (!SLIST_EMPTY(&targets_to_turn_on)) {
++            ok = ok && lgtd_effect_power_transition(
++                &targets_to_turn_on, LGTD_EFFECT_POWER_TRANSITION_ON, transition
++            );
++            lgtd_proto_target_list_clear(&targets_to_turn_on);
++        }
++        if (!SLIST_EMPTY(&targets_to_turn_off)) {
++            ok = ok && lgtd_effect_power_transition(
++                &targets_to_turn_off,
++                LGTD_EFFECT_POWER_TRANSITION_OFF,
++                transition
++            );
++            lgtd_proto_target_list_clear(&targets_to_turn_off);
++        }
 +    }
 +
 +    SEND_RESULT(client, ok);
@@ -1218,7 +1198,7 @@ new file mode 100644
 +// if you power off a bulb and set its color right away you'll see the bulb
 +// flicker, so let's delay the restore for a bit once the transition is done:
 +enum {
-+    LGTD_EFFECT_POWER_TRANSITION_OFF_RESTORE_LIGHT_COLOR_DELAY_MSECS = 300
++    LGTD_EFFECT_POWER_TRANSITION_OFF_RESTORE_LIGHT_COLOR_DELAY_MSECS = 250
 +};
 +
 +struct lgtd_effect_power_transition_target {

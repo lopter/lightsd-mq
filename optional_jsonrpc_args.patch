@@ -1,0 +1,129 @@
+# HG changeset patch
+# Parent  bfa59be534ab65b5caff5b25d70a1d9fa961bfbb
+Correctly support optional arguments in the JSON-RPC API
+
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -459,7 +459,7 @@
+         }
+     }
+ 
+-    return si == schema_size;
++    return !objsize || (si < schema_size && schema[si].optional);
+ }
+ 
+ static bool
+@@ -716,7 +716,7 @@
+             offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, t),
+             -1,
+             lgtd_jsonrpc_type_integer,
+-            false
++            true
+         ),
+     };
+ 
+@@ -854,7 +854,7 @@
+             offsetof(struct lgtd_jsonrpc_set_waveform_args, transient),
+             -1,
+             lgtd_jsonrpc_type_bool,
+-            false
++            true
+         ),
+     };
+ 
+@@ -1102,43 +1102,24 @@
+                           int *batch_sent)
+ {
+     static const struct lgtd_jsonrpc_method methods[] = {
++        LGTD_JSONRPC_METHOD("power_on", lgtd_jsonrpc_check_and_call_power_on),
++        LGTD_JSONRPC_METHOD("power_off", lgtd_jsonrpc_check_and_call_power_off),
+         LGTD_JSONRPC_METHOD(
+-            "power_on", 1, // t
+-            lgtd_jsonrpc_check_and_call_power_on
++            "power_toggle", lgtd_jsonrpc_check_and_call_power_toggle
+         ),
+         LGTD_JSONRPC_METHOD(
+-            "power_off", 1, // t
+-            lgtd_jsonrpc_check_and_call_power_off
+-        ),
+-        LGTD_JSONRPC_METHOD(
+-            "power_toggle", 1, // t
+-            lgtd_jsonrpc_check_and_call_power_toggle
+-        ),
+-        LGTD_JSONRPC_METHOD(
+-            "set_light_from_hsbk", 6, // t, h, s, b, k, t
++            "set_light_from_hsbk",
+             lgtd_jsonrpc_check_and_call_set_light_from_hsbk
+         ),
+         LGTD_JSONRPC_METHOD(
+-            // t, waveform, h, s, b, k, period, cycles, skew_ratio, transient
+-            "set_waveform", 10,
+-            lgtd_jsonrpc_check_and_call_set_waveform
++            "set_waveform", lgtd_jsonrpc_check_and_call_set_waveform
+         ),
+         LGTD_JSONRPC_METHOD(
+-            "get_light_state", 1, // t
+-            lgtd_jsonrpc_check_and_call_get_light_state
++            "get_light_state", lgtd_jsonrpc_check_and_call_get_light_state
+         ),
+-        LGTD_JSONRPC_METHOD(
+-            "tag", 2, // t, tag
+-            lgtd_jsonrpc_check_and_call_tag
+-        ),
+-        LGTD_JSONRPC_METHOD(
+-            "untag", 2, // t, tag
+-            lgtd_jsonrpc_check_and_call_untag
+-        ),
+-        LGTD_JSONRPC_METHOD(
+-            "set_label", 2, // t, label
+-            lgtd_jsonrpc_check_and_call_set_label
+-        )
++        LGTD_JSONRPC_METHOD("tag", lgtd_jsonrpc_check_and_call_tag),
++        LGTD_JSONRPC_METHOD("untag", lgtd_jsonrpc_check_and_call_untag),
++        LGTD_JSONRPC_METHOD("set_label", lgtd_jsonrpc_check_and_call_set_label)
+     };
+ 
+     if (batch_sent) {
+@@ -1172,15 +1153,11 @@
+             continue;
+         }
+         int diff = memcmp(
+-            methods[i].name, &client->json[request.method->start], methods[i].namelen
++            methods[i].name,
++            &client->json[request.method->start],
++            methods[i].namelen
+         );
+         if (!diff) {
+-            int params_count = request.params ? request.params->size : 0;
+-            if (params_count != methods[i].params_count) {
+-                error_code = LGTD_JSONRPC_INVALID_PARAMS;
+-                error_msg = "Invalid number of parameters";
+-                goto error;
+-            }
+             struct bufferevent *client_io = NULL; // keep compilers happy...
+             if (!request.id) {
+                 // Ugly hack to behave correctly on jsonrpc notifications, it's
+diff --git a/core/jsonrpc.h b/core/jsonrpc.h
+--- a/core/jsonrpc.h
++++ b/core/jsonrpc.h
+@@ -63,15 +63,13 @@
+ struct lgtd_jsonrpc_method {
+     const char  *name;
+     int         namelen;
+-    int         params_count;
+     void        (*method)(struct lgtd_client *);
+ };
+ 
+-#define LGTD_JSONRPC_METHOD(name_, params_count_, method_) {    \
+-    .name = (name_),                                            \
+-    .namelen = sizeof((name_)) -1,                              \
+-    .params_count = (params_count_),                            \
+-    .method = (method_)                                         \
++#define LGTD_JSONRPC_METHOD(name_, method_) {   \
++    .name = (name_),                            \
++    .namelen = sizeof((name_)) -1,              \
++    .method = (method_)                         \
+ }
+ 
+ enum lgtd_jsonrpc_error_code {

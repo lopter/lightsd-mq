@@ -1,3 +1,4 @@
+optional_jsonrpc_args.patch
 add_power_transition.patch
 network_discovery.patch
 make_gateway_write_callbacks_low_priority.patch #+future
