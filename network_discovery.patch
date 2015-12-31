@@ -1,6 +1,172 @@
 # HG changeset patch
-# Parent  bfa59be534ab65b5caff5b25d70a1d9fa961bfbb
-Discover NICs connect to LANs and only discover bulbs on those
+# Parent  2f53e91d85172265ef669ad34b90677f25e25d43
+Properly broadcast LIFX discovery packets on all networks (closes GH-2)
 
-Closes GH-2.
+It does solve the issue but only is half the solution I'd like to have.
 
+This is really the proper way of achieving the same semantic as
+broadcasting to 255.255.255.255 and is kinda half the solution only.
+What I'd like to add is:
+
+- bind to all local-only networks (right now lightsd binds on 0.0.0.0);
+- watch for network interfaces changes so we can re-bind if necessary,
+  this is really the hard and annoying part as each OS has its own
+  mechanism for this and some (e.g: BSDs) don't even have it AFAIK.
+
+So that people running lightsd on a machine connected to Internet (that
+can happen quickly on a laptop or a phone/tabled) don't have to firewall
+56700.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,8 +4,8 @@
+ PROJECT(LIGHTSD C)
+ 
+ SET(CPACK_PACKAGE_VERSION_MAJOR "1")
+-SET(CPACK_PACKAGE_VERSION_MINOR "1")
+-SET(CPACK_PACKAGE_VERSION_PATCH "3")
++SET(CPACK_PACKAGE_VERSION_MINOR "2")
++SET(CPACK_PACKAGE_VERSION_PATCH "0")
+ SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+ 
+ MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
+diff --git a/lifx/broadcast.c b/lifx/broadcast.c
+--- a/lifx/broadcast.c
++++ b/lifx/broadcast.c
+@@ -17,11 +17,14 @@
+ 
+ #include <sys/queue.h>
+ #include <sys/tree.h>
++#include <sys/socket.h>
+ #include <arpa/inet.h>
++#include <net/if.h>
+ #include <assert.h>
+ #include <endian.h>
+ #include <err.h>
+ #include <errno.h>
++#include <ifaddrs.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -51,16 +54,35 @@
+ };
+ 
+ static bool
++lgtd_lifx_broadcast_send_packet(void *pkt,
++                                int pkt_sz,
++                                const struct sockaddr *addr,
++                                ev_socklen_t addrlen)
++{
++    char addr_str[INET6_ADDRSTRLEN];
++    LGTD_SOCKADDRTOA(addr, addr_str);
++    lgtd_debug("broadcasting LIFX discovery packet on %s", addr_str);
++
++    int nbytes, socket = lgtd_lifx_broadcast_endpoint.socket;
++    do {
++        nbytes = sendto(socket, pkt, pkt_sz, 0, addr, addrlen);
++    } while (nbytes == -1 && EVUTIL_SOCKET_ERROR() == EINTR);
++
++    if (nbytes != pkt_sz) {
++        lgtd_warn("couldn't broadcast LIFX discovery packet on %s", addr_str);
++        return false;
++    }
++
++    return true;
++}
++
++static bool
+ lgtd_lifx_broadcast_handle_write(void)
+ {
+     assert(lgtd_lifx_broadcast_endpoint.socket != -1);
+ 
+-    struct sockaddr_in lifx_addr = {
+-        .sin_family = AF_INET,
+-        .sin_addr = { INADDR_BROADCAST },
+-        .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
+-        .sin_zero = { 0 }
+-    };
++    uint16_t lifx_port = htons(LGTD_LIFX_PROTOCOL_PORT);
++
+     struct lgtd_lifx_packet_header get_pan_gateway;
+     lgtd_lifx_wire_setup_header(
+         &get_pan_gateway,
+@@ -70,31 +92,56 @@
+         LGTD_LIFX_GET_PAN_GATEWAY
+     );
+ 
+-    int nbytes;
+-retry:
+-    nbytes = sendto(
+-        lgtd_lifx_broadcast_endpoint.socket,
+-        (void *)&get_pan_gateway,
+-        sizeof(get_pan_gateway),
+-        0,
+-        (const struct sockaddr *)&lifx_addr,
+-        sizeof(lifx_addr)
+-    );
+-    if (nbytes == sizeof(get_pan_gateway)) {
+-        if (event_del(lgtd_lifx_broadcast_endpoint.write_ev)) {
+-            lgtd_err(1, "can't setup events");
++    bool ok = true;
++    struct ifaddrs *ifaddrs = NULL;
++    if (getifaddrs(&ifaddrs)) {
++        struct sockaddr_in lifx_bcast_addr = {
++            .sin_family = AF_INET,
++            .sin_addr = { INADDR_BROADCAST },
++            .sin_port = lifx_port,
++            .sin_zero = { 0 }
++        };
++        char addr_str[INET6_ADDRSTRLEN];
++        lgtd_warn(
++            "can't fetch the list of network interfaces, falling back on %s",
++            LGTD_SOCKADDRTOA((struct sockaddr *)&lifx_bcast_addr, addr_str)
++        );
++        ok = lgtd_lifx_broadcast_send_packet(
++            &get_pan_gateway,
++            sizeof(get_pan_gateway),
++            (struct sockaddr *)&lifx_bcast_addr,
++            sizeof(lifx_bcast_addr)
++        );
++    } else {
++        for (struct ifaddrs *ifa = ifaddrs; ifa; ifa = ifa->ifa_next) {
++            if (ifa->ifa_broadaddr != NULL
++                && (ifa->ifa_flags & IFF_BROADCAST)
++                && ifa->ifa_netmask != NULL) {
++                ev_socklen_t addrlen;
++                struct sockaddr *addr = ifa->ifa_broadaddr;
++                if (addr->sa_family == AF_INET) {
++                    ((struct sockaddr_in *)addr)->sin_port = lifx_port;
++                    addrlen = sizeof(struct sockaddr_in);
++                } else if (addr->sa_family == AF_INET6) {
++                    // TODO: add support for IPv6 on the receive path.
++                    ((struct sockaddr_in6 *)addr)->sin6_port = lifx_port;
++                    addrlen = sizeof(struct sockaddr_in6);
++                } else {
++                    continue;
++                }
++                ok = ok || lgtd_lifx_broadcast_send_packet(
++                    &get_pan_gateway, sizeof(get_pan_gateway), addr, addrlen
++                );
++            }
+         }
+-        return true;
++        freeifaddrs(ifaddrs);
+     }
+-    if (nbytes == -1) {
+-        if (EVUTIL_SOCKET_ERROR() == EINTR) {
+-            goto retry;
+-        }
+-        lgtd_warn("can't broadcast discovery packet");
+-    } else {
+-        lgtd_warnx("can't broadcast discovery packet");
++
++    if (ok && event_del(lgtd_lifx_broadcast_endpoint.write_ev)) {
++        lgtd_err(1, "can't setup events");
+     }
+-    return false;
++
++    return ok;
+ }
+ 
+ static void

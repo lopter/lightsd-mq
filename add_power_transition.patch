@@ -1,21 +1,10 @@
 # HG changeset patch
-# Parent  87ea0f02cb6990de202d043b7ff05c9dbca83296
+# Parent  dfd2e5cf185c1db0f2072f78528a8d4cf0118043
 Add a transition argument to the power functions
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -4,8 +4,8 @@
- PROJECT(LIGHTSD C)
- 
- SET(CPACK_PACKAGE_VERSION_MAJOR "1")
--SET(CPACK_PACKAGE_VERSION_MINOR "1")
--SET(CPACK_PACKAGE_VERSION_PATCH "2")
-+SET(CPACK_PACKAGE_VERSION_MINOR "2")
-+SET(CPACK_PACKAGE_VERSION_PATCH "0")
- SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
- 
- MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
 @@ -88,6 +88,7 @@
  
  ADD_SUBDIRECTORY(compat)
@@ -536,7 +525,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 diff --git a/core/lightsd.c b/core/lightsd.c
 --- a/core/lightsd.c
 +++ b/core/lightsd.c
-@@ -52,6 +52,7 @@
+@@ -51,6 +51,7 @@
  #include "timer.h"
  #include "listen.h"
  #include "daemon.h"
@@ -544,7 +533,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  #include "lightsd.h"
  
  struct lgtd_opts lgtd_opts = {
-@@ -81,6 +82,7 @@
+@@ -181,6 +182,7 @@
      lgtd_listen_close_all();
      lgtd_command_pipe_close_all();
      lgtd_client_close_all();

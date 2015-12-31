@@ -2,6 +2,20 @@
 # Parent  bfa59be534ab65b5caff5b25d70a1d9fa961bfbb
 Correctly support optional arguments in the JSON-RPC API
 
+Passing too many arguments as an array also properly fails now.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,7 +5,7 @@
+ 
+ SET(CPACK_PACKAGE_VERSION_MAJOR "1")
+ SET(CPACK_PACKAGE_VERSION_MINOR "1")
+-SET(CPACK_PACKAGE_VERSION_PATCH "2")
++SET(CPACK_PACKAGE_VERSION_PATCH "3")
+ SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+ 
+ MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
