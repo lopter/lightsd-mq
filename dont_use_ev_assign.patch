@@ -13,7 +13,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  
  #include "lifx/wire_proto.h"
  #include "time_monotonic.h"
-@@ -72,34 +71,16 @@
+@@ -72,36 +71,22 @@
  
  struct event_base *lgtd_ev_base = NULL;
  
@@ -44,14 +44,22 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  static void
  lgtd_signal_event_callback(int signum, short events, void *ctx)
  {
-     assert(ctx);
- 
--    // NOTE: syslog isn't signal safe, don't log anything in this function.
+-    assert(ctx);
 -
+-    // NOTE: syslog isn't signal safe, don't log anything in this function.
++    int i = (int)ctx;
++    assert(i >= 0);
++    assert(i < (int)LGTD_ARRAY_SIZE(lgtd_signals));
++    assert(i < (int)LGTD_ARRAY_SIZE(lgtd_signal_evs));
++    assert(signum == lgtd_signals[i]);
+ 
      lgtd_last_signal_received = signum;
-     event_del((struct event *)ctx);  // restore default behavior
+-    event_del((struct event *)ctx);  // restore default behavior
++    event_del(lgtd_signal_evs[i]);  // restore default behavior
      event_base_loopbreak(lgtd_ev_base);
-@@ -126,20 +107,18 @@
+     (void)events;
+ }
+@@ -126,20 +111,21 @@
  }
  
  static void
@@ -64,16 +72,17 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 -    for (int i = 0; i != LGTD_ARRAY_SIZE(signals); i++) {
 -        evsignal_assign(
 -            &sigevs[i],
--            lgtd_ev_base,
--            signals[i],
--            lgtd_signal_event_callback,
--            &sigevs[i]
-+    for (intptr_t i = 0; i != LGTD_ARRAY_SIZE(lgtd_signals); i++) {
++    for (int i = 0; i != LGTD_ARRAY_SIZE(lgtd_signals); i++) {
 +        lgtd_signal_evs[i] = evsignal_new(
+             lgtd_ev_base,
+-            signals[i],
++            lgtd_signals[i],
+             lgtd_signal_event_callback,
+-            &sigevs[i]
 +            // event_self_cbarg() would make things cleaner, but this was
 +            // unfortunately added in libevent 2.1 which hasn't been released
 +            // as of 2016:
-+            lgtd_ev_base, lgtd_signals[i], lgtd_signal_event_callback, (void *)i
++            (void *)(intptr_t)i // cast twice for -Wint-to-void-pointer-cast
          );
 -        evsignal_add(&sigevs[i], NULL);
 +        if (!lgtd_signal_evs[i] || evsignal_add(lgtd_signal_evs[i], NULL)) {
@@ -82,7 +91,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      }
  
      struct sigaction act = { .sa_handler = SIG_IGN };
-@@ -149,6 +128,15 @@
+@@ -149,6 +135,15 @@
  }
  
  static void
@@ -98,7 +107,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  lgtd_usage(const char *progname)
  {
      printf(
-@@ -186,6 +174,26 @@
+@@ -186,6 +181,26 @@
      exit(0);
  }
  
@@ -125,7 +134,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  int
  main(int argc, char *argv[], char *envp[])
  {
-@@ -195,7 +203,7 @@
+@@ -195,7 +210,7 @@
      lgtd_daemon_setup_proctitle(argc, argv, envp);
  
      lgtd_configure_libevent();
