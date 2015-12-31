@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  dfd2e5cf185c1db0f2072f78528a8d4cf0118043
+# Parent  1e86f3c192de24d85edf916e1dc2bad85a578c33
 Add a transition argument to the power functions
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -533,7 +533,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  #include "lightsd.h"
  
  struct lgtd_opts lgtd_opts = {
-@@ -181,6 +182,7 @@
+@@ -188,6 +189,7 @@
      lgtd_listen_close_all();
      lgtd_command_pipe_close_all();
      lgtd_client_close_all();
@@ -849,7 +849,7 @@ diff --git a/effects/power_transition.c b/effects/power_transition.c
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.c
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,303 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -1019,10 +1019,8 @@ new file mode 100644
 +        lgtd_effect_power_transition_off_power_off(&ctx->targets);
 +        break;
 +    default:
-+#ifndef NDEBUG
-+        lgtd_warnx("%s called with apply_cnt=%d", __func__, effect->apply_cnt);
-+        abort();
-+#endif
++        // we'll end up there if the transition was less long than
++        // LGTD_EFFECT_POWER_TRANSITION_OFF_RESTORE_LIGHT_COLOR_DELAY_MSECS
 +        break;
 +    }
 +}

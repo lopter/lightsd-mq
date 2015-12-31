@@ -3,6 +3,7 @@ optional_jsonrpc_args.patch
 network_discovery.patch
 dont_use_ev_assign.patch
 add_power_transition.patch
+open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future
 add_ipv4_to_ieee8023mac.patch #+future #+linux

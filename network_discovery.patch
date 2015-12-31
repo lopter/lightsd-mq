@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  2f53e91d85172265ef669ad34b90677f25e25d43
+# Parent  722eaeb15d6f8eeffa3750987c72e9e1c0146215
 Properly broadcast LIFX discovery packets on all networks (closes GH-2)
 
 It does solve the issue but only is half the solution I'd like to have.
@@ -91,7 +91,7 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
      struct lgtd_lifx_packet_header get_pan_gateway;
      lgtd_lifx_wire_setup_header(
          &get_pan_gateway,
-@@ -70,31 +92,56 @@
+@@ -70,31 +92,57 @@
          LGTD_LIFX_GET_PAN_GATEWAY
      );
  
@@ -145,9 +145,10 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 +                } else {
 +                    continue;
 +                }
-+                ok = ok || lgtd_lifx_broadcast_send_packet(
++                bool sent = lgtd_lifx_broadcast_send_packet(
 +                    &get_pan_gateway, sizeof(get_pan_gateway), addr, addrlen
 +                );
++                ok = sent || ok;
 +            }
          }
 -        return true;

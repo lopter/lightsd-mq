@@ -1,0 +1,63 @@
+# HG changeset patch
+# Parent  be66b2a6fedcf92e4c9bc27592c034f108a9febe
+Discover bulbs lazily on top of the regular discovery process
+
+By instantiating LIFX gateways on any kind of bulb response and not
+just on PAN_GATEWAY packets.
+
+diff --git a/lifx/gateway.c b/lifx/gateway.c
+--- a/lifx/gateway.c
++++ b/lifx/gateway.c
+@@ -123,10 +123,15 @@
+         assert(!memcmp(peer, gw->peer, addrlen));
+     } else {
+         gw = lgtd_lifx_gateway_get(peer, addrlen);
+-        if (!gw && hdr->packet_type == LGTD_LIFX_PAN_GATEWAY) {
++        // We should only open a new gateway on a LGTD_LIFX_PAN_GATEWAY packet
++        // but it looks like non-original bulbs aren't sending it sometimes, so
++        // let's lazily open a new gateway on any bulb response. Bulb responses
++        // are identified by a missing encode function (lightsd can receive
++        // broadcast traffic from other clients):
++        if (!gw && !pkt_info->encode) {
+             gw = lgtd_lifx_gateway_open(peer, addrlen, hdr->site, received_at);
+             if (!gw) {
+-                lgtd_warn("can't allocate gateway");
++                lgtd_warn("can't allocate a new gateway");
+                 return;
+             }
+         }
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -112,7 +112,7 @@
+ #define NO_PAYLOAD                                          \
+     .encode = lgtd_lifx_wire_null_packet_encoder_decoder
+ #define RESPONSE_ONLY                                       \
+-    .encode = lgtd_lifx_wire_null_packet_encoder_decoder
++    .encode = NULL
+ #define REQUEST_ONLY                                        \
+     .decode = lgtd_lifx_wire_null_packet_encoder_decoder,   \
+     .handle = lgtd_lifx_wire_null_packet_handler
+@@ -134,7 +134,6 @@
+             .type = LGTD_LIFX_PAN_GATEWAY,
+             .size = sizeof(struct lgtd_lifx_packet_pan_gateway),
+             .decode = DECODER(lgtd_lifx_wire_decode_pan_gateway),
+-            .encode = ENCODER(lgtd_lifx_wire_encode_pan_gateway),
+             .handle = HANDLER(lgtd_lifx_gateway_handle_pan_gateway)
+         },
+         {
+@@ -932,14 +931,6 @@
+ }
+ 
+ void
+-lgtd_lifx_wire_encode_pan_gateway(struct lgtd_lifx_packet_pan_gateway *pkt)
+-{
+-    assert(pkt);
+-
+-    pkt->port = htole32(pkt->port);
+-}
+-
+-void
+ lgtd_lifx_wire_decode_light_status(struct lgtd_lifx_packet_light_status *pkt)
+ {
+     assert(pkt);
