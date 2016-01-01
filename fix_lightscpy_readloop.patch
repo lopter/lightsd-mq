@@ -1,6 +1,8 @@
 # HG changeset patch
 # Parent  c8614ad2dc1133c8d50e974afd66d84231b41c78
-FIx lightsc.py's read loop
+Fix lightsc.py's read loop
+
+It now handles arbitrarily large and partial responses properly.
 
 We do need to do non-blocking IO in case the last received buffer comes
 back full in this case doing another read would block the whole thing.
