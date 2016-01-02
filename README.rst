@@ -9,6 +9,6 @@ you which ones.
 
 .. _Mercurial: https://mercurial.selenic.com/
 .. _hg-git: http://hg-git.github.io/
-.. _series: https://github.com/lopter/lightsd-mq
+.. _series: https://github.com/lopter/lightsd-mq/blob/master/series
 
 .. vim: set tw=80 spelllang=en spell:
