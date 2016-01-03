@@ -4,6 +4,7 @@ network_discovery.patch
 dont_use_ev_assign.patch
 add_power_transition.patch
 fix_lightscpy_readloop.patch
+tests_wip.pach
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future
 use_echo_request_reply_to_measure_latency.patch #+future

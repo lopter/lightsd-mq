@@ -176,7 +176,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
  import json
  import locale
  import os
-@@ -42,6 +43,10 @@
+@@ -42,6 +43,24 @@
  
  class LightsClient:
  
@@ -184,10 +184,24 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +    TIMEOUT = 2  # seconds
 +    ENCODING = "utf-8"
 +
++    class Error(Exception):
++        pass
++
++    class TimeoutError(Error):
++        pass
++
++    class JSONError(Error):
++
++        def __init__(self, response):
++            self._response = response
++
++        def __str__(self):
++            return "received invalid JSON: {}".format(self._response)
++
      def __init__(self, url):
          self.url = url
  
-@@ -55,6 +60,7 @@
+@@ -55,6 +74,7 @@
              self._socket = socket.create_connection((parts.hostname, parts.port))
          else:
              raise ValueError("Unsupported url {}".format(url))
@@ -195,7 +209,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
  
          self._pipeline = []
          self._batch = False
-@@ -75,16 +81,20 @@
+@@ -75,16 +95,24 @@
          }
  
      def _execute_payload(self, payload):
@@ -203,29 +217,32 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -        self._socket.send(json.dumps(payload).encode("utf-8"))
 -        # FIXME: proper read loop
 -        response = self._socket.recv(64 * 1024).decode("utf-8")
--        try:
++        response = bytearray()
+         try:
 -            response = json.loads(response)
 -        except Exception:
 -            print("received invalid json: {}".format(response))
-+        payload = json.dumps(payload).encode(self.ENCODING, "surrogateescape")
-+        self._socket.sendall(payload)
++            payload = json.dumps(payload)
++            payload = payload.encode(self.ENCODING, "surrogateescape")
++            self._socket.sendall(payload)
  
 -        return response
-+        response = bytearray()
-+        while True:
-+            response += self._socket.recv(self.READ_SIZE)
-+            try:
-+                json.loads(response.decode(self.ENCODING, "ignore"))
-+                break
-+            except Exception:
-+                continue
-+
-+        response = response.decode(self.ENCODING, "surrogateescape")
-+        return json.loads(response)
++            while True:
++                response += self._socket.recv(self.READ_SIZE)
++                try:
++                    return json.loads(response.decode(
++                        self.ENCODING, "surrogateescape"
++                    ))
++                except Exception:
++                    continue
++        except socket.timeout:
++            if not response:
++                raise self.TimeoutError
++            raise self.JSONError(response)
  
      def _jsonrpc_call(self, method, params):
          payload = self._make_payload(method, params)
-@@ -203,11 +213,6 @@
+@@ -203,11 +231,6 @@
  
  def _drop_to_shell(lightsc):
      c = lightsc  # noqa
@@ -237,7 +254,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
      banner = (
          "Connected to {}, use the variable c to interact with your "
          "bulbs:\n\n>>> r = c.get_light_state(\"*\")".format(c.url)
-@@ -231,7 +236,7 @@
+@@ -231,7 +254,7 @@
          lightsdrundir = subprocess.check_output(["lightsd", "--rundir"])
      except Exception as ex:
          print(
@@ -246,7 +263,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
              "({})\nTrying build/socket...".format(ex),
              file=sys.stderr
          )
-@@ -242,7 +247,7 @@
+@@ -242,7 +265,7 @@
          lightsdrundir = lightsdrundir.decode(encoding).strip()
  
      parser = argparse.ArgumentParser(
