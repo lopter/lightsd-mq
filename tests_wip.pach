@@ -1,6 +1,27 @@
 # HG changeset patch
 # Parent  40217e281e02c5c4be4aba4475884a435a441504
 
+diff --git a/core/jsonrpc.c b/core/jsonrpc.c
+--- a/core/jsonrpc.c
++++ b/core/jsonrpc.c
+@@ -459,6 +459,17 @@
+                                                         int ntokens,
+                                                         const char *json)
+ {
++    if (!ntokens) {
++        // "params" were omitted, make sure no args were required or that they
++        // are all optional:
++        while (schema_size--) {
++            if (!schema[schema_size].optional) {
++                return false;
++            }
++        }
++        return true;
++    }
++
+     switch (tokens[0].type) {
+     case JSMN_OBJECT:
+         return lgtd_jsonrpc_extract_values_from_schema_and_dict(
 diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
 --- a/tests/core/CMakeLists.txt
 +++ b/tests/core/CMakeLists.txt
@@ -120,7 +141,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c b/tests/
          errx(1, "missing client!");
      }
  
-+    if (transition) {
++    if (transition != 420) {
 +        errx(1, "Invalid transition=%d (expected 420)", transition);
 +    }
 +
@@ -168,7 +189,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c b/tests/c
          errx(1, "missing client!");
      }
  
-+    if (transition) {
++    if (transition != 420) {
 +        errx(1, "Invalid transition=%d (expected 420)", transition);
 +    }
 +
@@ -216,7 +237,7 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c b/tes
          errx(1, "missing client!");
      }
  
-+    if (transition) {
++    if (transition != 420) {
 +        errx(1, "Invalid transition=%d (expected 420)", transition);
 +    }
 +
@@ -249,6 +270,15 @@ diff --git a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c b/tests/co
  
      errx(1, "lgtd_proto_power_on shouldn't have been called");
  }
+@@ -40,7 +42,7 @@
+         "\"error\": {"
+             "\"code\": -32602, "
+             "\"message\": "
+-            "\"Invalid number of parameters\""
++            "\"Invalid parameters\""
+         "}"
+     "}");
+ 
 diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c b/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
 --- a/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
 +++ b/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
