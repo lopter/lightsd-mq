@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  3172a7a9f7a049189cc8586581a27f5b0962bfb9
+# Parent  e66626015241fb91ca667737bba4f1f5c3142433
 Add a transition argument to the power functions
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -1209,35 +1209,28 @@ new file mode 100644
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
-@@ -75,6 +75,7 @@
-         }
- 
-     def _execute_payload(self, payload):
-+        print(payload)
-         self._socket.send(json.dumps(payload).encode("utf-8"))
-         # FIXME: proper read loop
-         response = self._socket.recv(64 * 1024).decode("utf-8")
-@@ -168,14 +169,17 @@
+@@ -168,14 +168,18 @@
              transient=transient
          )
  
 -    def power_on(self, target):
 -        return self._jsonrpc_call("power_on", {"target": target})
-+    def power_on(self, target, transition=None):
-+        args = [target] + ([transition] if transition is not None else [])
-+        return self._jsonrpc_call("power_on", args)
++    def _power_call(self, call, target, transition):
++        args = [target, transition] if transition is not None else [target]
++        self._jsonrpc_call(call, args)
  
 -    def power_off(self, target):
 -        return self._jsonrpc_call("power_off", {"target": target})
-+    def power_off(self, target, transition=None):
-+        args = [target] + ([transition] if transition is not None else [])
-+        return self._jsonrpc_call("power_off", args)
++    def power_on(self, target, transition=None):
++        return self._jsonrpc_call("power_on", target, transition)
  
 -    def power_toggle(self, target):
 -        return self._jsonrpc_call("power_toggle", {"target": target})
++    def power_off(self, target, transition=None):
++        return self._jsonrpc_call("power_off", target, transition)
++
 +    def power_toggle(self, target, transition=None):
-+        args = [target] + ([transition] if transition is not None else [])
-+        return self._jsonrpc_call("power_toggle", args)
++        return self._jsonrpc_call("power_toggle", target, transition)
  
      def get_light_state(self, target):
          return self._jsonrpc_call("get_light_state", [target])

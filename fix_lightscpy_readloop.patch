@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c8614ad2dc1133c8d50e974afd66d84231b41c78
+# Parent  d65cba5a051329c02b6d339ff3ba0685c8a94376
 Fix lightsc.py's read loop and document it
 
 It now handles arbitrarily large and partial responses properly.
@@ -30,35 +30,7 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
  +-----------------------------+------------------------------------------------+
  | ``label``                   | directly target the bulb with the given Label  |
  +-----------------------------+------------------------------------------------+
-@@ -52,21 +57,23 @@
- 
-    Power off the given bulb(s) with an optional transition.
- 
--   :param int transition: The time in ms it will take for the bulb to turn off.
-+   :param int transition: Optional time in ms it will take for the bulb to turn
-+                          off.
- 
- .. function:: power_on(target[, transition])
- 
-    Power on the given bulb(s) with an optional transition.
- 
--   :param int transition: The time in ms it will take for the bulb to turn on.
-+   :param int transition: Optional time in ms it will take for the bulb to turn
-+                          on.
- 
- .. function:: power_toggle(target[, transition])
- 
-    Power on (if they are off) or power off (if they are on) the given bulb(s)
-    with an optional transition.
- 
--   :param int transition: The time in ms it will take for the bulb to turn on
--                          off.
-+   :param int transition: Optional time in ms it will take for the bulb to turn
-+                          on off.
- 
- .. function:: set_light_from_hsbk(target, h, s, b, k, transition)
- 
-@@ -152,9 +159,105 @@
+@@ -144,9 +149,105 @@
  
        untag("#myexistingtag", "myexistingtag")
  
@@ -168,18 +140,11 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
-@@ -30,6 +30,7 @@
- 
- import argparse
- import contextlib
-+import fcntl
- import json
- import locale
- import os
-@@ -42,6 +43,24 @@
+@@ -42,8 +42,28 @@
  
  class LightsClient:
  
+-    def __init__(self, url):
 +    READ_SIZE = 4096
 +    TIMEOUT = 2  # seconds
 +    ENCODING = "utf-8"
@@ -198,22 +163,27 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 +        def __str__(self):
 +            return "received invalid JSON: {}".format(self._response)
 +
-     def __init__(self, url):
++    def __init__(self, url, encoding=ENCODING, timeout=TIMEOUT,
++                 read_size=READ_SIZE):
          self.url = url
++        self.encoding = encoding
  
-@@ -55,6 +74,7 @@
+         parts = urllib.parse.urlparse(args.url)
+ 
+@@ -55,7 +75,9 @@
              self._socket = socket.create_connection((parts.hostname, parts.port))
          else:
              raise ValueError("Unsupported url {}".format(url))
-+        self._socket.settimeout(self.TIMEOUT)
++        self._socket.settimeout(timeout)
  
++        self._read_size = read_size
          self._pipeline = []
          self._batch = False
-@@ -75,16 +95,24 @@
+ 
+@@ -75,15 +97,24 @@
          }
  
      def _execute_payload(self, payload):
--        print(payload)
 -        self._socket.send(json.dumps(payload).encode("utf-8"))
 -        # FIXME: proper read loop
 -        response = self._socket.recv(64 * 1024).decode("utf-8")
@@ -223,15 +193,15 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -        except Exception:
 -            print("received invalid json: {}".format(response))
 +            payload = json.dumps(payload)
-+            payload = payload.encode(self.ENCODING, "surrogateescape")
++            payload = payload.encode(self.encoding, "surrogateescape")
 +            self._socket.sendall(payload)
  
 -        return response
 +            while True:
-+                response += self._socket.recv(self.READ_SIZE)
++                response += self._socket.recv(self._read_size)
 +                try:
 +                    return json.loads(response.decode(
-+                        self.ENCODING, "surrogateescape"
++                        self.encoding, "surrogateescape"
 +                    ))
 +                except Exception:
 +                    continue
@@ -242,7 +212,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
  
      def _jsonrpc_call(self, method, params):
          payload = self._make_payload(method, params)
-@@ -203,11 +231,6 @@
+@@ -199,11 +230,6 @@
  
  def _drop_to_shell(lightsc):
      c = lightsc  # noqa
@@ -254,7 +224,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
      banner = (
          "Connected to {}, use the variable c to interact with your "
          "bulbs:\n\n>>> r = c.get_light_state(\"*\")".format(c.url)
-@@ -231,7 +254,7 @@
+@@ -227,7 +253,7 @@
          lightsdrundir = subprocess.check_output(["lightsd", "--rundir"])
      except Exception as ex:
          print(
@@ -263,7 +233,7 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
              "({})\nTrying build/socket...".format(ex),
              file=sys.stderr
          )
-@@ -242,7 +265,7 @@
+@@ -238,7 +264,7 @@
          lightsdrundir = lightsdrundir.decode(encoding).strip()
  
      parser = argparse.ArgumentParser(
