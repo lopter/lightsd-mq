@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  1e86f3c192de24d85edf916e1dc2bad85a578c33
+# Parent  3172a7a9f7a049189cc8586581a27f5b0962bfb9
 Add a transition argument to the power functions
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -341,7 +341,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          || lgtd_jsonrpc_type_array(t, json);
  }
  
-@@ -580,7 +569,7 @@
+@@ -591,7 +580,7 @@
              "id",
              offsetof(struct lgtd_jsonrpc_request, id),
              -1,
@@ -350,7 +350,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              true
          )
      };
-@@ -631,7 +620,7 @@
+@@ -642,7 +631,7 @@
  
      for (int ti = target_ntokens; ti--;) {
          int token_len = LGTD_JSONRPC_TOKEN_LEN(&target[ti]);
@@ -359,7 +359,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              struct lgtd_proto_target *t = malloc(sizeof(*t) + token_len + 1);
              if (!t) {
                  lgtd_warn("can't allocate a new target");
-@@ -680,7 +669,7 @@
+@@ -691,7 +680,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target),
              offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, target_ntokens),
@@ -368,7 +368,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -790,7 +779,7 @@
+@@ -801,7 +790,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_set_waveform_args, target),
              offsetof(struct lgtd_jsonrpc_set_waveform_args, target_ntokens),
@@ -377,7 +377,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -931,6 +920,89 @@
+@@ -942,6 +931,89 @@
  }
  
  static bool
@@ -467,7 +467,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  lgtd_jsonrpc_extract_target_list(struct lgtd_proto_target_list *targets,
                                   struct lgtd_client *client)
  {
-@@ -943,7 +1015,7 @@
+@@ -954,7 +1026,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_target_args, target),
              offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
@@ -476,7 +476,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          )
      };
-@@ -964,25 +1036,19 @@
+@@ -975,25 +1047,19 @@
      );
  }
  
@@ -513,7 +513,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  static void
  lgtd_jsonrpc_check_and_call_proto_tag_or_untag_or_set_label(
          struct lgtd_client *client,
-@@ -1001,7 +1067,7 @@
+@@ -1012,7 +1078,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_target_args, target),
              offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
@@ -1346,3 +1346,682 @@ diff --git a/lifx/wire_proto.h b/lifx/wire_proto.h
  
  void lgtd_lifx_wire_encode_light_color(struct lgtd_lifx_packet_light_color *);
  void lgtd_lifx_wire_encode_waveform(struct lgtd_lifx_packet_waveform *);
+diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
+--- a/tests/core/CMakeLists.txt
++++ b/tests/core/CMakeLists.txt
+@@ -2,10 +2,12 @@
+     ${LIGHTSD_SOURCE_DIR}
+     ${LIGHTSD_SOURCE_DIR}/core/
+     ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_SOURCE_DIR}/../
+     ${CMAKE_CURRENT_SOURCE_DIR}/../lifx
+     ${LIGHTSD_BINARY_DIR}
+     ${LIGHTSD_BINARY_DIR}/core/
+     ${CMAKE_CURRENT_BINARY_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}/../
+     ${CMAKE_CURRENT_BINARY_DIR}/../lifx
+ )
+ 
+diff --git a/tests/core/jsonrpc/test_jsonrpc_batch.c b/tests/core/jsonrpc/test_jsonrpc_batch.c
+--- a/tests/core/jsonrpc/test_jsonrpc_batch.c
++++ b/tests/core/jsonrpc/test_jsonrpc_batch.c
+@@ -12,12 +12,17 @@
+ 
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+     }
+ 
++    if (transition) {
++        errx(1, "transition=%d (expected 0)", transition);
++    }
++
+     if (strcmp(SLIST_FIRST(targets)->target, "*")) {
+         errx(
+             1, "Invalid target [%s] (expected=[*])",
+diff --git a/tests/core/jsonrpc/test_jsonrpc_batch_notifications_only.c b/tests/core/jsonrpc/test_jsonrpc_batch_notifications_only.c
+--- a/tests/core/jsonrpc/test_jsonrpc_batch_notifications_only.c
++++ b/tests/core/jsonrpc/test_jsonrpc_batch_notifications_only.c
+@@ -12,12 +12,17 @@
+ 
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+     }
+ 
++    if (transition) {
++        errx(1, "proto_power_on got transition=%d (expected 0)", transition);
++    }
++
+     if (strcmp(SLIST_FIRST(targets)->target, "*")) {
+         errx(
+             1, "Invalid target [%s] (expected=[*])",
+diff --git a/tests/core/jsonrpc/test_jsonrpc_batch_one_invalid_request.c b/tests/core/jsonrpc/test_jsonrpc_batch_one_invalid_request.c
+--- a/tests/core/jsonrpc/test_jsonrpc_batch_one_invalid_request.c
++++ b/tests/core/jsonrpc/test_jsonrpc_batch_one_invalid_request.c
+@@ -11,12 +11,17 @@
+ 
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+     }
+ 
++    if (transition) {
++        errx(1, "proto_power_on got transition=%d (expected 0)", transition);
++    }
++
+     if (strcmp(SLIST_FIRST(targets)->target, "*")) {
+         errx(
+             1, "Invalid target [%s] (expected=[*])",
+diff --git a/tests/core/jsonrpc/test_jsonrpc_batch_one_notification.c b/tests/core/jsonrpc/test_jsonrpc_batch_one_notification.c
+--- a/tests/core/jsonrpc/test_jsonrpc_batch_one_notification.c
++++ b/tests/core/jsonrpc/test_jsonrpc_batch_one_notification.c
+@@ -12,12 +12,17 @@
+ 
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+     }
+ 
++    if (transition) {
++        errx(1, "proto_power_on got transition=%d (expected 0)", transition);
++    }
++
+     if (strcmp(SLIST_FIRST(targets)->target, "*")) {
+         errx(
+             1, "Invalid target [%s] (expected=[*])",
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off.c
+@@ -12,12 +12,17 @@
+ 
+ void
+ lgtd_proto_power_off(struct lgtd_client *client,
+-                     const struct lgtd_proto_target_list *targets)
++                     const struct lgtd_proto_target_list *targets,
++                     int transition)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+     }
+ 
++    if (transition != 420) {
++        errx(1, "Invalid transition=%d (expected 420)", transition);
++    }
++
+     if (strcmp(SLIST_FIRST(targets)->target, "*")) {
+         errx(
+             1, "Invalid target [%s] (expected=[*])",
+@@ -34,7 +39,7 @@
+     const char json[] = ("{"
+         "\"jsonrpc\": \"2.0\","
+         "\"method\": \"power_off\","
+-        "\"params\": {\"target\": \"*\"},"
++        "\"params\": {\"target\": \"*\", \"transition\": 420},"
+         "\"id\": \"42\""
+     "}");
+     int parsed = parse_json(
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_off_missing_target.c
+@@ -12,10 +12,12 @@
+ 
+ void
+ lgtd_proto_power_off(struct lgtd_client *client,
+-                     const struct lgtd_proto_target_list *targets)
++                     const struct lgtd_proto_target_list *targets,
++                     int transition)
+ {
+     (void)targets;
+     (void)client;
++    (void)transition;
+     power_off_called = true;
+ }
+ 
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on.c
+@@ -12,12 +12,17 @@
+ 
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+     }
+ 
++    if (transition != 420) {
++        errx(1, "Invalid transition=%d (expected 420)", transition);
++    }
++
+     if (strcmp(SLIST_FIRST(targets)->target, "*")) {
+         errx(
+             1, "Invalid target [%s] (expected=[*])",
+@@ -34,7 +39,7 @@
+     const char json[] = ("{"
+         "\"jsonrpc\": \"2.0\","
+         "\"method\": \"power_on\","
+-        "\"params\": {\"target\": \"*\"},"
++        "\"params\": {\"target\": \"*\", \"transition\": 420},"
+         "\"id\": \"42\""
+     "}");
+     int parsed = parse_json(
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_on_missing_target.c
+@@ -12,10 +12,12 @@
+ 
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     (void)client;
+     (void)targets;
++    (void)transition;
+     power_on_called = true;
+ }
+ 
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_power_toggle.c
+@@ -12,12 +12,17 @@
+ 
+ void
+ lgtd_proto_power_toggle(struct lgtd_client *client,
+-                        const struct lgtd_proto_target_list *targets)
++                        const struct lgtd_proto_target_list *targets,
++                        int transition)
+ {
+     if (!client) {
+         errx(1, "missing client!");
+     }
+ 
++    if (transition != 420) {
++        errx(1, "Invalid transition=%d (expected 420)", transition);
++    }
++
+     if (strcmp(SLIST_FIRST(targets)->target, "*")) {
+         errx(
+             1, "Invalid target [%s] (expected=[*])",
+@@ -34,7 +39,7 @@
+     const char json[] = ("{"
+         "\"jsonrpc\": \"2.0\","
+         "\"method\": \"power_toggle\","
+-        "\"params\": {\"target\": \"*\"},"
++        "\"params\": {\"target\": \"*\", \"transition\": 420},"
+         "\"id\": \"42\""
+     "}");
+     int parsed = parse_json(
+diff --git a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
+@@ -10,10 +10,12 @@
+ 
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     (void)client;
+     (void)targets;
++    (void)transition;
+ 
+     errx(1, "lgtd_proto_power_on shouldn't have been called");
+ }
+diff --git a/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c b/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
+--- a/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
++++ b/tests/core/jsonrpc/test_jsonrpc_extract_values_from_schema_and_array_honors_objsize.c
+@@ -28,7 +28,7 @@
+             "target",
+             offsetof(struct lgtd_jsonrpc_target_args, target),
+             offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
+-            lgtd_jsonrpc_type_string_number_or_array,
++            lgtd_jsonrpc_type_string_integer_or_array,
+             false
+         ),
+         LGTD_JSONRPC_NODE(
+@@ -37,7 +37,7 @@
+             -1,
+             // this must dereference json from the what's in the token (see
+             // next comment):
+-            lgtd_jsonrpc_type_number,
++            lgtd_jsonrpc_type_integer,
+             false
+         )
+     };
+diff --git a/tests/core/mock_effect.h b/tests/core/mock_effect.h
+new file mode 100644
+--- /dev/null
++++ b/tests/core/mock_effect.h
+@@ -0,0 +1,45 @@
++#pragma once
++
++struct lgtd_effect;
++
++union lgtd_effect_ctx {
++    uint64_t    as_uint;
++    void        *as_ptr;
++};
++
++#ifndef MOCKED_LGTD_EFFECT_STOP
++void
++lgtd_effect_stop(struct lgtd_effect *effect)
++{
++    (void)effect;
++}
++#endif
++
++#ifndef MOCKED_LGTD_EFFECT_STOP_ALL
++void
++lgtd_effect_stop_all(void)
++{
++}
++#endif
++
++#ifndef MOCKED_LGTD_EFFECT_START
++struct lgtd_effect *
++lgtd_effect_start(const char *name,
++                  int duration,
++                  void (*duration_cb)(const struct lgtd_effect *),
++                  int timer_flags,
++                  int timer_ms,
++                  void (*apply_cb)(const struct lgtd_effect *),
++                  union lgtd_effect_ctx ctx)
++{
++    (void)name;
++    (void)duration;
++    (void)duration_cb;
++    (void)timer_flags;
++    (void)timer_ms;
++    (void)apply_cb;
++    (void)ctx;
++
++    return NULL;
++}
++#endif
+diff --git a/tests/core/mock_proto.h b/tests/core/mock_proto.h
+--- a/tests/core/mock_proto.h
++++ b/tests/core/mock_proto.h
+@@ -35,20 +35,36 @@
+ #ifndef MOCKED_LGTD_PROTO_POWER_ON
+ void
+ lgtd_proto_power_on(struct lgtd_client *client,
+-                    const struct lgtd_proto_target_list *targets)
++                    const struct lgtd_proto_target_list *targets,
++                    int transition)
+ {
+     (void)client;
+     (void)targets;
++    (void)transition;
+ }
+ #endif
+ 
+ #ifndef MOCKED_LGTD_PROTO_POWER_OFF
+ void
+ lgtd_proto_power_off(struct lgtd_client *client,
+-                     const struct lgtd_proto_target_list *targets)
++                     const struct lgtd_proto_target_list *targets,
++                     int transition)
+ {
+     (void)client;
+     (void)targets;
++    (void)transition;
++}
++#endif
++
++#ifndef MOCKED_LGTD_PROTO_POWER_TOGGLE
++void
++lgtd_proto_power_toggle(struct lgtd_client *client,
++                        const struct lgtd_proto_target_list *targets,
++                        int transition)
++{
++    (void)client;
++    (void)targets;
++    (void)transition;
+ }
+ #endif
+ 
+@@ -110,16 +126,6 @@
+ }
+ #endif
+ 
+-#ifndef MOCKED_LGTD_PROTO_POWER_TOGGLE
+-void
+-lgtd_proto_power_toggle(struct lgtd_client *client,
+-                        const struct lgtd_proto_target_list *targets)
+-{
+-    (void)client;
+-    (void)targets;
+-}
+-#endif
+-
+ #ifndef MOCKED_LGTD_PROTO_SET_LABEL
+ void
+ lgtd_proto_set_label(struct lgtd_client *client,
+diff --git a/tests/core/proto/test_proto_get_light_state.c b/tests/core/proto/test_proto_get_light_state.c
+--- a/tests/core/proto/test_proto_get_light_state.c
++++ b/tests/core/proto/test_proto_get_light_state.c
+@@ -1,7 +1,9 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
++#include "mock_effect.h"
+ #include "mock_gateway.h"
+ #include "mock_event2.h"
+ #include "mock_log.h"
+diff --git a/tests/core/proto/test_proto_get_light_state_empty_device_list.c b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_empty_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_empty_device_list.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_get_light_state_label_overflow.c b/tests/core/proto/test_proto_get_light_state_label_overflow.c
+--- a/tests/core/proto/test_proto_get_light_state_label_overflow.c
++++ b/tests/core/proto/test_proto_get_light_state_label_overflow.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_gateway.h"
+diff --git a/tests/core/proto/test_proto_get_light_state_null_device_list.c b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+--- a/tests/core/proto/test_proto_get_light_state_null_device_list.c
++++ b/tests/core/proto/test_proto_get_light_state_null_device_list.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c b/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c
+--- a/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c
++++ b/tests/core/proto/test_proto_get_light_state_unknown_tag_id.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_gateway.h"
+diff --git a/tests/core/proto/test_proto_power_off.c b/tests/core/proto/test_proto_power_off.c
+--- a/tests/core/proto/test_proto_power_off.c
++++ b/tests/core/proto/test_proto_power_off.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+@@ -60,7 +61,7 @@
+     struct lgtd_client *client;
+     client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_off(client, targets);
++    lgtd_proto_power_off(client, targets, 0);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_off_routing_error.c b/tests/core/proto/test_proto_power_off_routing_error.c
+--- a/tests/core/proto/test_proto_power_off_routing_error.c
++++ b/tests/core/proto/test_proto_power_off_routing_error.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+@@ -60,7 +61,7 @@
+     struct lgtd_client *client;
+     client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_off(client, targets);
++    lgtd_proto_power_off(client, targets, 0);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_on.c b/tests/core/proto/test_proto_power_on.c
+--- a/tests/core/proto/test_proto_power_on.c
++++ b/tests/core/proto/test_proto_power_on.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+@@ -60,7 +61,7 @@
+     struct lgtd_client *client;
+     client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_on(client, targets);
++    lgtd_proto_power_on(client, targets, 0);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_on_routing_error.c b/tests/core/proto/test_proto_power_on_routing_error.c
+--- a/tests/core/proto/test_proto_power_on_routing_error.c
++++ b/tests/core/proto/test_proto_power_on_routing_error.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+@@ -60,7 +61,7 @@
+     struct lgtd_client *client;
+     client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+ 
+-    lgtd_proto_power_on(client, targets);
++    lgtd_proto_power_on(client, targets, 0);
+ 
+     return 0;
+ }
+diff --git a/tests/core/proto/test_proto_power_toggle.c b/tests/core/proto/test_proto_power_toggle.c
+--- a/tests/core/proto/test_proto_power_toggle.c
++++ b/tests/core/proto/test_proto_power_toggle.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_gateway.h"
+@@ -133,7 +134,7 @@
+     client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+-    lgtd_proto_power_toggle(client, targets);
++    lgtd_proto_power_toggle(client, targets, 0);
+ 
+     const char expected[] = "true";
+ 
+diff --git a/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c b/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c
+--- a/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c
++++ b/tests/core/proto/test_proto_power_toggle_targets_to_device_fails.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_gateway.h"
+@@ -72,7 +73,7 @@
+     client = lgtd_tests_insert_mock_client(FAKE_BUFFEREVENT);
+     struct lgtd_proto_target_list *targets = (void *)0x2a;
+ 
+-    lgtd_proto_power_toggle(client, targets);
++    lgtd_proto_power_toggle(client, targets, 0);
+ 
+     if (client_send_error_call_count != 1) {
+         errx(1, "lgtd_client_send_error called %d times (expected 1)",
+diff --git a/tests/core/proto/test_proto_set_label.c b/tests/core/proto/test_proto_set_label.c
+--- a/tests/core/proto/test_proto_set_label.c
++++ b/tests/core/proto/test_proto_set_label.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_set_label_too_long.c b/tests/core/proto/test_proto_set_label_too_long.c
+--- a/tests/core/proto/test_proto_set_label_too_long.c
++++ b/tests/core/proto/test_proto_set_label_too_long.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk.c b/tests/core/proto/test_proto_set_light_from_hsbk.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk.c
+@@ -2,6 +2,7 @@
+ 
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_light_from_hsbk_on_routing_error.c
+@@ -2,6 +2,7 @@
+ 
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_set_waveform.c b/tests/core/proto/test_proto_set_waveform.c
+--- a/tests/core/proto/test_proto_set_waveform.c
++++ b/tests/core/proto/test_proto_set_waveform.c
+@@ -2,6 +2,7 @@
+ 
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_set_waveform_on_routing_error.c b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+--- a/tests/core/proto/test_proto_set_waveform_on_routing_error.c
++++ b/tests/core/proto/test_proto_set_waveform_on_routing_error.c
+@@ -2,6 +2,7 @@
+ 
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_event2.h"
+diff --git a/tests/core/proto/test_proto_tag_create.c b/tests/core/proto/test_proto_tag_create.c
+--- a/tests/core/proto/test_proto_tag_create.c
++++ b/tests/core/proto/test_proto_tag_create.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+diff --git a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+--- a/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
++++ b/tests/core/proto/test_proto_tag_create_lifx_gw_tag_ids_full.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+diff --git a/tests/core/proto/test_proto_tag_update.c b/tests/core/proto/test_proto_tag_update.c
+--- a/tests/core/proto/test_proto_tag_update.c
++++ b/tests/core/proto/test_proto_tag_update.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #define MOCKED_LIFX_GATEWAY_SEND_TO_SITE
+diff --git a/tests/core/proto/test_proto_untag.c b/tests/core/proto/test_proto_untag.c
+--- a/tests/core/proto/test_proto_untag.c
++++ b/tests/core/proto/test_proto_untag.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_gateway.h"
+diff --git a/tests/core/proto/test_proto_untag_tag_does_not_exist.c b/tests/core/proto/test_proto_untag_tag_does_not_exist.c
+--- a/tests/core/proto/test_proto_untag_tag_does_not_exist.c
++++ b/tests/core/proto/test_proto_untag_tag_does_not_exist.c
+@@ -1,5 +1,6 @@
+ #include "proto.c"
+ 
++#include "effects/mock_all.h"
+ #include "mock_client_buf.h"
+ #include "mock_daemon.h"
+ #include "mock_gateway.h"
+diff --git a/tests/effects/mock_all.h b/tests/effects/mock_all.h
+new file mode 100644
+--- /dev/null
++++ b/tests/effects/mock_all.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++#ifndef MOCKED_LGTD_EFFECT_POWER_TRANSITION
++const struct lgtd_effect *
++lgtd_effect_power_transition(const struct lgtd_proto_target_list *targets,
++                             enum lgtd_effect_power_transition_type state,
++                             int duration)
++{
++    (void)targets;
++    (void)state;
++    (void)duration;
++
++    return NULL;
++}
++#endif

@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  bfa59be534ab65b5caff5b25d70a1d9fa961bfbb
+# Parent  06821ea343c397315ff567796404edfab8486f38
 Correctly support optional arguments in the JSON-RPC API
 
 Passing too many arguments as an array also properly fails now.
@@ -28,7 +28,25 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  }
  
  static bool
-@@ -716,7 +716,7 @@
+@@ -470,6 +470,17 @@
+                                                         int ntokens,
+                                                         const char *json)
+ {
++    if (!ntokens) {
++        // "params" were omitted, make sure no args were required or that they
++        // are all optional:
++        while (schema_size--) {
++            if (!schema[schema_size].optional) {
++                return false;
++            }
++        }
++        return true;
++    }
++
+     switch (tokens[0].type) {
+     case JSMN_OBJECT:
+         return lgtd_jsonrpc_extract_values_from_schema_and_dict(
+@@ -716,7 +727,7 @@
              offsetof(struct lgtd_jsonrpc_set_light_from_hsbk_args, t),
              -1,
              lgtd_jsonrpc_type_integer,
@@ -37,7 +55,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          ),
      };
  
-@@ -854,7 +854,7 @@
+@@ -854,7 +865,7 @@
              offsetof(struct lgtd_jsonrpc_set_waveform_args, transient),
              -1,
              lgtd_jsonrpc_type_bool,
@@ -46,7 +64,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          ),
      };
  
-@@ -1102,43 +1102,24 @@
+@@ -1102,43 +1113,24 @@
                            int *batch_sent)
  {
      static const struct lgtd_jsonrpc_method methods[] = {
@@ -99,7 +117,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      };
  
      if (batch_sent) {
-@@ -1172,15 +1153,11 @@
+@@ -1172,15 +1164,11 @@
              continue;
          }
          int diff = memcmp(
@@ -141,3 +159,15 @@ diff --git a/core/jsonrpc.h b/core/jsonrpc.h
  }
  
  enum lgtd_jsonrpc_error_code {
+diff --git a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
+--- a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
++++ b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
+@@ -40,7 +40,7 @@
+         "\"error\": {"
+             "\"code\": -32602, "
+             "\"message\": "
+-            "\"Invalid number of parameters\""
++            "\"Invalid parameters\""
+         "}"
+     "}");
+ 
