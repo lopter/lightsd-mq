@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  e66626015241fb91ca667737bba4f1f5c3142433
+# Parent  730f00acf23dd91cf19f36f0118bc4844ab368cc
 Add a transition argument to the power functions
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -787,7 +787,7 @@ diff --git a/core/utils.c b/core/utils.c
 diff --git a/docs/protocol.rst b/docs/protocol.rst
 --- a/docs/protocol.rst
 +++ b/docs/protocol.rst
-@@ -48,25 +48,33 @@
+@@ -51,17 +51,27 @@
  Available methods
  -----------------
  
@@ -798,7 +798,8 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 +   Power off the given bulb(s) with an optional transition.
  
 -.. function:: power_on(target)
-+   :param int transition: The time in ms it will take for the bulb to turn off.
++   :param int transition: Optional time in ms it will take for the bulb to turn
++                          off.
  
 -   Power on the given bulb(s).
 +.. function:: power_on(target[, transition])
@@ -807,27 +808,18 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
 +   Power on the given bulb(s) with an optional transition.
  
 -   Power on (if they are off) or power off (if they are on) the given bulb(s).
-+   :param int transition: The time in ms it will take for the bulb to turn on.
- 
--.. function:: set_light_from_hsbk(target, h, s, b, k, t)
++   :param int transition: Optional time in ms it will take for the bulb to turn
++                          on.
++
 +.. function:: power_toggle(target[, transition])
 +
 +   Power on (if they are off) or power off (if they are on) the given bulb(s)
 +   with an optional transition.
 +
-+   :param int transition: The time in ms it will take for the bulb to turn on
-+                          off.
-+
-+.. function:: set_light_from_hsbk(target, h, s, b, k, transition)
++   :param int transition: Optional time in ms it will take for the bulb to turn
++                          on off.
  
-    :param float h: Hue from 0 to 360.
-    :param float s: Saturation from 0 to 1.
-    :param float b: Brightness from 0 to 1.
-    :param int k: Temperature in Kelvin from 2500 to 9000.
--   :param int t: Transition duration to this color in ms.
-+   :param int transition: Transition duration to this color in ms.
- 
- .. function:: set_waveform(target, waveform, h, s, b, k, period, cycles, skew_ratio, transient)
+ .. function:: set_light_from_hsbk(target, hue, saturation, brightness, kelvin[, transition])
  
 diff --git a/effects/CMakeLists.txt b/effects/CMakeLists.txt
 new file mode 100644
@@ -1209,7 +1201,7 @@ new file mode 100644
 diff --git a/examples/lightsc.py b/examples/lightsc.py
 --- a/examples/lightsc.py
 +++ b/examples/lightsc.py
-@@ -168,14 +168,18 @@
+@@ -199,14 +199,18 @@
              transient=transient
          )
  

@@ -1,8 +1,11 @@
 # HG changeset patch
-# Parent  06821ea343c397315ff567796404edfab8486f38
+# Parent  b13532c9f0219cdf0459d1455e613633254d0ce9
 Correctly support optional arguments in the JSON-RPC API
 
 Passing too many arguments as an array also properly fails now.
+
+While we are at it, put the correct argument names in the documentation
+so that it works for poepl passing argument by name.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -55,7 +58,23 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          ),
      };
  
-@@ -854,7 +865,7 @@
+@@ -746,9 +757,12 @@
+     if (k < 2500 || k > 9000 || errno == ERANGE) {
+         goto error_invalid_params;
+     }
+-    int t = strtol(&client->json[params.t->start], NULL, 10);
+-    if (t < 0 || errno == ERANGE) {
+-        goto error_invalid_params;
++    int t = 0;
++    if (params.t) {
++        t = strtol(&client->json[params.t->start], NULL, 10);
++        if (t < 0 || errno == ERANGE) {
++            goto error_invalid_params;
++        }
+     }
+ 
+     struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
+@@ -854,7 +868,7 @@
              offsetof(struct lgtd_jsonrpc_set_waveform_args, transient),
              -1,
              lgtd_jsonrpc_type_bool,
@@ -64,7 +83,17 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
          ),
      };
  
-@@ -1102,43 +1113,24 @@
+@@ -906,7 +920,8 @@
+         0, 1
+     );
+     skew_ratio -= UINT16_MAX / 2;
+-    bool transient = client->json[params.transient->start] == 't';
++    bool transient = params.transient ?
++        client->json[params.transient->start] == 't' : false;
+ 
+     struct lgtd_proto_target_list targets = SLIST_HEAD_INITIALIZER(&targets);
+     ok = lgtd_jsonrpc_build_target_list(
+@@ -1102,43 +1117,24 @@
                            int *batch_sent)
  {
      static const struct lgtd_jsonrpc_method methods[] = {
@@ -117,7 +146,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
      };
  
      if (batch_sent) {
-@@ -1172,15 +1164,11 @@
+@@ -1172,15 +1168,11 @@
              continue;
          }
          int diff = memcmp(
@@ -159,6 +188,309 @@ diff --git a/core/jsonrpc.h b/core/jsonrpc.h
  }
  
  enum lgtd_jsonrpc_error_code {
+diff --git a/docs/protocol.rst b/docs/protocol.rst
+--- a/docs/protocol.rst
++++ b/docs/protocol.rst
+@@ -32,9 +32,7 @@
+ +-----------------------------+------------------------------------------------+
+ 
+ The mac address (id) of each bulb can be found with get_light_state_ under the
+-``_lifx`` map, e.g:
+-
+-::
++``_lifx`` map, e.g::
+ 
+    "_lifx": {
+        "addr": "d0:73:d5:02:e5:30",
+@@ -65,28 +63,30 @@
+ 
+    Power on (if they are off) or power off (if they are on) the given bulb(s).
+ 
+-.. function:: set_light_from_hsbk(target, h, s, b, k, t)
++.. function:: set_light_from_hsbk(target, hue, saturation, brightness, kelvin[, transition])
+ 
+-   :param float h: Hue from 0 to 360.
+-   :param float s: Saturation from 0 to 1.
+-   :param float b: Brightness from 0 to 1.
+-   :param int k: Temperature in Kelvin from 2500 to 9000.
+-   :param int t: Transition duration to this color in ms.
++   :param float hue: From 0 to 360.
++   :param float saturation: From 0 to 1.
++   :param float brightness: From 0 to 1.
++   :param int kelvin: Temperature in Kelvin from 2500 to 9000.
++   :param int transition: Optional time in ms it will take for the bulb to turn
++                          to this color.
+ 
+-.. function:: set_waveform(target, waveform, h, s, b, k, period, cycles, skew_ratio, transient)
++.. function:: set_waveform(target, waveform, hue, saturation, brightness, kelvin, period, cycles, skew_ratio[, transient])
+ 
+    :param string waveform: One of ``SAW``, ``SINE``, ``HALF_SINE``,
+                            ``TRIANGLE``, ``SQUARE``.
+-   :param float h: Hue from 0 to 360.
+-   :param float s: Saturation from 0 to 1.
+-   :param float b: Brightness from 0 to 1.
+-   :param int k: Temperature in Kelvin from 2500 to 9000.
+-   :param int period: milliseconds per cycle.
+-   :param int cycles: number of cycles.
+-   :param float skew_ratio: from 0 to 1.
+-   :param bool transient: if true the target will keep the color it has at the
++   :param float hue: From 0 to 360.
++   :param float saturation: From 0 to 1.
++   :param float brightness: From 0 to 1.
++   :param int kelvin: Temperature in Kelvin from 2500 to 9000.
++   :param int period: Milliseconds per cycle.
++   :param int cycles: Number of cycles.
++   :param float skew_ratio: From 0 to 1, see table below.
++   :param bool transient: If true the target will keep the color it has at the
+                           end of the waveform, otherwise it will revert back to
+-                          its original state.
++                          its original state. This argument is optional and
++                          defaults to false.
+ 
+    The meaning of the ``skew_ratio`` argument depends on the type of waveform:
+ 
+@@ -129,9 +129,7 @@
+    Tag (group) the given target bulb(s) with the given label (group name), then
+    label can be used as a target by prefixing it with ``#``.
+ 
+-   To add a device to an existing "group" simply do:
+-
+-   ::
++   To add a device to an existing "group" simply do::
+ 
+       tag(["#myexistingtag", "bulbtoadd"], "myexistingtag")
+ 
+@@ -143,9 +141,7 @@
+ .. function:: untag(target, label)
+ 
+    Remove the given tag from the given target bulb(s). To completely delete a
+-   tag (group), simple do:
+-
+-   ::
++   tag (group), simply do::
+ 
+       untag("#myexistingtag", "myexistingtag")
+ 
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk.c
+@@ -8,7 +8,7 @@
+ 
+ #include "test_jsonrpc_utils.h"
+ 
+-static bool set_light_called = false;
++static int set_light_call_count = false;
+ 
+ void
+ lgtd_proto_set_light_from_hsbk(struct lgtd_client *client,
+@@ -55,19 +55,38 @@
+             1, "Invalid temperature: %d, expected: 4200", kelvin
+         );
+     }
+-    if (transition_msecs != 60) {
+-        errx(
+-            1, "Invalid transition duration: %d, expected: 60", transition_msecs
+-        );
++    switch (set_light_call_count++) {
++    case 0:
++        if (transition_msecs != 600) {
++            errx(
++                1, "Invalid transition duration: %d, expected: 600",
++                transition_msecs
++            );
++        }
++        break;
++    case 1:
++        if (transition_msecs != 0) {
++            errx(
++                1, "Invalid transition duration: %d, expected: 0",
++                transition_msecs
++            );
++        }
++        break;
++    default:
++        errx(1, "set_light_from_hsbk called too many times");
+     }
+-    set_light_called = true;
+ }
+ 
+ int
+ main(void)
+ {
+     jsmntok_t tokens[32];
+-    const char json[] = ("{"
++    int parsed;
++    bool ok;
++    struct lgtd_jsonrpc_request req;
++    struct lgtd_client client = { .io = NULL, .current_request = &req };
++
++    const char *json = ("{"
+         "\"jsonrpc\": \"2.0\","
+         "\"method\": \"set_light_from_hsbk\","
+         "\"params\": {"
+@@ -76,27 +95,44 @@
+             "\"saturation\": 0.234, "
+             "\"brightness\": 1.0, "
+             "\"kelvin\": 4200,"
+-            "\"transition\": 60"
++            "\"transition\": 600"
+         "},"
+         "\"id\": \"42\""
+     "}");
+-    int parsed = parse_json(
+-        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
+-    );
+-
+-    bool ok;
+-    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
+-    struct lgtd_client client = {
+-        .io = NULL, .current_request = &req, .json = json
+-    };
++    client.json = json;
++    parsed = parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    memset(&req, 0, sizeof(req));
+     ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
+     if (!ok) {
+         errx(1, "can't parse request");
+     }
++    lgtd_jsonrpc_check_and_call_set_light_from_hsbk(&client);
++    if (set_light_call_count != 1) {
++        errx(1, "lgtd_proto_set_light_from_hsbk wasn't called");
++    }
+ 
++    // optional transition argument
++    json = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"set_light_from_hsbk\","
++        "\"params\": {"
++            "\"target\": \"*\", "
++            "\"hue\": 324.2341514, "
++            "\"saturation\": 0.234, "
++            "\"brightness\": 1.0, "
++            "\"kelvin\": 4200"
++        "},"
++        "\"id\": \"42\""
++    "}");
++    client.json = json;
++    parsed = parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    memset(&req, 0, sizeof(req));
++    ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
++    if (!ok) {
++        errx(1, "can't parse request");
++    }
+     lgtd_jsonrpc_check_and_call_set_light_from_hsbk(&client);
+-
+-    if (!set_light_called) {
++    if (set_light_call_count != 2) {
+         errx(1, "lgtd_proto_set_light_from_hsbk wasn't called");
+     }
+ 
+diff --git a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+--- a/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
++++ b/tests/core/jsonrpc/test_jsonrpc_check_and_call_set_light_from_hsbk_from_array.c
+@@ -8,7 +8,7 @@
+ 
+ #include "test_jsonrpc_utils.h"
+ 
+-static bool set_light_called = false;
++static int set_light_call_count = 0;
+ 
+ void
+ lgtd_proto_set_light_from_hsbk(struct lgtd_client *client,
+@@ -55,43 +55,73 @@
+             1, "Invalid temperature: %d, expected: 4200", kelvin
+         );
+     }
+-    if (transition_msecs != 0) {
+-        errx(
+-            1, "Invalid transition duration: %d, expected: 0", transition_msecs
+-        );
++    switch (set_light_call_count++) {
++    case 0:
++        if (transition_msecs != 600) {
++            errx(
++                1, "Invalid transition duration: %d, expected: 600",
++                transition_msecs
++            );
++        }
++        break;
++    case 1:
++        if (transition_msecs != 0) {
++            errx(
++                1, "Invalid transition duration: %d, expected: 0",
++                transition_msecs
++            );
++        }
++        break;
++    default:
++        errx(1, "set_light_from_hsbk called too many times");
+     }
+-    set_light_called = true;
+ }
+ 
+ int
+ main(void)
+ {
+     jsmntok_t tokens[32];
+-    const char json[] = ("{"
++    int parsed;
++    bool ok;
++    struct lgtd_jsonrpc_request req;
++    struct lgtd_client client = {
++        .io = NULL, .current_request = &req,
++    };
++
++    const char *json = ("{"
+         "\"jsonrpc\": \"2.0\","
+         "\"method\": \"set_light_from_hsbk\","
+-        "\"params\": ["
+-            "\"*\", 324.2341514, 0.234, 1.0, 4200, 0"
+-        "],"
++        "\"params\": [\"*\", 324.2341514, 0.234, 1.0, 4200, 600],"
+         "\"id\": \"42\""
+     "}");
+-    int parsed = parse_json(
+-        tokens, LGTD_ARRAY_SIZE(tokens), json, sizeof(json)
+-    );
+-
+-    bool ok;
+-    struct lgtd_jsonrpc_request req = TEST_REQUEST_INITIALIZER;
+-    struct lgtd_client client = {
+-        .io = NULL, .current_request = &req, .json = json
+-    };
++    client.json = json;
++    parsed = parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    memset(&req, 0, sizeof(req));
+     ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
+     if (!ok) {
+         errx(1, "can't parse request");
+     }
++    lgtd_jsonrpc_check_and_call_set_light_from_hsbk(&client);
++    if (set_light_call_count != 1) {
++        errx(1, "lgtd_proto_set_light_from_hsbk wasn't called");
++    }
+ 
++    // optional transition
++    json = ("{"
++        "\"jsonrpc\": \"2.0\","
++        "\"method\": \"set_light_from_hsbk\","
++        "\"params\": [\"*\", 324.2341514, 0.234, 1.0, 4200],"
++        "\"id\": \"42\""
++    "}");
++    client.json = json;
++    parsed = parse_json(tokens, LGTD_ARRAY_SIZE(tokens), json, strlen(json));
++    memset(&req, 0, sizeof(req));
++    ok = lgtd_jsonrpc_check_and_extract_request(&req, tokens, parsed, json);
++    if (!ok) {
++        errx(1, "can't parse request");
++    }
+     lgtd_jsonrpc_check_and_call_set_light_from_hsbk(&client);
+-
+-    if (!set_light_called) {
++    if (set_light_call_count != 2) {
+         errx(1, "lgtd_proto_set_light_from_hsbk wasn't called");
+     }
+ 
 diff --git a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
 --- a/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
 +++ b/tests/core/jsonrpc/test_jsonrpc_dispatch_one_no_params.c
