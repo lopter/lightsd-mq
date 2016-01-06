@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  1d70e191bfd598d0eaf23b87368acb704e764d57
+# Parent  415b476115e83c2f0d5ac5ec61920037f3c20f8a
 Properly broadcast LIFX discovery packets on all networks (closes GH-2)
 
 It does solve the issue but only is half the solution I'd like to have.
@@ -31,6 +31,52 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
  
  MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -41,7 +41,9 @@
+ #define LGTD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
+ #define LGTD_MIN(a, b) ((a) < (b) ? (a) : (b))
+ #define LGTD_MAX(a, b) ((a) > (b) ? (a) : (b))
++
+ #define LGTD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
++
+ #define LGTD_MSECS_TO_TIMEVAL(v) {  \
+     .tv_sec = (v) / 1000,           \
+     .tv_usec = ((v) % 1000) * 1000  \
+@@ -49,6 +51,7 @@
+ #define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)1E6)
+ #define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)1E9)
+ #define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)1E9)
++
+ #define LGTD_TM_TO_ISOTIME(tm, sbuf, bufsz, usec) do {                          \
+     /* '2015-01-02T10:13:16.132222+00:00' */                                    \
+     if ((usec)) {                                                               \
+@@ -69,11 +72,24 @@
+         );                                                                      \
+     }                                                                           \
+ } while (0)
++
+ #define LGTD_SNPRINTF_APPEND(buf, i, bufsz, ...) do {       \
+     int n = snprintf(&(buf)[(i)], bufsz - i, __VA_ARGS__);  \
+     (i) = LGTD_MIN((i) + n, bufsz);                         \
+ } while (0)
+ 
++#if LGTD_BIG_ENDIAN_SYSTEM
++# define LGTD_STATIC_HTONS(s) (s)
++# define LGTD_STATIC_HTONL(l) (l)
++#else
++# define LGTD_STATIC_HTONS(s) ((((s) << 8) & 0xff00) | (((s) >> 8) & 0xff))
++# define LGTD_STATIC_HTONL(l) (                                 \
++    (((l) & 0xff000000) >> 24) | (((l) & 0x00ff0000) >> 8)      \
++    | (((l) & 0x0000ff00) << 8) | (((l) & 0x000000ff) << 24)    \
++)
++#endif
++
++
+ enum lgtd_verbosity {
+     LGTD_DEBUG = 0,
+     LGTD_INFO,
 diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 --- a/lifx/broadcast.c
 +++ b/lifx/broadcast.c
@@ -258,7 +304,7 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 +    if (addrlen != -1 && addrlen != sizeof(*inaddr)) {
 +        lgtd_errx(
 +            1, "got invalid addrlen %u (expected %ju)",
-+            addrlen, sizeof(*inaddr)
++            addrlen, (uintmax_t)sizeof(*inaddr)
 +        );
 +    }
 +}
@@ -346,7 +392,7 @@ new file mode 100644
 +static const struct sockaddr_in MOCK_ADDR = {
 +    .sin_family = AF_INET,
 +    .sin_addr = { INADDR_BROADCAST },
-+    .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
++    .sin_port = LGTD_STATIC_HTONS(LGTD_LIFX_PROTOCOL_PORT),
 +    .sin_zero = { 0 }
 +};
 +
@@ -377,14 +423,14 @@ new file mode 100644
 +    if (length != sizeof(MOCK_PKT)) {
 +        lgtd_errx(
 +            1, "got length=%ju (expected %ju)",
-+            (uintmax_t)length, sizeof(MOCK_PKT)
++            (uintmax_t)length, (uintmax_t)sizeof(MOCK_PKT)
 +        );
 +    }
 +
 +    if (strcmp((const char *)buffer, MOCK_PKT)) {
 +        lgtd_errx(
 +            1, "got buffer [%.*s] (expected [%s])",
-+            (int)length, buffer, MOCK_PKT
++            (int)length, (const char *)buffer, MOCK_PKT
 +        );
 +    }
 +
@@ -505,36 +551,36 @@ new file mode 100644
 +static const struct sockaddr_in LIFX_BROADCAST_ADDR = {
 +    .sin_family = AF_INET,
 +    .sin_addr = { INADDR_BROADCAST },
-+    .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
++    .sin_port = LGTD_STATIC_HTONS(LGTD_LIFX_PROTOCOL_PORT),
 +    .sin_zero = { 0 }
 +};
 +
 +// /24
-+#define TEST_IPV4_NETMASK_ADDR_24 htonl(0xffffff00)
++#define TEST_IPV4_NETMASK_ADDR_24 LGTD_STATIC_HTONL(0xffffff00)
 +static struct sockaddr_in TEST_IPV4_NETMASK_SOCKADDR_24 = {
 +    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_NETMASK_ADDR_24 }
 +};
 +
 +// /16
-+#define TEST_IPV4_NETMASK_ADDR_16 htonl(0xffff0000)
++#define TEST_IPV4_NETMASK_ADDR_16 LGTD_STATIC_HTONL(0xffff0000)
 +static struct sockaddr_in TEST_IPV4_NETMASK_SOCKADDR_16 = {
 +    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_NETMASK_ADDR_16 }
 +};
 +
 +// 192.168.42.255
-+#define TEST_IPV4_BROADCAST_ADDR_CLASS_C htonl(0xc0a82aff)
++#define TEST_IPV4_BROADCAST_ADDR_CLASS_C LGTD_STATIC_HTONL(0xc0a82aff)
 +static struct sockaddr_in TEST_IPV4_BROADCAST_SOCKADDR_CLASS_C = {
 +    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_BROADCAST_ADDR_CLASS_C }
 +};
 +
 +// 10.10.255.255
-+#define TEST_IPV4_BROADCAST_ADDR_CLASS_A htonl(0x0a0affff)
++#define TEST_IPV4_BROADCAST_ADDR_CLASS_A LGTD_STATIC_HTONL(0x0a0affff)
 +static struct sockaddr_in TEST_IPV4_BROADCAST_SOCKADDR_CLASS_A = {
 +    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_BROADCAST_ADDR_CLASS_A }
 +};
 +
 +// 82.66.148.158
-+#define TEST_IPV4_UNICAST_ADDR_ROUTABLE htonl(0x5242949e)
++#define TEST_IPV4_UNICAST_ADDR_ROUTABLE LGTD_STATIC_HTONL(0x5242949e)
 +static struct sockaddr_in TEST_IPV4_UNICAST_SOCKADDR_ROUTABLE = {
 +    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_UNICAST_ADDR_ROUTABLE }
 +};
@@ -694,7 +740,7 @@ new file mode 100644
 +    if (length != sizeof(struct lgtd_lifx_packet_header)) {
 +        lgtd_errx(
 +            1, "got buffer length=%ju (expected %ju)",
-+            (uintmax_t)length, sizeof(struct lgtd_lifx_packet_header)
++            (uintmax_t)length, (uintmax_t)sizeof(struct lgtd_lifx_packet_header)
 +        );
 +    }
 +
@@ -851,14 +897,15 @@ diff --git a/tests/lifx/broadcast/test_broadcast_write_callback_getifaddrs_fails
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/broadcast/test_broadcast_write_callback_getifaddrs_fails.c
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,222 @@
 +#include <sys/types.h>
 +#include <sys/socket.h>
 +#include <ifaddrs.h>
 +
 +int mock_getifaddrs(struct ifaddrs **);
 +void mock_freeifaddrs(struct ifaddrs *);
-+ssize_t mock_sendto(int, const void *, size_t, int, const struct sockaddr *, socklen_t);
++ssize_t mock_sendto(int, const void *, size_t, int,
++                    const struct sockaddr *, socklen_t);
 +
 +#define getifaddrs(ifap) mock_getifaddrs(ifap)
 +#define freeifaddrs(ifp) mock_freeifaddrs(ifp)
@@ -883,7 +930,7 @@ new file mode 100644
 +static const struct sockaddr_in LIFX_BROADCAST_ADDR = {
 +    .sin_family = AF_INET,
 +    .sin_addr = { INADDR_BROADCAST },
-+    .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
++    .sin_port = LGTD_STATIC_HTONS(LGTD_LIFX_PROTOCOL_PORT),
 +    .sin_zero = { 0 }
 +};
 +
@@ -994,7 +1041,7 @@ new file mode 100644
 +    if (length != sizeof(struct lgtd_lifx_packet_header)) {
 +        lgtd_errx(
 +            1, "got buffer length=%ju (expected %ju)",
-+            (uintmax_t)length, sizeof(struct lgtd_lifx_packet_header)
++            (uintmax_t)length, (uintmax_t)sizeof(struct lgtd_lifx_packet_header)
 +        );
 +    }
 +
