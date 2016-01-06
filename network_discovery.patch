@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  722eaeb15d6f8eeffa3750987c72e9e1c0146215
+# Parent  1d70e191bfd598d0eaf23b87368acb704e764d57
 Properly broadcast LIFX discovery packets on all networks (closes GH-2)
 
 It does solve the issue but only is half the solution I'd like to have.
@@ -49,11 +49,11 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
  #include <stdarg.h>
  #include <stdbool.h>
  #include <stdint.h>
-@@ -51,16 +54,35 @@
+@@ -51,16 +54,37 @@
  };
  
  static bool
-+lgtd_lifx_broadcast_send_packet(void *pkt,
++lgtd_lifx_broadcast_send_packet(const void *pkt,
 +                                int pkt_sz,
 +                                const struct sockaddr *addr,
 +                                ev_socklen_t addrlen)
@@ -68,7 +68,9 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 +    } while (nbytes == -1 && EVUTIL_SOCKET_ERROR() == EINTR);
 +
 +    if (nbytes != pkt_sz) {
-+        lgtd_warn("couldn't broadcast LIFX discovery packet on %s", addr_str);
++        void (*warnfn)(const char *fmt, ...) = nbytes == -1 ?
++            lgtd_warn : lgtd_warnx;
++        warnfn("couldn't broadcast LIFX discovery packet on %s", addr_str);
 +        return false;
 +    }
 +
@@ -86,12 +88,12 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 -        .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
 -        .sin_zero = { 0 }
 -    };
-+    uint16_t lifx_port = htons(LGTD_LIFX_PROTOCOL_PORT);
++    const uint16_t lifx_port = htons(LGTD_LIFX_PROTOCOL_PORT);
 +
      struct lgtd_lifx_packet_header get_pan_gateway;
      lgtd_lifx_wire_setup_header(
          &get_pan_gateway,
-@@ -70,31 +92,57 @@
+@@ -70,31 +94,50 @@
          LGTD_LIFX_GET_PAN_GATEWAY
      );
  
@@ -108,7 +110,7 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 -    if (nbytes == sizeof(get_pan_gateway)) {
 -        if (event_del(lgtd_lifx_broadcast_endpoint.write_ev)) {
 -            lgtd_err(1, "can't setup events");
-+    bool ok = true;
++    bool ok = false;
 +    struct ifaddrs *ifaddrs = NULL;
 +    if (getifaddrs(&ifaddrs)) {
 +        struct sockaddr_in lifx_bcast_addr = {
@@ -130,21 +132,14 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 +        );
 +    } else {
 +        for (struct ifaddrs *ifa = ifaddrs; ifa; ifa = ifa->ifa_next) {
++            // NOTE: IPv6 doesn't implement broadcast
 +            if (ifa->ifa_broadaddr != NULL
 +                && (ifa->ifa_flags & IFF_BROADCAST)
++                && ifa->ifa_broadaddr->sa_family == AF_INET
 +                && ifa->ifa_netmask != NULL) {
-+                ev_socklen_t addrlen;
 +                struct sockaddr *addr = ifa->ifa_broadaddr;
-+                if (addr->sa_family == AF_INET) {
-+                    ((struct sockaddr_in *)addr)->sin_port = lifx_port;
-+                    addrlen = sizeof(struct sockaddr_in);
-+                } else if (addr->sa_family == AF_INET6) {
-+                    // TODO: add support for IPv6 on the receive path.
-+                    ((struct sockaddr_in6 *)addr)->sin6_port = lifx_port;
-+                    addrlen = sizeof(struct sockaddr_in6);
-+                } else {
-+                    continue;
-+                }
++                ((struct sockaddr_in *)addr)->sin_port = lifx_port;
++                ev_socklen_t addrlen = sizeof(struct sockaddr_in);
 +                bool sent = lgtd_lifx_broadcast_send_packet(
 +                    &get_pan_gateway, sizeof(get_pan_gateway), addr, addrlen
 +                );
@@ -171,3 +166,1131 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
  }
  
  static void
+diff --git a/lifx/bulb.c b/lifx/bulb.c
+--- a/lifx/bulb.c
++++ b/lifx/bulb.c
+@@ -274,9 +274,9 @@
+ 
+ void
+ lgtd_lifx_bulb_set_ip_state(struct lgtd_lifx_bulb *bulb,
+-                      enum lgtd_lifx_bulb_ips ip_id,
+-                      const struct lgtd_lifx_ip_state *state,
+-                      lgtd_time_mono_t received_at)
++                            enum lgtd_lifx_bulb_ips ip_id,
++                            const struct lgtd_lifx_ip_state *state,
++                            lgtd_time_mono_t received_at)
+ {
+     assert(bulb);
+     assert(state);
+diff --git a/lifx/tagging.h b/lifx/tagging.h
+--- a/lifx/tagging.h
++++ b/lifx/tagging.h
+@@ -17,6 +17,8 @@
+ 
+ #pragma once
+ 
++struct lgtd_lifx_gateway;
++
+ extern struct lgtd_lifx_tag_list lgtd_lifx_tags;
+ 
+ struct lgtd_lifx_site {
+diff --git a/tests/core/mock_event2.h b/tests/core/mock_event2.h
+--- a/tests/core/mock_event2.h
++++ b/tests/core/mock_event2.h
+@@ -210,3 +210,21 @@
+     return 0;
+ }
+ #endif
++
++#ifndef MOCKED_EVUTIL_CLOSESOCKET
++int
++evutil_closesocket(evutil_socket_t sock)
++{
++    (void)sock;
++    return -1;
++}
++#endif
++
++#ifndef MOCKED_EVUTIL_MAKE_LISTEN_SOCKET_REUSEABLE
++int
++evutil_make_listen_socket_reuseable(evutil_socket_t sock)
++{
++    (void)sock;
++    return -1;
++}
++#endif
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -213,3 +213,39 @@
+ 
+     free(path);
+ }
++
++void
++lgtd_tests_check_sockaddr_in(const struct sockaddr *addr,
++                             int addrlen,
++                             int expected_family,
++                             uint32_t expected_addr,
++                             uint16_t expected_port)
++{
++    if (!addr) {
++        lgtd_errx(1, "missing addr");
++    }
++
++    if (addr->sa_family != expected_family) {
++        lgtd_errx(
++            1, "got address of type %d (expected %d)",
++            addr->sa_family, expected_family
++        );
++    }
++    const struct sockaddr_in *inaddr = (const struct sockaddr_in *)addr;
++    if (inaddr->sin_addr.s_addr != expected_addr) {
++        lgtd_errx(
++            1, "got address %#x (expected %#x)",
++            inaddr->sin_addr.s_addr, expected_addr
++        );
++    }
++    uint16_t port = ntohs(inaddr->sin_port);
++    if (port != expected_port) {
++        lgtd_errx(1, "got port %hu (expected %u)", port, expected_port);
++    }
++    if (addrlen != -1 && addrlen != sizeof(*inaddr)) {
++        lgtd_errx(
++            1, "got invalid addrlen %u (expected %ju)",
++            addrlen, sizeof(*inaddr)
++        );
++    }
++}
+diff --git a/tests/core/tests_utils.h b/tests/core/tests_utils.h
+--- a/tests/core/tests_utils.h
++++ b/tests/core/tests_utils.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ struct bufferevent;
++struct sockaddr;
+ 
+ static inline bool
+ lgtd_tests_lifx_header_has_flags(const struct lgtd_lifx_packet_header *hdr,
+@@ -32,6 +33,12 @@
+     return true;
+ }
+ 
++static inline void
++lgtd_tests_hr(void)
++{
++    puts("----");
++}
++
+ char *lgtd_tests_make_temp_dir(void);
+ void lgtd_tests_remove_temp_dir(char *);
+ 
+@@ -44,3 +51,4 @@
+                                                 int);
+ struct lgtd_listen *lgtd_tests_insert_mock_listener(const char *, uint16_t);
+ struct lgtd_client *lgtd_tests_insert_mock_client(struct bufferevent *);
++void lgtd_tests_check_sockaddr_in(const struct sockaddr *, int, int, uint32_t, uint16_t);
+diff --git a/tests/lifx/broadcast/CMakeLists.txt b/tests/lifx/broadcast/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/broadcast/CMakeLists.txt
+@@ -0,0 +1,21 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++ADD_CORE_LIBRARY(
++    test_lifx_broadcast STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/stats.c
++    ${LIGHTSD_SOURCE_DIR}/core/utils.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../tests_shims.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/../../core/tests_utils.c
++)
++
++FUNCTION(ADD_BROADCAST_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_broadcast)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_BROADCAST_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/lifx/broadcast/test_broadcast_send_packet.c b/tests/lifx/broadcast/test_broadcast_send_packet.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/broadcast/test_broadcast_send_packet.c
+@@ -0,0 +1,146 @@
++#include <sys/socket.h>
++
++ssize_t mock_sendto(int, const void *, size_t, int,
++                    const struct sockaddr *, socklen_t);
++
++#define sendto(socket, buffer, length, flags, dest_addr, dest_len) \
++    mock_sendto(socket, buffer, length, flags, dest_addr, dest_len)
++
++#include "broadcast.c"
++
++#include "mock_bulb.h"
++#include "mock_event2.h"
++#include "mock_gateway.h"
++#include "mock_log.h"
++#include "mock_tagging.h"
++#include "mock_wire_proto.h"
++
++#include "tests_utils.h"
++
++enum { MOCK_SOCKET_FD = 32 };
++static const char MOCK_PKT[] = "fake packet";
++static const struct sockaddr_in MOCK_ADDR = {
++    .sin_family = AF_INET,
++    .sin_addr = { INADDR_BROADCAST },
++    .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
++    .sin_zero = { 0 }
++};
++
++enum mock_sendto_calls {
++    TEST_SENDTO_OK = 0,
++    TEST_SENDTO_PARTIAL,
++    TEST_SENDTO_EINTR,
++    TEST_SENDTO_EINTR_OK,
++    TEST_SENDTO_ERROR,
++};
++
++static int mock_sendto_call_count = 0;
++
++ssize_t
++mock_sendto(int socket,
++            const void *buffer,
++            size_t length,
++            int flags,
++            const struct sockaddr *dest_addr,
++            socklen_t dest_len)
++{
++    if (socket != MOCK_SOCKET_FD) {
++        lgtd_errx(
++            1, "got socket=%jd (expected %d)", (intmax_t)socket, MOCK_SOCKET_FD
++        );
++    }
++
++    if (length != sizeof(MOCK_PKT)) {
++        lgtd_errx(
++            1, "got length=%ju (expected %ju)",
++            (uintmax_t)length, sizeof(MOCK_PKT)
++        );
++    }
++
++    if (strcmp((const char *)buffer, MOCK_PKT)) {
++        lgtd_errx(
++            1, "got buffer [%.*s] (expected [%s])",
++            (int)length, buffer, MOCK_PKT
++        );
++    }
++
++    if (flags) {
++        lgtd_errx(1, "got flags=%#x (expected 0x0)", flags);
++    }
++
++    lgtd_tests_check_sockaddr_in(
++        dest_addr, dest_len, AF_INET, INADDR_BROADCAST, LGTD_LIFX_PROTOCOL_PORT
++    );
++
++    switch (mock_sendto_call_count++) {
++    case TEST_SENDTO_OK:
++        return length;
++    case TEST_SENDTO_PARTIAL:
++        return length - 1;
++    case TEST_SENDTO_EINTR:
++        errno = EINTR;
++        return -1;
++    case TEST_SENDTO_EINTR_OK:
++        return length;
++    case TEST_SENDTO_ERROR:
++        errno = EIO;
++        return -1;
++    default:
++        lgtd_errx(1, "sendto was called too many times");
++    }
++}
++
++int
++main(void)
++{
++    lgtd_lifx_broadcast_endpoint.socket = MOCK_SOCKET_FD;
++    const struct sockaddr *addr = (const struct sockaddr *)&MOCK_ADDR;
++
++    bool ok;
++
++    // ok
++    ok = lgtd_lifx_broadcast_send_packet(
++        MOCK_PKT, sizeof(MOCK_PKT), addr, sizeof(MOCK_ADDR)
++    );
++    if (mock_sendto_call_count != 1) {
++        lgtd_errx(1, "sendto wasn't called");
++    }
++    if (!ok) {
++        lgtd_errx(1, "broadcast_send_packet returned false (expected true)");
++    }
++
++    // partial
++    ok = lgtd_lifx_broadcast_send_packet(
++        MOCK_PKT, sizeof(MOCK_PKT), addr, sizeof(MOCK_ADDR)
++    );
++    if (mock_sendto_call_count != 2) {
++        lgtd_errx(1, "sendto wasn't called");
++    }
++    if (ok) {
++        lgtd_errx(1, "broadcast_send_packet returned true (expected false)");
++    }
++
++    // eintr
++    ok = lgtd_lifx_broadcast_send_packet(
++        MOCK_PKT, sizeof(MOCK_PKT), addr, sizeof(MOCK_ADDR)
++    );
++    if (mock_sendto_call_count != 4) {
++        lgtd_errx(1, "sendto wasn't called");
++    }
++    if (!ok) {
++        lgtd_errx(1, "broadcast_send_packet returned false (expected true)");
++    }
++
++    // error
++    ok = lgtd_lifx_broadcast_send_packet(
++        MOCK_PKT, sizeof(MOCK_PKT), addr, sizeof(MOCK_ADDR)
++    );
++    if (mock_sendto_call_count != 5) {
++        lgtd_errx(1, "sendto wasn't called");
++    }
++    if (ok) {
++        lgtd_errx(1, "broadcast_send_packet returned true (expected false)");
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/broadcast/test_broadcast_write_callback.c b/tests/lifx/broadcast/test_broadcast_write_callback.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/broadcast/test_broadcast_write_callback.c
+@@ -0,0 +1,374 @@
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <ifaddrs.h>
++
++int mock_getifaddrs(struct ifaddrs **);
++void mock_freeifaddrs(struct ifaddrs *);
++ssize_t mock_sendto(int, const void *, size_t, int,
++                    const struct sockaddr *, socklen_t);
++
++#define getifaddrs(ifap) mock_getifaddrs(ifap)
++#define freeifaddrs(ifp) mock_freeifaddrs(ifp)
++#define sendto(socket, buffer, length, flags, dest_addr, dest_len) \
++    mock_sendto(socket, buffer, length, flags, dest_addr, dest_len)
++
++#include "broadcast.c"
++
++#include "mock_bulb.h"
++#define MOCKED_EVENT_DEL
++#include "mock_event2.h"
++#include "mock_gateway.h"
++#include "mock_log.h"
++#include "mock_tagging.h"
++#define MOCKED_LGTD_LIFX_WIRE_SETUP_HEADER
++#include "mock_wire_proto.h"
++
++#include "tests_utils.h"
++
++enum { MOCK_SOCKET_FD = 32 };
++static struct event *MOCK_WRITE_EV = (struct event *)0x7061726973;
++static const struct sockaddr_in LIFX_BROADCAST_ADDR = {
++    .sin_family = AF_INET,
++    .sin_addr = { INADDR_BROADCAST },
++    .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
++    .sin_zero = { 0 }
++};
++
++// /24
++#define TEST_IPV4_NETMASK_ADDR_24 htonl(0xffffff00)
++static struct sockaddr_in TEST_IPV4_NETMASK_SOCKADDR_24 = {
++    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_NETMASK_ADDR_24 }
++};
++
++// /16
++#define TEST_IPV4_NETMASK_ADDR_16 htonl(0xffff0000)
++static struct sockaddr_in TEST_IPV4_NETMASK_SOCKADDR_16 = {
++    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_NETMASK_ADDR_16 }
++};
++
++// 192.168.42.255
++#define TEST_IPV4_BROADCAST_ADDR_CLASS_C htonl(0xc0a82aff)
++static struct sockaddr_in TEST_IPV4_BROADCAST_SOCKADDR_CLASS_C = {
++    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_BROADCAST_ADDR_CLASS_C }
++};
++
++// 10.10.255.255
++#define TEST_IPV4_BROADCAST_ADDR_CLASS_A htonl(0x0a0affff)
++static struct sockaddr_in TEST_IPV4_BROADCAST_SOCKADDR_CLASS_A = {
++    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_BROADCAST_ADDR_CLASS_A }
++};
++
++// 82.66.148.158
++#define TEST_IPV4_UNICAST_ADDR_ROUTABLE htonl(0x5242949e)
++static struct sockaddr_in TEST_IPV4_UNICAST_SOCKADDR_ROUTABLE = {
++    .sin_family = AF_INET, .sin_addr = { TEST_IPV4_UNICAST_ADDR_ROUTABLE }
++};
++
++static struct sockaddr_in6 TEST_IPV6_NETMASK_SOCKADDR_64 = {
++    .sin6_family = AF_INET6
++};
++static struct sockaddr_in6 TEST_IPV6_UNICAST_SOCKADDR = {
++    .sin6_family = AF_INET6
++};
++
++static struct ifaddrs MOCK_IFSOCKADDR_IPV4_BROADCAST_SOCKADDR_CLASS_C = {
++    .ifa_flags = IFF_BROADCAST,
++    .ifa_broadaddr = (struct sockaddr *)&TEST_IPV4_BROADCAST_SOCKADDR_CLASS_C,
++    .ifa_netmask = (struct sockaddr *)&TEST_IPV4_NETMASK_SOCKADDR_24,
++    .ifa_next = NULL
++};
++static struct ifaddrs MOCK_IFSOCKADDR_IPV4_BROADCAST_SOCKADDR_CLASS_A = {
++    .ifa_flags = IFF_BROADCAST,
++    .ifa_broadaddr = (struct sockaddr *)&TEST_IPV4_BROADCAST_SOCKADDR_CLASS_A,
++    .ifa_netmask = (struct sockaddr *)&TEST_IPV4_NETMASK_SOCKADDR_16,
++    .ifa_next = &MOCK_IFSOCKADDR_IPV4_BROADCAST_SOCKADDR_CLASS_C
++};
++static struct ifaddrs MOCK_IFSOCKADDR_IPV4_UNICAST_SOCKADDR_ROUTABLE = {
++    .ifa_dstaddr = (struct sockaddr *)&TEST_IPV4_UNICAST_SOCKADDR_ROUTABLE,
++    .ifa_netmask = (struct sockaddr *)&TEST_IPV4_NETMASK_SOCKADDR_24,
++    .ifa_next = &MOCK_IFSOCKADDR_IPV4_BROADCAST_SOCKADDR_CLASS_A
++};
++static struct ifaddrs MOCK_IFSOCKADDR_IPV6_UNICAST_SOCKADDR = {
++    .ifa_dstaddr = (struct sockaddr *)&TEST_IPV6_UNICAST_SOCKADDR,
++    .ifa_netmask = (struct sockaddr *)&TEST_IPV6_NETMASK_SOCKADDR_64,
++    .ifa_next = &MOCK_IFSOCKADDR_IPV4_UNICAST_SOCKADDR_ROUTABLE
++};
++
++static int event_del_call_count = 0;
++
++int
++event_del(struct event *ev)
++{
++    if (ev != MOCK_WRITE_EV) {
++        lgtd_errx(
++            1, "event_del received invalid event=%p (expected %p)",
++            ev, MOCK_WRITE_EV
++        );
++    }
++
++    event_del_call_count++;
++
++    return 0;
++}
++
++static int mock_getifaddrs_call_count = 0;
++
++int
++mock_getifaddrs(struct ifaddrs **ifap)
++{
++    if (!ifap) {
++        lgtd_errx(1, "ifap souldn't be NULL");
++    }
++
++    *ifap = &MOCK_IFSOCKADDR_IPV6_UNICAST_SOCKADDR;
++
++    mock_getifaddrs_call_count++;
++
++    return 0;
++}
++
++static int mock_freeifaddrs_call_count = 0;
++
++void
++mock_freeifaddrs(struct ifaddrs *ifp)
++{
++    if (ifp != &MOCK_IFSOCKADDR_IPV6_UNICAST_SOCKADDR) {
++        lgtd_errx(
++            1, "got ifp = %p (expected %p)",
++            ifp, &MOCK_IFSOCKADDR_IPV6_UNICAST_SOCKADDR
++        );
++    }
++
++    mock_freeifaddrs_call_count++;
++}
++
++static int mock_lifx_wire_setup_header_call_count = 0;
++
++const struct lgtd_lifx_packet_info *
++lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *hdr,
++                            enum lgtd_lifx_target_type target_type,
++                            union lgtd_lifx_target target,
++                            const uint8_t *site,
++                            enum lgtd_lifx_packet_type packet_type)
++{
++    if (!hdr) {
++        lgtd_errx(1, "missing header");
++    }
++
++    if (target_type != LGTD_LIFX_TARGET_ALL_DEVICES) {
++        lgtd_errx(
++            1, "got target type %d (expected %d)",
++            target_type, LGTD_LIFX_TARGET_ALL_DEVICES
++        );
++    }
++
++    if (memcmp(&target, &LGTD_LIFX_UNSPEC_TARGET, sizeof(target))) {
++        lgtd_errx(
++            1, "got unexpected target (expected LGTD_LIFX_UNSPEC_TARGET)"
++        );
++    }
++
++    if (site) {
++        lgtd_errx(1, "got unexpected site %p (expected NULL)", site);
++    }
++
++    if (packet_type != LGTD_LIFX_GET_PAN_GATEWAY) {
++        lgtd_errx(
++            1, "got unexpected packet type %d (expected %d)",
++            packet_type, LGTD_LIFX_GET_PAN_GATEWAY
++        );
++    }
++
++    mock_lifx_wire_setup_header_call_count++;
++
++    return NULL;
++}
++
++static int mock_sendto_call_count = 0;
++
++enum mock_sendto_calls {
++    // 1st test case everything ok
++    TEST_OK_SENDTO_OK_ADDR_CLASS_A = 0,
++    TEST_OK_SENDTO_OK_ADDR_CLASS_C,
++    // 2nd test case one failure
++    TEST_PARTIAL_SENDTO_OK_ADDR_CLASS_A,
++    TEST_PARTIAL_SENDTO_ERROR_ADDR_CLASS_C,
++    // 3rd test case all failures
++    TEST_FAIL_SENDTO_ERROR_ADDR_CLASS_A,
++    TEST_FAIL_SENDTO_ERROR_ADDR_CLASS_C
++};
++
++ssize_t
++mock_sendto(int socket,
++            const void *buffer,
++            size_t length,
++            int flags,
++            const struct sockaddr *dest_addr,
++            socklen_t dest_len)
++{
++    if (socket != MOCK_SOCKET_FD) {
++        lgtd_errx(
++            1, "got socket=%jd (expected %d)", (intmax_t)socket, MOCK_SOCKET_FD
++        );
++    }
++
++    if (!buffer) {
++        lgtd_errx(1, "missing buffer");
++    }
++
++    if (length != sizeof(struct lgtd_lifx_packet_header)) {
++        lgtd_errx(
++            1, "got buffer length=%ju (expected %ju)",
++            (uintmax_t)length, sizeof(struct lgtd_lifx_packet_header)
++        );
++    }
++
++    if (flags) {
++        lgtd_errx(1, "got flags=%#x (expected 0x0)", flags);
++    }
++
++    switch (mock_sendto_call_count++) {
++    case TEST_PARTIAL_SENDTO_OK_ADDR_CLASS_A:
++    case TEST_OK_SENDTO_OK_ADDR_CLASS_A:
++        lgtd_tests_check_sockaddr_in(
++            dest_addr,
++            dest_len,
++            AF_INET,
++            TEST_IPV4_BROADCAST_ADDR_CLASS_A,
++            LGTD_LIFX_PROTOCOL_PORT
++        );
++        return length;
++    case TEST_OK_SENDTO_OK_ADDR_CLASS_C:
++        lgtd_tests_check_sockaddr_in(
++            dest_addr,
++            dest_len,
++            AF_INET,
++            TEST_IPV4_BROADCAST_ADDR_CLASS_C,
++            LGTD_LIFX_PROTOCOL_PORT
++        );
++        return length;
++    case TEST_PARTIAL_SENDTO_ERROR_ADDR_CLASS_C:
++    case TEST_FAIL_SENDTO_ERROR_ADDR_CLASS_C:
++        lgtd_tests_check_sockaddr_in(
++            dest_addr,
++            dest_len,
++            AF_INET,
++            TEST_IPV4_BROADCAST_ADDR_CLASS_C,
++            LGTD_LIFX_PROTOCOL_PORT
++        );
++        return length - 1;
++    case TEST_FAIL_SENDTO_ERROR_ADDR_CLASS_A:
++        lgtd_tests_check_sockaddr_in(
++            dest_addr,
++            dest_len,
++            AF_INET,
++            TEST_IPV4_BROADCAST_ADDR_CLASS_A,
++            LGTD_LIFX_PROTOCOL_PORT
++        );
++        return length - 1;
++    default:
++        lgtd_errx(1, "mock_sendto called too many times");
++    }
++}
++
++int
++main(void)
++{
++    lgtd_lifx_broadcast_endpoint.socket = MOCK_SOCKET_FD;
++    lgtd_lifx_broadcast_endpoint.write_ev = MOCK_WRITE_EV;
++
++    bool ok;
++
++    // getifaddrs ok
++    ok = lgtd_lifx_broadcast_handle_write();
++    if (!ok) {
++        lgtd_errx(1, "write callback returned false (expected true)");
++    }
++    if (mock_lifx_wire_setup_header_call_count != 1) {
++        lgtd_errx(
++            1, "mock_lifx_wire_setup_header_call_count=%d (expected 1)",
++            mock_lifx_wire_setup_header_call_count
++        );
++    }
++    if (mock_sendto_call_count != 2) {
++        lgtd_errx(
++            1, "mock_sendto_call_count=%d (expected 2)",
++            mock_sendto_call_count
++        );
++    }
++    if (event_del_call_count != 1) {
++        lgtd_errx(
++            1, "event_del_call_count=%d (expected 1)", event_del_call_count
++        );
++    }
++    if (mock_freeifaddrs_call_count != 1) {
++        lgtd_errx(
++            1, "freeifaddrs_call_count=%d (expected 1)",
++            mock_freeifaddrs_call_count
++        );
++    }
++
++    lgtd_tests_hr();
++
++    // getifaddrs ok, one send fails
++    ok = lgtd_lifx_broadcast_handle_write();
++    if (!ok) {
++        lgtd_errx(1, "write callback returned false (expected true)");
++    }
++    if (mock_lifx_wire_setup_header_call_count != 2) {
++        lgtd_errx(
++            1, "mock_lifx_wire_setup_header_call_count=%d (expected 2)",
++            mock_lifx_wire_setup_header_call_count
++        );
++    }
++    if (mock_sendto_call_count != 4) {
++        lgtd_errx(
++            1, "mock_sendto_call_count=%d (expected 4)",
++            mock_sendto_call_count
++        );
++    }
++    if (event_del_call_count != 2) {
++        lgtd_errx(
++            1, "event_del_call_count=%d (expected 2)", event_del_call_count
++        );
++    }
++    if (mock_freeifaddrs_call_count != 2) {
++        lgtd_errx(
++            1, "freeifaddrs_call_count=%d (expected 2)",
++            mock_freeifaddrs_call_count
++        );
++    }
++
++    lgtd_tests_hr();
++
++    // getifaddrs ok, all sends fail
++    ok = lgtd_lifx_broadcast_handle_write();
++    if (ok) {
++        lgtd_errx(1, "write callback returned true (expected false)");
++    }
++    if (mock_lifx_wire_setup_header_call_count != 3) {
++        lgtd_errx(
++            1, "mock_lifx_wire_setup_header_call_count=%d (expected 2)",
++            mock_lifx_wire_setup_header_call_count
++        );
++    }
++    if (mock_sendto_call_count != 6) {
++        lgtd_errx(
++            1, "mock_sendto_call_count=%d (expected 6)",
++            mock_sendto_call_count
++        );
++    }
++    if (event_del_call_count != 2) {
++        lgtd_errx(
++            1, "event_del_call_count=%d (expected 2)", event_del_call_count
++        );
++    }
++    if (mock_freeifaddrs_call_count != 3) {
++        lgtd_errx(
++            1, "freeifaddrs_call_count=%d (expected 3)",
++            mock_freeifaddrs_call_count
++        );
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/broadcast/test_broadcast_write_callback_getifaddrs_fails.c b/tests/lifx/broadcast/test_broadcast_write_callback_getifaddrs_fails.c
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/broadcast/test_broadcast_write_callback_getifaddrs_fails.c
+@@ -0,0 +1,221 @@
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <ifaddrs.h>
++
++int mock_getifaddrs(struct ifaddrs **);
++void mock_freeifaddrs(struct ifaddrs *);
++ssize_t mock_sendto(int, const void *, size_t, int, const struct sockaddr *, socklen_t);
++
++#define getifaddrs(ifap) mock_getifaddrs(ifap)
++#define freeifaddrs(ifp) mock_freeifaddrs(ifp)
++#define sendto(socket, buffer, length, flags, dest_addr, dest_len) \
++    mock_sendto(socket, buffer, length, flags, dest_addr, dest_len)
++
++#include "broadcast.c"
++
++#include "mock_bulb.h"
++#define MOCKED_EVENT_DEL
++#include "mock_event2.h"
++#include "mock_gateway.h"
++#include "mock_log.h"
++#include "mock_tagging.h"
++#define MOCKED_LGTD_LIFX_WIRE_SETUP_HEADER
++#include "mock_wire_proto.h"
++
++#include "tests_utils.h"
++
++enum { MOCK_SOCKET_FD = 32 };
++static struct event *MOCK_WRITE_EV = (struct event *)0x7061726973;
++static const struct sockaddr_in LIFX_BROADCAST_ADDR = {
++    .sin_family = AF_INET,
++    .sin_addr = { INADDR_BROADCAST },
++    .sin_port = htons(LGTD_LIFX_PROTOCOL_PORT),
++    .sin_zero = { 0 }
++};
++
++static int event_del_call_count = 0;
++
++int
++event_del(struct event *ev)
++{
++    if (ev != MOCK_WRITE_EV) {
++        lgtd_errx(
++            1, "event_del received invalid event=%p (expected %p)",
++            ev, MOCK_WRITE_EV
++        );
++    }
++
++    event_del_call_count++;
++
++    return 0;
++}
++
++int
++mock_getifaddrs(struct ifaddrs **ifap)
++{
++    if (!ifap) {
++        lgtd_errx(1, "ifap souldn't be NULL");
++    }
++
++    errno = ENOSYS;
++
++    return -1;
++}
++
++void
++mock_freeifaddrs(struct ifaddrs *ifp)
++{
++    (void)ifp;
++
++    lgtd_errx(1, "freeifaddrs shouldn't have been called");
++}
++
++static int mock_lifx_wire_setup_header_call_count = 0;
++
++const struct lgtd_lifx_packet_info *
++lgtd_lifx_wire_setup_header(struct lgtd_lifx_packet_header *hdr,
++                            enum lgtd_lifx_target_type target_type,
++                            union lgtd_lifx_target target,
++                            const uint8_t *site,
++                            enum lgtd_lifx_packet_type packet_type)
++{
++    if (!hdr) {
++        lgtd_errx(1, "missing header");
++    }
++
++    if (target_type != LGTD_LIFX_TARGET_ALL_DEVICES) {
++        lgtd_errx(
++            1, "got target type %d (expected %d)",
++            target_type, LGTD_LIFX_TARGET_ALL_DEVICES
++        );
++    }
++
++    if (memcmp(&target, &LGTD_LIFX_UNSPEC_TARGET, sizeof(target))) {
++        lgtd_errx(
++            1, "got unexpected target (expected LGTD_LIFX_UNSPEC_TARGET)"
++        );
++    }
++
++    if (site) {
++        lgtd_errx(1, "got unexpected site %p (expected NULL)", site);
++    }
++
++    if (packet_type != LGTD_LIFX_GET_PAN_GATEWAY) {
++        lgtd_errx(
++            1, "got unexpected packet type %d (expected %d)",
++            packet_type, LGTD_LIFX_GET_PAN_GATEWAY
++        );
++    }
++
++    mock_lifx_wire_setup_header_call_count++;
++
++    return NULL;
++}
++
++enum mock_sendto_calls {
++    MOCK_SENDTO_OK = 0,
++    MOCK_SENDTO_ERROR,
++};
++
++static int mock_sendto_call_count = 0;
++
++ssize_t
++mock_sendto(int socket,
++            const void *buffer,
++            size_t length,
++            int flags,
++            const struct sockaddr *dest_addr,
++            socklen_t dest_len)
++{
++    if (socket != MOCK_SOCKET_FD) {
++        lgtd_errx(
++            1, "got socket=%jd (expected %d)", (intmax_t)socket, MOCK_SOCKET_FD
++        );
++    }
++
++    if (!buffer) {
++        lgtd_errx(1, "missing buffer");
++    }
++
++    if (length != sizeof(struct lgtd_lifx_packet_header)) {
++        lgtd_errx(
++            1, "got buffer length=%ju (expected %ju)",
++            (uintmax_t)length, sizeof(struct lgtd_lifx_packet_header)
++        );
++    }
++
++    if (flags) {
++        lgtd_errx(1, "got flags=%#x (expected 0x0)", flags);
++    }
++
++    lgtd_tests_check_sockaddr_in(
++        dest_addr, dest_len, AF_INET, INADDR_BROADCAST, LGTD_LIFX_PROTOCOL_PORT
++    );
++
++    switch (mock_sendto_call_count++) {
++    case MOCK_SENDTO_OK:
++        return length;
++    case MOCK_SENDTO_ERROR:
++        errno = EIO;
++        return -1;
++    default:
++        lgtd_errx(1, "sendto was called too many times");
++    }
++}
++
++int
++main(void)
++{
++    lgtd_lifx_broadcast_endpoint.socket = MOCK_SOCKET_FD;
++    lgtd_lifx_broadcast_endpoint.write_ev = MOCK_WRITE_EV;
++
++    bool ok;
++
++    // getifaddrs fails
++    ok = lgtd_lifx_broadcast_handle_write();
++    if (!ok) {
++        lgtd_errx(1, "write callback returned false (expected true)");
++    }
++    if (mock_lifx_wire_setup_header_call_count != 1) {
++        lgtd_errx(
++            1, "mock_lifx_wire_setup_header_call_count=%d (expected 1)",
++            mock_lifx_wire_setup_header_call_count
++        );
++    }
++    if (mock_sendto_call_count != 1) {
++        lgtd_errx(
++            1, "mock_sendto_call_count=%d (expected 1)",
++            mock_sendto_call_count
++        );
++    }
++    if (event_del_call_count != 1) {
++        lgtd_errx(
++            1, "event_del_call_count=%d (expected 1)", event_del_call_count
++        );
++    }
++
++    // getifaddrs & lgtd_lifx_broadcast_send_packet fail
++    ok = lgtd_lifx_broadcast_handle_write();
++    if (ok) {
++        lgtd_errx(1, "write callback returned true (expected false)");
++    }
++    if (mock_lifx_wire_setup_header_call_count != 2) {
++        lgtd_errx(
++            1, "mock_lifx_wire_setup_header_call_count=%d (expected 2)",
++            mock_lifx_wire_setup_header_call_count
++        );
++    }
++    if (mock_sendto_call_count != 2) {
++        lgtd_errx(
++            1, "mock_sendto_call_count=%d (expected 2)",
++            mock_sendto_call_count
++        );
++    }
++    if (event_del_call_count != 1) {
++        lgtd_errx(
++            1, "event_del_call_count=%d (expected 1)", event_del_call_count
++        );
++    }
++
++    return 0;
++}
+diff --git a/tests/lifx/mock_bulb.h b/tests/lifx/mock_bulb.h
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/mock_bulb.h
+@@ -0,0 +1,138 @@
++#pragma once
++
++#ifndef MOCKED_LGTD_LIFX_BULB_GET
++struct lgtd_lifx_bulb *
++lgtd_lifx_bulb_get(const uint8_t *addr)
++{
++    (void)addr;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_OPEN
++struct lgtd_lifx_bulb *
++lgtd_lifx_bulb_open(struct lgtd_lifx_gateway *gw, const uint8_t *addr)
++{
++    (void)gw;
++    (void)addr;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_CLOSE
++void
++lgtd_lifx_bulb_close(struct lgtd_lifx_bulb *bulb)
++{
++    (void)bulb;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_HAS_LABEL
++bool
++lgtd_lifx_bulb_has_label(const struct lgtd_lifx_bulb *bulb,
++                         const char *label)
++{
++    (void)bulb;
++    (void)label;
++    return false;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_LIGHT_STATE
++void
++lgtd_lifx_bulb_set_light_state(struct lgtd_lifx_bulb *bulb,
++                               const struct lgtd_lifx_light_state *state,
++                               lgtd_time_mono_t received_at)
++{
++    (void)bulb;
++    (void)state;
++    (void)received_at;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_POWER_STATE
++void
++lgtd_lifx_bulb_set_power_state(struct lgtd_lifx_bulb *bulb, uint16_t power)
++{
++    (void)bulb;
++    (void)power;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_TAGS
++void
++lgtd_lifx_bulb_set_tags(struct lgtd_lifx_bulb *bulb, uint64_t tags)
++{
++    (void)bulb;
++    (void)tags;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_IP_STATE
++void
++lgtd_lifx_bulb_set_ip_state(struct lgtd_lifx_bulb *bulb,
++                            enum lgtd_lifx_bulb_ips ip_id,
++                            const struct lgtd_lifx_ip_state *state,
++                            lgtd_time_mono_t received_at)
++{
++    (void)bulb;
++    (void)ip_id;
++    (void)state;
++    (void)received_at;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_IP_FIRMWARE_INFO
++void
++lgtd_lifx_bulb_set_ip_firmware_info(struct lgtd_lifx_bulb *bulb,
++                                    enum lgtd_lifx_bulb_ips ip_id,
++                                    const struct lgtd_lifx_ip_firmware_info *info,
++                                    lgtd_time_mono_t received_at)
++{
++    (void)bulb;
++    (void)ip_id;
++    (void)info;
++    (void)received_at;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_PRODUCT_INFO
++void
++lgtd_lifx_bulb_set_product_info(struct lgtd_lifx_bulb *bulb,
++                                const struct lgtd_lifx_product_info *info)
++{
++    (void)bulb;
++    (void)info;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_RUNTIME_INFO
++void
++lgtd_lifx_bulb_set_runtime_info(struct lgtd_lifx_bulb *bulb,
++                                const struct lgtd_lifx_runtime_info *info,
++                                lgtd_time_mono_t received_at)
++{
++    (void)bulb;
++    (void)info;
++    (void)received_at;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_LABEL
++void
++lgtd_lifx_bulb_set_label(struct lgtd_lifx_bulb *bulb,
++                         const char label[LGTD_LIFX_LABEL_SIZE])
++{
++    (void)bulb;
++    (void)label;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_BULB_SET_AMBIENT_LIGHT
++void
++lgtd_lifx_bulb_set_ambient_light(struct lgtd_lifx_bulb *bulb, float illuminance)
++{
++    (void)bulb;
++    (void)illuminance;
++}
++#endif
+diff --git a/tests/lifx/mock_tagging.h b/tests/lifx/mock_tagging.h
+new file mode 100644
+--- /dev/null
++++ b/tests/lifx/mock_tagging.h
+@@ -0,0 +1,55 @@
++#pragma once
++
++#include "lifx/tagging.h"
++
++struct lgtd_lifx_tag_list lgtd_lifx_tags =
++    LIST_HEAD_INITIALIZER(&lgtd_lifx_tags);
++
++#ifndef MOCKED_LGTD_LIFX_TAGGING_FIND_TAG
++struct lgtd_lifx_tag *
++lgtd_lifx_tagging_find_tag(const char *tag_label)
++{
++    (void)tag_label;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_TAGGING_ALLOCATE_TAG
++struct lgtd_lifx_tag *
++lgtd_lifx_tagging_allocate_tag(const char *tag_label)
++{
++    (void)tag_label;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_TAGGING_DEALLOCATE_TAG
++void
++lgtd_lifx_tagging_deallocate_tag(struct lgtd_lifx_tag *tag)
++{
++    (void)tag;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_TAGGING_INCREF
++struct lgtd_lifx_tag *
++lgtd_lifx_tagging_incref(const char *tag_label,
++                         struct lgtd_lifx_gateway *gw,
++                         int tag_id)
++{
++    (void)tag_label;
++    (void)gw;
++    (void)tag_id;
++    return NULL;
++}
++#endif
++
++#ifndef MOCKED_LGTD_LIFX_TAGGING_DECREF
++void
++lgtd_lifx_tagging_decref(struct lgtd_lifx_tag *tag,
++                         struct lgtd_lifx_gateway *gw)
++{
++    (void)tag;
++    (void)gw;
++}
++#endif
+diff --git a/tests/lifx/wire_proto/CMakeLists.txt b/tests/lifx/wire_proto/CMakeLists.txt
+--- a/tests/lifx/wire_proto/CMakeLists.txt
++++ b/tests/lifx/wire_proto/CMakeLists.txt
+@@ -4,12 +4,12 @@
+ )
+ 
+ ADD_CORE_LIBRARY(
+-    test_lifx_wire_proto_core STATIC
++    test_lifx_wire_proto STATIC
+     ${LIGHTSD_SOURCE_DIR}/core/utils.c
+ )
+ 
+ FUNCTION(ADD_WIRE_PROTO_TEST TEST_SOURCE)
+-    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_wire_proto_core)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_lifx_wire_proto)
+ ENDFUNCTION()
+ 
+ FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
