@@ -5,7 +5,7 @@ Correctly support optional arguments in the JSON-RPC API
 Passing too many arguments as an array also properly fails now.
 
 While we are at it, put the correct argument names in the documentation
-so that it works for poepl passing argument by name.
+so that it works for people passing argument by name.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt

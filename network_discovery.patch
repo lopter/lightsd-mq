@@ -1,8 +1,6 @@
 # HG changeset patch
-# Parent  415b476115e83c2f0d5ac5ec61920037f3c20f8a
+# Parent  f434982d40b06deb54a81294952159fabac079cc
 Properly broadcast LIFX discovery packets on all networks (closes GH-2)
-
-It does solve the issue but only is half the solution I'd like to have.
 
 This is really the proper way of achieving the same semantic as
 broadcasting to 255.255.255.255 and is kinda half the solution only.
@@ -518,7 +516,7 @@ diff --git a/tests/lifx/broadcast/test_broadcast_write_callback.c b/tests/lifx/b
 new file mode 100644
 --- /dev/null
 +++ b/tests/lifx/broadcast/test_broadcast_write_callback.c
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,368 @@
 +#include <sys/types.h>
 +#include <sys/socket.h>
 +#include <ifaddrs.h>
@@ -548,12 +546,6 @@ new file mode 100644
 +
 +enum { MOCK_SOCKET_FD = 32 };
 +static struct event *MOCK_WRITE_EV = (struct event *)0x7061726973;
-+static const struct sockaddr_in LIFX_BROADCAST_ADDR = {
-+    .sin_family = AF_INET,
-+    .sin_addr = { INADDR_BROADCAST },
-+    .sin_port = LGTD_STATIC_HTONS(LGTD_LIFX_PROTOCOL_PORT),
-+    .sin_zero = { 0 }
-+};
 +
 +// /24
 +#define TEST_IPV4_NETMASK_ADDR_24 LGTD_STATIC_HTONL(0xffffff00)

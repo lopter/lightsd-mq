@@ -1,6 +1,18 @@
 # HG changeset patch
-# Parent  730f00acf23dd91cf19f36f0118bc4844ab368cc
+# Parent  e591834e9fcbb5dd6428b186273d405c4269e98f
 Add a transition argument to the power functions
+
+Unlike LIFX's implementation, lightsd will properly get the bulbs to
+update their brightness state during the transition. That is: if you
+call get_light_state during the transition you will see the brightness
+of the bulb being updated.
+
+This is achieved by combining SET_LIGHT_COLOR and SET_POWER_STATE
+commands in a compatible way with the official LIFX mobile apps.
+
+This feature doesn't work for Original bulbs still running firmware 1.1
+since you can't set their color while they are off. The oldest firmware
+version tested for the Original bulbs is 1.5.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -368,7 +380,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -801,7 +790,7 @@
+@@ -804,7 +793,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_set_waveform_args, target),
              offsetof(struct lgtd_jsonrpc_set_waveform_args, target_ntokens),
@@ -377,7 +389,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          ),
          LGTD_JSONRPC_NODE(
-@@ -942,6 +931,89 @@
+@@ -946,6 +935,89 @@
  }
  
  static bool
@@ -467,7 +479,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  lgtd_jsonrpc_extract_target_list(struct lgtd_proto_target_list *targets,
                                   struct lgtd_client *client)
  {
-@@ -954,7 +1026,7 @@
+@@ -958,7 +1030,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_target_args, target),
              offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
@@ -476,7 +488,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
              false
          )
      };
-@@ -975,25 +1047,19 @@
+@@ -979,25 +1051,19 @@
      );
  }
  
@@ -513,7 +525,7 @@ diff --git a/core/jsonrpc.c b/core/jsonrpc.c
  static void
  lgtd_jsonrpc_check_and_call_proto_tag_or_untag_or_set_label(
          struct lgtd_client *client,
-@@ -1012,7 +1078,7 @@
+@@ -1016,7 +1082,7 @@
              "target",
              offsetof(struct lgtd_jsonrpc_target_args, target),
              offsetof(struct lgtd_jsonrpc_target_args, target_ntokens),
@@ -544,7 +556,7 @@ diff --git a/core/lightsd.c b/core/lightsd.c
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -121,9 +121,9 @@
+@@ -137,9 +137,9 @@
  extern struct event_base *lgtd_ev_base;
  extern const char *lgtd_progname;
  
@@ -1214,15 +1226,15 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
 -    def power_off(self, target):
 -        return self._jsonrpc_call("power_off", {"target": target})
 +    def power_on(self, target, transition=None):
-+        return self._jsonrpc_call("power_on", target, transition)
++        return self._power_call("power_on", target, transition)
  
 -    def power_toggle(self, target):
 -        return self._jsonrpc_call("power_toggle", {"target": target})
 +    def power_off(self, target, transition=None):
-+        return self._jsonrpc_call("power_off", target, transition)
++        return self._power_call("power_off", target, transition)
 +
 +    def power_toggle(self, target, transition=None):
-+        return self._jsonrpc_call("power_toggle", target, transition)
++        return self._power_call("power_toggle", target, transition)
  
      def get_light_state(self, target):
          return self._jsonrpc_call("get_light_state", [target])
