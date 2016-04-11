@@ -2,3 +2,342 @@
 # Parent  550428b5500438ecb084b12a822283b52460edf0
 Add a release command that can be used from buildbot
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -108,6 +108,12 @@
+     ADD_SUBDIRECTORY(docs)
+ ENDIF ()
+ 
++IF (DEFINED LIGHTSD_RELEASE_PACKAGES_DIR)  # TODO: REQUIRE PYTHON3 INTERP (voir require virtualenv?)
++    MESSAGE(STATUS "")
++
++    ADD_SUBDIRECTORY(dist)  # release script for buildbot integration
++ENDIF ()
++
+ INSTALL(
+     FILES COPYING README.rst docs/protocol.rst
+     DESTINATION share/doc/lightsd
+diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/dist/CMakeLists.txt
+@@ -0,0 +1,4 @@
++CONFIGURE_FILE(release.py.in "${CMAKE_CURRENT_BINARY_DIR}/release.py")
++
++ADD_CUSTOM_TARGET(
++)
+diff --git a/dist/homebrew/LICENSE b/dist/homebrew/LICENSE
+new file mode 100644
+--- /dev/null
++++ b/dist/homebrew/LICENSE
+@@ -0,0 +1,28 @@
++Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
++All rights reserved.
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are met:
++
++* Redistributions of source code must retain the above copyright notice, this
++  list of conditions and the following disclaimer.
++
++* Redistributions in binary form must reproduce the above copyright notice,
++  this list of conditions and the following disclaimer in the documentation
++  and/or other materials provided with the distribution.
++
++* Neither the name of homebrew-lightsd nor the names of its
++  contributors may be used to endorse or promote products derived from
++  this software without specific prior written permission.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
+diff --git a/dist/homebrew/README.rst b/dist/homebrew/README.rst
+new file mode 100644
+--- /dev/null
++++ b/dist/homebrew/README.rst
+@@ -0,0 +1,31 @@
++Homebrew lightsd
++================
++
++This `brew`_ tap let you install `lightsd`_, a daemon written C to control your
++LIFX wifi smart bulbs, on Mac OS X.
++
++.. _brew: http://brew.sh
++.. _lightsd: https://github.com/lopter/lightsd/
++
++Instructions
++------------
++
++Make sure you have brew installed: http://brew.sh.
++
++::
++
++   brew install lopter/lightsd/lightsd
++
++Or:
++
++::
++
++   brew tap lopter/lightsd
++   brew install lightsd
++
++Documentation
++-------------
++
++Please checkout lightsd's repository: https://github.com/lopter/lightsd/.
++
++.. vim: set tw=80 spelllang=en spell:
+diff --git a/dist/homebrew/lightsd.rb b/dist/homebrew/lightsd.rb
+new file mode 100644
+--- /dev/null
++++ b/dist/homebrew/lightsd.rb
+@@ -0,0 +1,99 @@
++require "formula"
++
++class Lightsd < Formula
++  desc "Daemon to control your LIFX wifi smart bulbs"
++  homepage "https://github.com/lopter/lightsd/"
++  url "https://github.com/lopter/lightsd/archive/1.1.2.tar.gz"
++  sha256 "ca8ce8fb87b896fcc9dad6b0512c061a150c1138e8a8554b60c43f4d11fce634"
++  revision 1
++
++  depends_on "cmake" => :build
++  depends_on "libevent" => :build
++  depends_on "python3" => :optional
++
++  def install
++    # XXX, wtf? https://github.com/Homebrew/homebrew/issues/46061
++    ENV["PATH"] = "/usr/bin:#{ENV["PATH"]}"
++
++    args = std_cmake_args
++    args << "-DLGTD_RUNTIME_DIRECTORY=#{var}/run/lightsd"
++
++    # idk what std_cmake_args is supposed to do but it appears to be missing
++    # proper release flags:
++    cflags = %W[
++      -fstack-protector-strong
++      --param=ssp-buffer-size=4
++      -O3
++      -DNDEBUG
++    ]
++    args << "-DCMAKE_BUILD_TYPE=RELEASE"
++    args << "-DCMAKE_C_FLAGS_RELEASE='#{cflags * " "}'"
++
++    system "cmake", *args
++    system "make", "install"
++  end
++
++  def plist; <<-EOS.undent
++    <?xml version="1.0" encoding="UTF-8"?>
++    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++    <plist version="1.0">
++      <dict>
++        <key>KeepAlive</key>
++        <dict>
++          <key>SuccessfulExit</key>
++          <false/>
++        </dict>
++        <key>Label</key>
++        <string>#{plist_name}</string>
++        <key>ProgramArguments</key>
++        <array>
++          <string>#{opt_bin}/lightsd</string>
++          <string>-v</string>
++          <string>warning</string>
++          <string>-s</string>
++          <string>#{var}/run/lightsd/socket</string>
++          <string>-c</string>
++          <string>#{var}/run/lightsd/pipe</string>
++        </array>
++        <key>RunAtLoad</key>
++        <true/>
++        <key>WorkingDirectory</key>
++        <string>#{var}</string>
++        <key>StandardErrorPath</key>
++        <string>#{var}/log/lightsd.log</string>
++        <key>StandardOutPath</key>
++        <string>#{var}/log/lightsd.log</string>
++      </dict>
++    </plist>
++    EOS
++  end
++
++  def caveats; <<-EOS.undent
++    Once you've started lightsd with launchctl load (see below), you can start
++    poking around with lightsc.py:
++
++      `lightsd --prefix`/share/lightsd/examples/lightsc.py
++    EOS
++  end
++
++  head do
++    url "https://github.com/lopter/lightsd.git"
++  end
++
++  devel do
++    url "file:///Users/louis/projs/lightsd", :using => :hg
++    version "1.1.3"
++  end
++
++  test do
++    Dir.mktmpdir("lightsd-test") do |dir|
++      args = %W[
++        -l ::1:0
++        -l 127.0.0.1:0
++        -c #{dir}/lightsd.cmd
++        -h
++      ]
++      system "#{bin}/lightsd", *args
++    end
++  end
++end
+diff --git a/dist/pkgbuild/.SRCINFO b/dist/pkgbuild/.SRCINFO
+new file mode 100644
+--- /dev/null
++++ b/dist/pkgbuild/.SRCINFO
+@@ -0,0 +1,19 @@
++pkgbase = lightsd
++	pkgdesc = Daemon to control your LIFX smart bulbs via a JSON-RPC API
++	pkgver = 1.1.2
++	pkgrel = 1
++	epoch = 1
++	url = https://www.github.com/lopter/lightsd/
++	install = lightsd.install
++	arch = i686
++	arch = x86_64
++	license = GPL3
++	makedepends = cmake>=2.8.11
++	depends = libevent>=2.0.19
++	optdepends = python: to run the interactive lightsc.py example client
++	optdepends = ipython: makes lightsc.py more user-friendly
++	source = https://github.com/lopter/lightsd/archive/1.1.2.tar.gz
++	sha256sums = ca8ce8fb87b896fcc9dad6b0512c061a150c1138e8a8554b60c43f4d11fce634
++
++pkgname = lightsd
++
+diff --git a/dist/pkgbuild/PKGBUILD b/dist/pkgbuild/PKGBUILD
+new file mode 100644
+--- /dev/null
++++ b/dist/pkgbuild/PKGBUILD
+@@ -0,0 +1,44 @@
++# Maintainer: Louis Opter <kalessin@kalessin.fr>
++
++pkgname=lightsd
++pkgver=1.1.2
++pkgrel=1
++epoch=1
++pkgdesc="Daemon to control your LIFX smart bulbs via a JSON-RPC API"
++arch=("i686" "x86_64")
++url="https://www.github.com/lopter/lightsd/"
++license=("GPL3")
++depends=("libevent>=2.0.19")
++optdepends=(
++    "python: to run the interactive lightsc.py example client"
++    "ipython: makes lightsc.py more user-friendly"
++)
++makedepends=("cmake>=2.8.11")
++source=("https://github.com/lopter/lightsd/archive/${pkgver}.tar.gz")
++sha256sums=("ca8ce8fb87b896fcc9dad6b0512c061a150c1138e8a8554b60c43f4d11fce634")
++#source=("src/${pkgname}-${pkgver}::hg+file:///home/kal/projs/lightsd")
++#sha256sums="SKIP"
++install=lightsd.install
++
++build() {
++    cd "$srcdir/$pkgname-$pkgver"
++
++    cmake .                         \
++        -DCMAKE_BUILD_TYPE=RELEASE  \
++        -DCMAKE_INSTALL_PREFIX=/usr \
++        -DLGTD_RUNTIME_DIRECTORY=/run/lightsd
++
++    make
++}
++
++check() {
++    cd "$srcdir/$pkgname-$pkgver"
++
++    make test
++}
++
++package() {
++    cd "$srcdir/$pkgname-$pkgver"
++
++    make DESTDIR="$pkgdir/" install
++}
+diff --git a/dist/pkgbuild/lightsd.install b/dist/pkgbuild/lightsd.install
+new file mode 100644
+--- /dev/null
++++ b/dist/pkgbuild/lightsd.install
+@@ -0,0 +1,22 @@
++post_install() {
++    getent group lightsd >/dev/null || groupadd -r lightsd
++    getent passwd lightsd >/dev/null || useradd -r -d / -g lightsd lightsd
++
++    cat << 'EOF'
++
++lightsd runs under the `lightsd' user and group by default; add yourself to
++this group to be able to open lightsd's socket and pipe under /run/lightsd:
++
++  gpasswd -a $USER lightsd
++
++Re-open your current desktop or ssh session for the change to take effect.
++Then use systemctl to start lightsd; you can start playing with lightsd with:
++
++  `lightsd --prefix`/share/doc/lightsd/examples/lightsc.py
++
++EOF
++}
++
++post_remove() {
++    getent passwd lightsd >/dev/null && userdel lightsd
++}
+diff --git a/dist/release.py.in b/dist/release.py.in
+new file mode 100644
+--- /dev/null
++++ b/dist/release.py.in
+@@ -0,0 +1,36 @@
++#!/usr/bin/env python3
++
++import os
++import subprocess
++import jinja
++
++# where the lightsd sources are:
++LIGHTSD_SOURCE_DIR="@LIGHTSD_SOURCE_DIR@"
++
++# where all the downstream repositories are:
++LIGHTSD_PKGS_DIR="@LIGHTSD_RELEASE_PACKAGES_DIR@"
++
++
++def repopath(repo):
++    return os.path.join([LIGHTSD_SOURCE_DIR, repo])
++
++
++class DownstreamPackage:
++
++    def __init__(self, distpath, repopath, templates=None):
++        pass
++
++    def render(self, context):
++        pass
++
++    def push(self):
++        pass
++
++
++if __name__ == "__main__":
++    packages = (
++        DownstreamPackage("dpkg", repopath("dpkg-lightsd")),
++        DownstreamPackage("homebrew", repopath("homebrew-lightsd")),
++        DownstreamPackage("openwrt", repopath("openwrt-lightsd")),
++        DownstreamPackage("pkgbuild", repopath("pkgbuild-lightsd")),
++    )
