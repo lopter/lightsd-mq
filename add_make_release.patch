@@ -1,0 +1,4 @@
+# HG changeset patch
+# Parent  550428b5500438ecb084b12a822283b52460edf0
+Add a release command that can be used from buildbot
+
