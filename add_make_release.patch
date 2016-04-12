@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  550428b5500438ecb084b12a822283b52460edf0
+# Parent  fce5e79a61b88e312ef56ff08d7e08b9c08c5351
 Add a release command that can be used from buildbot
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -304,12 +304,13 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,115 @@
 +#!/usr/bin/env python3
 +
++import click
 +import os
-+import subprocess
 +import jinja
++import subprocess
 +
 +# where the lightsd sources are:
 +LIGHTSD_SOURCE_DIR="@LIGHTSD_SOURCE_DIR@"
@@ -322,22 +323,107 @@ new file mode 100644
 +    return os.path.join([LIGHTSD_SOURCE_DIR, repo])
 +
 +
++class PackageContext:
++
++    __slots__ = (
++        "lightsd_version",
++        "lightsd_archive",
++    )
++
++    def __init__(self, **kwargs):
++        for name, value in kwargs.iteritems():
++            if name not in self.__slots__:
++                raise TypeError("{}: invalid argument {}".format(
++                    self.__class__.__name__, name
++                ))
++            setattr(self, name, value)
++
++
 +class DownstreamPackage:
 +
-+    def __init__(self, distpath, repopath, templates=None):
++    def __init__(self, repo):
++        self._repo = repo
++
++    def commit(self, msg):
++        dirty = len(subprocess.check_output([
++            "hg", "-R", self._repo, "status"
++        ])) != 0
++        if dirty is False:
++            return
++
++        subprocess.check_call([
++            "hg", "-R", self._repo, "commit", "-m", msg
++        ])
++
++
++class DebianPackage(DownstreamPackage):
++
++    def render(self, pkg_ctx):
 +        pass
 +
-+    def render(self, context):
++
++class HomebrewPackage(DownstreamPackage):
++
++    def render(self, pkg_ctx):
 +        pass
 +
-+    def push(self):
++
++class OpenWRTPackage(DownstreamPackage):
++
++    def render(self, pkg_ctx):
 +        pass
 +
++
++class PKGBUILDPackage(DownstreamPackage):
++
++    def render(self, pkg_ctx):
++        pass
++
++
++PACKAGES = (
++    DebianPackage(repopath("dpkg-lightsd")),
++    HomebrewPackage(repopath("homebrew-lightsd")),
++    OpenWRTPackage(repopath("openwrt-lightsd")),
++    PKGBUILDPackage(repopath("pkgbuild-lightsd")),
++)
++
++
++@click.group()
++def release(ctx):
++    if ctx.invoked_subcommand is None:
++        # TODO: developer "make release" flow
++        return
++
++
++@click.command()
++# hg log -R … -r "max(tag('re:\d+.\d+.\d+'))" -T "{tags}"
++@click.argument("version")
++@click.argument("archive", type=click.Path)
++def new_tag(version, archive):
++    pkg_ctx = PackageContext(
++        lightsd_version=version,
++        lightsd_archive=archive,
++    )
++    for pkg in PACKAGES:
++        pkg.render(pkg_ctx)
++        # TODO prendre le message de commit aussi et update la documentation:
++        pkg.commit("New upstream release {}".format(version))
++
++
++@click.command()
++def packages():
++    pass
++
++
++release.add_command(new_tag)
++release.add_command(packages)
 +
 +if __name__ == "__main__":
-+    packages = (
-+        DownstreamPackage("dpkg", repopath("dpkg-lightsd")),
-+        DownstreamPackage("homebrew", repopath("homebrew-lightsd")),
-+        DownstreamPackage("openwrt", repopath("openwrt-lightsd")),
-+        DownstreamPackage("pkgbuild", repopath("pkgbuild-lightsd")),
-+    )
++    release()
+diff --git a/dist/requirements-release.txt b/dist/requirements-release.txt
+new file mode 100644
+--- /dev/null
++++ b/dist/requirements-release.txt
+@@ -0,0 +1,2 @@
++click~=6.6
++jinja~=1.2
