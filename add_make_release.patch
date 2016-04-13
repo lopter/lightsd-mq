@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  fce5e79a61b88e312ef56ff08d7e08b9c08c5351
+# Parent  a8315dc0ab688a772fe0477a00de9cfa17d7b5fa
 Add a release command that can be used from buildbot
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -27,6 +27,481 @@ new file mode 100644
 +
 +ADD_CUSTOM_TARGET(
 +)
+diff --git a/dist/dpkg/.hgtags b/dist/dpkg/.hgtags
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/.hgtags
+@@ -0,0 +1,3 @@
++11534a873dbc92fd9c7225cf37d67942f852a67c 1.1.0
++60c3d81a6ff2305eca554c12c42d272d5f2187db 1.1.1
++bf09addc0ea974fc378f1acf48a8255e485f87d1 1.1.2
+diff --git a/dist/dpkg/debian/changelog b/dist/dpkg/debian/changelog
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/changelog
+@@ -0,0 +1,29 @@
++lightsd (1.1.2-1) unstable; urgency=low
++
++  * New upstream release: fix LIFX LAN protocol v2 handling.
++
++ -- Louis Opter <kalessin@kalessin.fr>  Mon, 30 Nov 2015 10:38:18 +0000
++
++lightsd (1.1.1-1) unstable; urgency=low
++
++  * New upstream release: responsiveness improvements.
++
++ -- Louis Opter <kalessin@kalessin.fr>  Tue, 17 Nov 2015 10:19:02 +0000
++
++lightsd (1.1.0-2) unstable; urgency=low
++
++  * Fix parallel builds
++
++ -- Louis Opter <kalessin@kalessin.fr>  Sat, 14 Nov 2015 06:35:43 +0000
++
++lightsd (1.1.0-1) unstable; urgency=low
++
++  * First published release
++
++ -- Louis Opter <kalessin@kalessin.fr>  Sun, 08 Nov 2015 08:06:51 +0000
++
++lightsd (1.0.1-1) unstable; urgency=low
++
++  * Initial release
++
++ -- Louis Opter <kalessin@kalessin.fr>  Tue, 03 Nov 2015 07:43:24 +0000
+diff --git a/dist/dpkg/debian/compat b/dist/dpkg/debian/compat
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/compat
+@@ -0,0 +1,1 @@
++9
+diff --git a/dist/dpkg/debian/control b/dist/dpkg/debian/control
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/control
+@@ -0,0 +1,23 @@
++Source: lightsd
++Section: contrib/utils
++Priority: optional
++Maintainer: Louis Opter <kalessin@kalessin.fr>
++Build-Depends: debhelper (>= 9), cmake (>= 2.8.9), libevent-dev (>= 2.0.19)
++Suggests: python3, ipython3
++Standards-Version: 3.9.6
++Homepage: https://github.com/lopter/lightsd/
++Vcs-Git: https://github.com/lopter/dpkg-lightsd.git
++Vcs-Browser: https://github.com/lopter/dpkg-lightsd/
++
++Package: lightsd
++Architecture: any
++Depends: ${shlibs:Depends}, ${misc:Depends}
++Description: Centralized daemon to control your LIFX bulbs
++ lightsd discovers LIFX bulbs on the local network and acts as a central
++ point of control for them via a JSON-RPC interface.
++ .
++ The JSON-RPC interface can run over TCP, named pipes as well as Unix
++ sockets and allows you to retrieve the state of the bulbs or set their
++ colors. Effects, grouping and de-grouping operations are also supported.
++ .
++ Visit http://lightsd.readthedocs.org/ for more informations.
+diff --git a/dist/dpkg/debian/copyright b/dist/dpkg/debian/copyright
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/copyright
+@@ -0,0 +1,62 @@
++Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
++Upstream-Name: lightsd
++Source: https://github.com/lopter/lightsd
++
++Files: *
++Copyright: 2014-2015 Louis Opter <kalessin@kalessin.fr>
++License: GPL-3.0+
++
++Files: debian/*
++Copyright: 2015 Louis Opter <kalessin@kalessin.fr>
++License: BSD-3-clause
++
++Files: examples/*
++Copyright: 2015 Louis Opter <kalessin@kalessin.fr>
++License: BSD-3-clause
++
++Files: share/lightsc.sh
++Copyright: 2015 Louis Opter <kalessin@kalessin.fr>
++License: BSD-3-clause
++
++License: GPL-3.0+
++ This program is free software: you can redistribute it and/or modify
++ it under the terms of the GNU General Public License as published by
++ the Free Software Foundation, either version 3 of the License, or
++ (at your option) any later version.
++ .
++ This package is distributed in the hope that it will be useful,
++ but WITHOUT ANY WARRANTY; without even the implied warranty of
++ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ GNU General Public License for more details.
++ .
++ You should have received a copy of the GNU General Public License
++ along with this program. If not, see <http://www.gnu.org/licenses/>.
++ .
++ On Debian systems, the complete text of the GNU General
++ Public License version 3 can be found in "/usr/share/common-licenses/GPL-3".
++
++License: BSD-3-clause
++ Redistribution and use in source and binary forms, with or without
++ modification, are permitted provided that the following conditions are met:
++ .
++ 1. Redistributions of source code must retain the above copyright notice, this
++ list of conditions and the following disclaimer.
++ .
++ 2. Redistributions in binary form must reproduce the above copyright notice,
++ this list of conditions and the following disclaimer in the documentation
++ and/or other materials provided with the distribution.
++ .
++ 3. Neither the name of the copyright holder nor the names of its contributors
++ may be used to endorse or promote products derived from this software without
++ specific prior written permission.
++ .
++ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++ AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+diff --git a/dist/dpkg/debian/docs b/dist/dpkg/debian/docs
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/docs
+@@ -0,0 +1,1 @@
++README.rst
+diff --git a/dist/dpkg/debian/init.d b/dist/dpkg/debian/init.d
+new file mode 100755
+--- /dev/null
++++ b/dist/dpkg/debian/init.d
+@@ -0,0 +1,129 @@
++#!/bin/sh
++### BEGIN INIT INFO
++# Provides:          lightsd
++# Required-Start:    $local_fs $network $syslog $remote_fs
++# Required-Stop:     $local_fs $network $syslog $remote_fs
++# Default-Start:     2 3 4 5
++# Default-Stop:      0 1 6
++# Short-Description: Start lightsd at boot time
++# Description:       Centralized daemon to discover and control LIFX bulbs.
++### END INIT INFO
++
++# Author: Louis Opter <kalessin@kalessin.fr>
++
++# Do NOT "set -e"
++
++# PATH should only include /usr/* if it runs after the mountnfs.sh script
++PATH=/sbin:/usr/sbin:/bin:/usr/bin
++DESC="lightsd"
++NAME=lightsd
++DAEMON=/usr/bin/lightsd
++PIDFILE=/var/run/$NAME.pid
++SCRIPTNAME=/etc/init.d/$NAME
++
++# Exit if the package is not installed
++[ -x "$DAEMON" ] || exit 0
++
++# Read configuration variable file if it is present
++[ -r /etc/default/$NAME ] && . /etc/default/$NAME
++
++DAEMON_ARGS="
++    --daemonize
++    --verbosity warning
++    --user lightsd
++    --pidfile $PIDFILE
++    --socket /var/run/lightsd/socket
++    --command-pipe /var/run/lightsd/pipe
++    $DAEMON_OPTS
++"
++
++# Load the VERBOSE setting and other rcS variables
++. /lib/init/vars.sh
++
++# Define LSB log_* functions.
++# Depend on lsb-base (>= 3.2-14) to ensure that this file is present
++# and status_of_proc is working.
++. /lib/lsb/init-functions
++
++do_start()
++{
++	# Return
++	#   0 if daemon has been started
++	#   1 if daemon was already running
++	#   2 if daemon could not be started
++	start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
++		|| return 1
++	start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON -- $DAEMON_ARGS \
++		|| return 2
++}
++
++do_stop()
++{
++	# Return
++	#   0 if daemon has been stopped
++	#   1 if daemon was already stopped
++	#   2 if daemon could not be stopped
++	#   other if a failure occurred
++	start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE --name $NAME
++	RETVAL="$?"
++	[ "$RETVAL" = 2 ] && return 2
++	# Wait for children to finish too if this is a daemon that forks
++	# and if the daemon is only ever run from this initscript.
++	# If the above conditions are not satisfied then add some other code
++	# that waits for the process to drop all resources that could be
++	# needed by services started subsequently.  A last resort is to
++	# sleep for some time.
++	start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --exec $DAEMON
++	[ "$?" = 2 ] && return 2
++	# Many daemons don't delete their pidfiles when they exit.
++	rm -f $PIDFILE
++	return "$RETVAL"
++}
++
++case "$1" in
++  start)
++	[ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
++	do_start
++	case "$?" in
++		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
++		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
++	esac
++	;;
++  stop)
++	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
++	do_stop
++	case "$?" in
++		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
++		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
++	esac
++	;;
++  status)
++	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
++	;;
++  restart|force-reload)
++	log_daemon_msg "Restarting $DESC" "$NAME"
++	do_stop
++	case "$?" in
++	  0|1)
++		do_start
++		case "$?" in
++			0) log_end_msg 0 ;;
++			1) log_end_msg 1 ;; # Old process is still running
++			*) log_end_msg 1 ;; # Failed to start
++		esac
++		;;
++	  *)
++		# Failed to stop
++		log_end_msg 1
++		;;
++	esac
++	;;
++  *)
++	echo "Usage: $SCRIPTNAME {start|stop|status|restart|force-reload}" >&2
++	exit 3
++	;;
++esac
++
++:
++
++# vim: set ft=sh:
+diff --git a/dist/dpkg/debian/lightsd.default b/dist/dpkg/debian/lightsd.default
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/lightsd.default
+@@ -0,0 +1,10 @@
++# Defaults for lightsd initscript
++# sourced by /etc/init.d/lightsd
++# installed at /etc/default/lightsd by the maintainer scripts
++
++#
++# This is a POSIX shell fragment
++#
++
++# Additional options that are passed to the Daemon.
++DAEMON_OPTS=""
+diff --git a/dist/dpkg/debian/postinst b/dist/dpkg/debian/postinst
+new file mode 100755
+--- /dev/null
++++ b/dist/dpkg/debian/postinst
+@@ -0,0 +1,55 @@
++#!/bin/sh
++# postinst script for lightsd
++#
++# see: dh_installdeb(1)
++
++set -e
++
++# summary of how this script can be called:
++#        * <postinst> `configure' <most-recently-configured-version>
++#        * <old-postinst> `abort-upgrade' <new version>
++#        * <conflictor's-postinst> `abort-remove' `in-favour' <package>
++#          <new-version>
++#        * <postinst> `abort-remove'
++#        * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
++#          <failed-install-package> <version> `removing'
++#          <conflicting-package> <version>
++# for details, see http://www.debian.org/doc/debian-policy/ or
++# the debian-policy package
++
++
++case "$1" in
++    configure)
++        getent group lightsd >/dev/null || groupadd -r lightsd
++        getent passwd lightsd >/dev/null || useradd -r -d / -g lightsd lightsd
++
++        cat << 'EOF'
++
++lightsd runs under the `lightsd' user and group by default; add yourself to
++this group to be able to open lightsd's socket and pipe under /var/run/lightsd:
++
++  gpasswd -a $USER lightsd
++
++Re-open your current desktop or ssh session for the change to take effect.
++Then use systemctl to start lightsd; you can start playing with lightsd with:
++
++  `lightsd --prefix`/share/doc/lightsd/examples/lightsc.py
++
++EOF
++    ;;
++
++    abort-upgrade|abort-remove|abort-deconfigure)
++    ;;
++
++    *)
++        echo "postinst called with unknown argument \`$1'" >&2
++        exit 1
++    ;;
++esac
++
++# dh_installdeb will replace this with shell code automatically
++# generated by other debhelper scripts.
++
++#DEBHELPER#
++
++exit 0
+diff --git a/dist/dpkg/debian/postrm b/dist/dpkg/debian/postrm
+new file mode 100755
+--- /dev/null
++++ b/dist/dpkg/debian/postrm
+@@ -0,0 +1,41 @@
++#!/bin/sh
++# postrm script for lightsd
++#
++# see: dh_installdeb(1)
++
++set -e
++
++# summary of how this script can be called:
++#        * <postrm> `remove'
++#        * <postrm> `purge'
++#        * <old-postrm> `upgrade' <new-version>
++#        * <new-postrm> `failed-upgrade' <old-version>
++#        * <new-postrm> `abort-install'
++#        * <new-postrm> `abort-install' <old-version>
++#        * <new-postrm> `abort-upgrade' <old-version>
++#        * <disappearer's-postrm> `disappear' <overwriter>
++#          <overwriter-version>
++# for details, see http://www.debian.org/doc/debian-policy/ or
++# the debian-policy package
++
++
++case "$1" in
++    purge|remove|abort-install)
++        getent passwd lightsd >/dev/null && userdel lightsd
++    ;;
++
++    upgrade|failed-upgrade|abort-upgrade|disappear)
++    ;;
++
++    *)
++        echo "postrm called with unknown argument \`$1'" >&2
++        exit 1
++    ;;
++esac
++
++# dh_installdeb will replace this with shell code automatically
++# generated by other debhelper scripts.
++
++#DEBHELPER#
++
++exit 0
+diff --git a/dist/dpkg/debian/rules b/dist/dpkg/debian/rules
+new file mode 100755
+--- /dev/null
++++ b/dist/dpkg/debian/rules
+@@ -0,0 +1,48 @@
++#!/usr/bin/make -f
++# See debhelper(7) (uncomment to enable)
++# output every command that modifies files on the build system.
++DH_VERBOSE = 1
++
++# see EXAMPLES in dpkg-buildflags(1) and read /usr/share/dpkg/*
++DPKG_EXPORT_BUILDFLAGS = 1
++include /usr/share/dpkg/default.mk
++
++# see FEATURE AREAS in dpkg-buildflags(1)
++export DEB_BUILD_MAINT_OPTIONS = hardening=+all
++
++# see ENVIRONMENT in dpkg-buildflags(1)
++# package maintainers to append CFLAGS
++#export DEB_CFLAGS_MAINT_APPEND  = -Wall -pedantic
++# package maintainers to append LDFLAGS
++#export DEB_LDFLAGS_MAINT_APPEND = -Wl,--as-needed
++
++ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
++    NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
++    MAKEFLAGS += -j$(NUMJOBS)
++endif
++
++ifeq (,$(wildcard /run))
++    RUNTIME_DIRECTORY=/run
++else
++    RUNTIME_DIRECTORY=/var/run
++endif
++
++# main packaging script based on dh7 syntax
++%:
++	dh $@ 
++
++# debmake generated override targets
++# This is example for Cmake (See http://bugs.debian.org/641051 )
++override_dh_auto_configure:
++	dh_auto_configure --					\
++	    	-DCMAKE_BUILD_TYPE=RELEASE			\
++		-DCMAKE_INSTALL_PREFIX=/usr			\
++		-DCMAKE_LIBRARY_PATH=$(DEB_HOST_MULTIARCH)	\
++		-DLGTD_RUNTIME_DIRECTORY=$(RUNTIME_DIRECTORY)/lightsd
++
++override_dh_auto_build:
++	dh_auto_build --parallel
++
++override_dh_auto_install:
++	dh_auto_install
++	rm -f debian/lightsd/usr/share/doc/lightsd/COPYING
+diff --git a/dist/dpkg/debian/source/format b/dist/dpkg/debian/source/format
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/source/format
+@@ -0,0 +1,1 @@
++3.0 (quilt)
+diff --git a/dist/dpkg/debian/watch b/dist/dpkg/debian/watch
+new file mode 100644
+--- /dev/null
++++ b/dist/dpkg/debian/watch
+@@ -0,0 +1,7 @@
++# See uscan(1) for format
++
++# Compulsory line, this is a version 3 file
++version=3
++
++opts=filenamemangle=s/.+\/v?(\d\S*)\.tar\.gz/lightsd-$1\.tar\.gz/ \
++       https://github.com/lopter/lightsd/tags .*/?(\d+\.\d+.\d+)\.tar\.gz
 diff --git a/dist/homebrew/LICENSE b/dist/homebrew/LICENSE
 new file mode 100644
 --- /dev/null
@@ -200,6 +675,97 @@ new file mode 100644
 +    end
 +  end
 +end
+diff --git a/dist/openwrt/utils/lightsd/Makefile b/dist/openwrt/utils/lightsd/Makefile
+new file mode 100644
+--- /dev/null
++++ b/dist/openwrt/utils/lightsd/Makefile
+@@ -0,0 +1,62 @@
++#
++# Copyright (C) 2015 Louis Opter <kalessin@kalessin.fr>
++#
++# This is free software, licensed under the GNU General Public License v2.
++# See /LICENSE for more information.
++#
++
++include $(TOPDIR)/rules.mk
++
++PKG_NAME:=lightsd
++PKG_VERSION:=1.1.2
++PKG_RELEASE:=1
++PKG_MAINTAINER:=Louis Opter <kalessin@kalessin.fr>
++PKG_LICENSE:=GPL-3.0+
++PKG_SOURCE_URL:=https://github.com/lopter/lightsd/archive/
++#PKG_SOURCE_URL:=http://localhost:8000/
++PKG_SOURCE:=$(PKG_VERSION).tar.gz
++PKG_MD5SUM:=b8155b96d5cbac6c5f111813d506fe62
++PKG_BUILD_DIR:=$(BUILD_DIR)/lightsd-$(PKG_VERSION)
++
++include $(INCLUDE_DIR)/package.mk
++include $(INCLUDE_DIR)/cmake.mk
++
++CMAKE_OPTIONS += \
++	-DCMAKE_BUILD_TYPE=RELEASE \
++	-DLGTD_RUNTIME_DIRECTORY=/var/run/lightsd
++
++define Package/lightsd
++  SECTION:=utils
++  CATEGORY:=Utilities
++  DEPENDS:=+libevent2-core
++  TITLE:=Daemon to control your LIFX Wi-Fi smart bulbs
++  MAINTAINER:=Louis Opter <kalessin@kalessin.fr>
++  URL:=https://github.com/lopter/lightsd
++  USERID:=lightsd:lightsd
++endef
++
++define Package/lightsd/install
++	$(INSTALL_DIR) \
++		$(1)/etc/init.d/ \
++		$(1)/usr/bin \
++		$(1)/usr/share/lightsd \
++		$(1)/usr/share/doc/lightsd
++
++	$(INSTALL_BIN) \
++		$(PKG_INSTALL_DIR)/usr/bin/lightsd \
++		$(1)/usr/bin/lightsd
++
++	$(INSTALL_BIN) \
++		./files/lightsd.init \
++		$(1)/etc/init.d/lightsd
++
++	$(CP) \
++		$(PKG_INSTALL_DIR)/usr/share/lightsd \
++		$(1)/usr/share/lightsd
++
++	$(CP) \
++		$(PKG_INSTALL_DIR)/usr/share/doc/lightsd \
++		$(1)/usr/share/doc/lightsd
++endef
++
++$(eval $(call BuildPackage,lightsd))
+diff --git a/dist/openwrt/utils/lightsd/files/lightsd.init b/dist/openwrt/utils/lightsd/files/lightsd.init
+new file mode 100644
+--- /dev/null
++++ b/dist/openwrt/utils/lightsd/files/lightsd.init
+@@ -0,0 +1,19 @@
++#!/bin/sh /etc/rc.common
++# Copyright (C) 2015 Louis Opter <kalessin@kalessin.fr>
++#
++# This is free software, licensed under the GNU General Public License v2.
++# See /LICENSE for more information.
++
++START=60
++
++USE_PROCD=1
++
++lightsd=/usr/bin/lightsd
++rundir=`$lightsd --rundir`
++
++start_service() {
++	procd_open_instance
++	procd_set_param command $lightsd -S -v warning -t -u lightsd -s "$rundir/socket" -c "$rundir/pipe"
++        procd_set_param respawn
++	procd_close_instance
++}
 diff --git a/dist/pkgbuild/.SRCINFO b/dist/pkgbuild/.SRCINFO
 new file mode 100644
 --- /dev/null
