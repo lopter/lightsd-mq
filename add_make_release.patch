@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  a8315dc0ab688a772fe0477a00de9cfa17d7b5fa
+# Parent  5c9ad837bd04767b5bc6f62f80243e494c2fb654
 Add a release command that can be used from buildbot
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -581,8 +581,8 @@ new file mode 100644
 +class Lightsd < Formula
 +  desc "Daemon to control your LIFX wifi smart bulbs"
 +  homepage "https://github.com/lopter/lightsd/"
-+  url "https://github.com/lopter/lightsd/archive/1.1.2.tar.gz"
-+  sha256 "ca8ce8fb87b896fcc9dad6b0512c061a150c1138e8a8554b60c43f4d11fce634"
++  url "{{ archive_url  }}"
++  sha256 "{{ archive_sha256 }}"
 +  revision 1
 +
 +  depends_on "cmake" => :build
@@ -660,7 +660,7 @@ new file mode 100644
 +
 +  devel do
 +    url "file:///Users/louis/projs/lightsd", :using => :hg
-+    version "1.1.3"
++    version "{{ dev_version }}"
 +  end
 +
 +  test do
@@ -690,14 +690,14 @@ new file mode 100644
 +include $(TOPDIR)/rules.mk
 +
 +PKG_NAME:=lightsd
-+PKG_VERSION:=1.1.2
++PKG_VERSION:={{ version }}
 +PKG_RELEASE:=1
 +PKG_MAINTAINER:=Louis Opter <kalessin@kalessin.fr>
 +PKG_LICENSE:=GPL-3.0+
-+PKG_SOURCE_URL:=https://github.com/lopter/lightsd/archive/
++PKG_SOURCE_URL:=https://downloads.lightsd.io/releases/
 +#PKG_SOURCE_URL:=http://localhost:8000/
 +PKG_SOURCE:=$(PKG_VERSION).tar.gz
-+PKG_MD5SUM:=b8155b96d5cbac6c5f111813d506fe62
++PKG_MD5SUM:={{ archive_md5 }}
 +PKG_BUILD_DIR:=$(BUILD_DIR)/lightsd-$(PKG_VERSION)
 +
 +include $(INCLUDE_DIR)/package.mk
@@ -773,7 +773,7 @@ new file mode 100644
 @@ -0,0 +1,19 @@
 +pkgbase = lightsd
 +	pkgdesc = Daemon to control your LIFX smart bulbs via a JSON-RPC API
-+	pkgver = 1.1.2
++	pkgver = {{ version }}
 +	pkgrel = 1
 +	epoch = 1
 +	url = https://www.github.com/lopter/lightsd/
@@ -785,8 +785,8 @@ new file mode 100644
 +	depends = libevent>=2.0.19
 +	optdepends = python: to run the interactive lightsc.py example client
 +	optdepends = ipython: makes lightsc.py more user-friendly
-+	source = https://github.com/lopter/lightsd/archive/1.1.2.tar.gz
-+	sha256sums = ca8ce8fb87b896fcc9dad6b0512c061a150c1138e8a8554b60c43f4d11fce634
++	source = {{ archive_url }}
++	sha256sums = {{ archive_sha256 }}
 +
 +pkgname = lightsd
 +
@@ -798,7 +798,7 @@ new file mode 100644
 +# Maintainer: Louis Opter <kalessin@kalessin.fr>
 +
 +pkgname=lightsd
-+pkgver=1.1.2
++pkgver={{ version }}
 +pkgrel=1
 +epoch=1
 +pkgdesc="Daemon to control your LIFX smart bulbs via a JSON-RPC API"
@@ -811,8 +811,8 @@ new file mode 100644
 +    "ipython: makes lightsc.py more user-friendly"
 +)
 +makedepends=("cmake>=2.8.11")
-+source=("https://github.com/lopter/lightsd/archive/${pkgver}.tar.gz")
-+sha256sums=("ca8ce8fb87b896fcc9dad6b0512c061a150c1138e8a8554b60c43f4d11fce634")
++source=("https://downloads.lightsd.io/releases/${pkgver}.tar.gz")
++sha256sums=("{{ archive_sha256 }}")
 +#source=("src/${pkgname}-${pkgver}::hg+file:///home/kal/projs/lightsd")
 +#sha256sums="SKIP"
 +install=lightsd.install
@@ -870,19 +870,22 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,165 @@
 +#!/usr/bin/env python3
 +
 +import click
++import hashlib
 +import os
-+import jinja
++import jinja2
 +import subprocess
 +
 +# where the lightsd sources are:
-+LIGHTSD_SOURCE_DIR="@LIGHTSD_SOURCE_DIR@"
++LIGHTSD_SOURCE_DIR = "@LIGHTSD_SOURCE_DIR@"
 +
 +# where all the downstream repositories are:
-+LIGHTSD_PKGS_DIR="@LIGHTSD_RELEASE_PACKAGES_DIR@"
++LIGHTSD_PKGS_DIR = "@LIGHTSD_RELEASE_PACKAGES_DIR@"
++
++ARCHIVE_READ_SIZE = 32768
 +
 +
 +def repopath(repo):
@@ -904,13 +907,33 @@ new file mode 100644
 +                ))
 +            setattr(self, name, value)
 +
++    def as_dict(self):
++        return {name: getattr(name) for name in self.__slots__}
++
 +
 +class DownstreamPackage:
 +
++    TYPE = None
++    TEMPLATES = None
++
 +    def __init__(self, repo):
 +        self._repo = repo
++        self._render_ctx = jinja2.Environment(loader=jinja2.FileSystemLoader(
++            os.path.join(LIGHTSD_SOURCE_DIR, "dist", type)
++        ))
++
++    def render(self, pkg_ctx):
++        if self.TEMPLATES is None:
++            return
++
++        for filename in self.TEMPLATES:
++            template = self._render_ctx.get_template(filename)
++            with open(os.path.join(self._repo, filename), "wb") as fp:
++                template.stream(pkg_ctx.as_dict()).dump(fp, "utf-8")
 +
 +    def commit(self, msg):
++        self._pre_commit(msg)
++
 +        dirty = len(subprocess.check_output([
 +            "hg", "-R", self._repo, "status"
 +        ])) != 0
@@ -924,26 +947,37 @@ new file mode 100644
 +
 +class DebianPackage(DownstreamPackage):
 +
++    TYPE = "dpkg"
++
 +    def render(self, pkg_ctx):
-+        pass
++        if pkg_ctx.version is not None:
++            self._version = ["-v", pkg_ctx.version]
++        else:
++            self._version = ["-i"]
++
++    def _pre_commit(self, msg):
++        cmd = ["dch"]
++        cmd.extend(self._version)
++        cmd.append(msg)
++        subprocess.check_call(cmd, cwd=self._repo)
 +
 +
 +class HomebrewPackage(DownstreamPackage):
 +
-+    def render(self, pkg_ctx):
-+        pass
++    TYPE = "homebrew"
++    TEMPLATES = ("lightsd.rb",)
 +
 +
 +class OpenWRTPackage(DownstreamPackage):
 +
-+    def render(self, pkg_ctx):
-+        pass
++    TYPE = "openwrt"
++    TEMPLATES = ("Makefile",)
 +
 +
 +class PKGBUILDPackage(DownstreamPackage):
 +
-+    def render(self, pkg_ctx):
-+        pass
++    TYPE = "pkgbuild"
++    TEMPLATES = ("PKGBUILD", ".SRCINFO")
 +
 +
 +PACKAGES = (
@@ -966,9 +1000,25 @@ new file mode 100644
 +@click.argument("version")
 +@click.argument("archive", type=click.Path)
 +def new_tag(version, archive):
++    archive_md5 = hashlib.md5()
++    archive_sha256 = hashlib.sha256()
++    with open("archive", "rb") as fp:
++        while True:
++            chunk = fp.read(ARCHIVE_READ_SIZE)
++            if not chunk:
++                break
++            archive_md5.update(chunk)
++            archive_sha256.update(chunk)
++    archive_md5 = archive_md5.hexdigest()
++    archive_sha256 = archive_sha256.hexdigest()
++
 +    pkg_ctx = PackageContext(
-+        lightsd_version=version,
-+        lightsd_archive=archive,
++        version=version,
++        dev_version=,
++        archive=archive,
++        archive_md5=archive_md5,
++        archive_sha256=archive_sha256,
++        archive_url="https://downloads.lightsd.io/releases/{}.tar.gz",
 +    )
 +    for pkg in PACKAGES:
 +        pkg.render(pkg_ctx)
