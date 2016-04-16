@@ -870,7 +870,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,168 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1019,7 +1019,9 @@ new file mode 100644
 +        archive=archive,
 +        archive_md5=archive_md5,
 +        archive_sha256=archive_sha256,
-+        archive_url="https://downloads.lightsd.io/releases/{}.tar.gz",
++        archive_url="https://downloads.lightsd.io/releases/{}.tar.gz".format(
++            version
++        ),
 +    )
 +    for pkg in PACKAGES:
 +        pkg.render(pkg_ctx)
