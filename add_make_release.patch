@@ -1,32 +1,105 @@
 # HG changeset patch
-# Parent  5c9ad837bd04767b5bc6f62f80243e494c2fb654
+# Parent  650d624e451642845f8771c8d69e8386d367a01d
 Add a release command that can be used from buildbot
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -108,6 +108,12 @@
-     ADD_SUBDIRECTORY(docs)
+@@ -24,7 +24,10 @@
+ # TODO: we need at least 2.0.19-stable because of the logging defines
+ FIND_PACKAGE(Event2 REQUIRED COMPONENTS core)
+ FIND_PACKAGE(Endian REQUIRED)
++SET(Python_ADDITIONAL_VERSIONS 3)
++FIND_PACKAGE(PythonInterp)
+ FIND_PACKAGE(Sphinx)
++FIND_PACKAGE(Virtualenv)
+ 
+ INCLUDE(CheckFunctionExists)
+ INCLUDE(CheckVariableExists)
+@@ -105,7 +108,17 @@
  ENDIF ()
  
-+IF (DEFINED LIGHTSD_RELEASE_PACKAGES_DIR)  # TODO: REQUIRE PYTHON3 INTERP (voir require virtualenv?)
-+    MESSAGE(STATUS "")
-+
-+    ADD_SUBDIRECTORY(dist)  # release script for buildbot integration
+ IF (SPHINX_FOUND)
++    MESSAGE(STATUS "Sphinx found, docs generation enabled")
+     ADD_SUBDIRECTORY(docs)
++ELSE ()
++    MESSAGE(STATUS "Shpinx wasn't found, docs generation disabled")
 +ENDIF ()
 +
++IF (PYTHONINTERP_FOUND AND PYTHON_VERSION_MAJOR EQUAL 3 AND VIRTUALENV_FOUND)
++    MESSAGE(STATUS "Python 3 and virtualenv found, release commands enabled")
++    ADD_SUBDIRECTORY(dist)  # release script for buildbot integration
++ELSE ()
++    MESSAGE(STATUS "Python 3 and/or virtualenv weren't found, release commands disabled")
+ ENDIF ()
+ 
  INSTALL(
-     FILES COPYING README.rst docs/protocol.rst
-     DESTINATION share/doc/lightsd
+diff --git a/CMakeScripts/FindVirtualenv.cmake b/CMakeScripts/FindVirtualenv.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/FindVirtualenv.cmake
+@@ -0,0 +1,7 @@
++FIND_PROGRAM(
++    VIRTUALENV_EXECUTABLE
++    NAMES virtualenv virtualenv2
++    DOC "Path to the virtualenv executable"
++)
++
++FIND_PACKAGE_HANDLE_STANDARD_ARGS(Virtualenv DEFAULT_MSG VIRTUALENV_EXECUTABLE)
 diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,49 @@
 +CONFIGURE_FILE(release.py.in "${CMAKE_CURRENT_BINARY_DIR}/release.py")
 +
-+ADD_CUSTOM_TARGET(
++SET(VENV_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/py-env")
++
++ADD_CUSTOM_COMMAND(
++    OUTPUT "${VENV_DIRECTORY}.stamp"
++    COMMAND "${VIRTUALENV_EXECUTABLE}" -p "${PYTHON_EXECUTABLE}" "${VENV_DIRECTORY}"
++    COMMAND "${VENV_DIRECTORY}/bin/pip" install -Ur "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
++    COMMAND "${CMAKE_COMMAND}" -E touch "${VENV_DIRECTORY}.stamp"
++    COMMENT "Setting up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
++    VERBATIM
 +)
++
++ADD_CUSTOM_TARGET(
++    release
++    COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/release.py"
++    COMMENT "Starting release for ${LIGHTSD_VERSION}"
++    DEPENDS "${VENV_DIRECTORY}.stamp"
++    VERBATIM
++)
++
++IF (DEFINED "${LIGHTSD_RELEASE_PACKAGES_DIR}")
++    MESSAGE(
++        STATUS
++        "Downstream packages directory specified at "
++        "${LIGHTSD_RELEASE_PACKAGES_DIR}, enabling package release integration"
++    )
++
++    ADD_CUSTOM_TARGET(
++        release_new_tag
++        COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
++        COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
++        DEPENDS "${VENV_DIRECTORY}.stamp"
++        VERBATIM
++    )
++    ADD_CUSTOM_TARGET(
++        release_new_tag
++        COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
++        COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
++        DEPENDS "${VENV_DIRECTORY}.stamp"
++        VERBATIM
++    )
++ELSE ()
++    MESSAGE(
++        STATUS
++        "No directory specified for downstream packages, "
++        "package release integration disabled"
++    )
++ENDIF ()
 diff --git a/dist/dpkg/.hgtags b/dist/dpkg/.hgtags
 new file mode 100644
 --- /dev/null
@@ -870,7 +943,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,169 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -993,6 +1066,7 @@ new file mode 100644
 +def release(ctx):
 +    if ctx.invoked_subcommand is None:
 +        # TODO: developer "make release" flow
++        click.echo("Not implemented yet :(")
 +        return
 +
 +
