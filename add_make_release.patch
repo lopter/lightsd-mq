@@ -5,18 +5,36 @@ Add a release command that can be used from buildbot
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -24,7 +24,10 @@
+@@ -24,7 +24,13 @@
  # TODO: we need at least 2.0.19-stable because of the logging defines
  FIND_PACKAGE(Event2 REQUIRED COMPONENTS core)
  FIND_PACKAGE(Endian REQUIRED)
++FIND_PACKAGE(Hg)
 +SET(Python_ADDITIONAL_VERSIONS 3)
 +FIND_PACKAGE(PythonInterp)
  FIND_PACKAGE(Sphinx)
++FIND_PACKAGE(BsdTar)
 +FIND_PACKAGE(Virtualenv)
++FIND_PACKAGE(Xz)
  
  INCLUDE(CheckFunctionExists)
  INCLUDE(CheckVariableExists)
-@@ -105,7 +108,17 @@
+@@ -89,12 +95,11 @@
+ ADD_SUBDIRECTORY(compat)
+ ADD_SUBDIRECTORY(core)
+ ADD_SUBDIRECTORY(lifx)
++ADD_SUBDIRECTORY(dist)
+ 
+ # 2.8.11 is the first version with TARGET_INCLUDE_DIRECTORIES:
+ IF (CMAKE_VERSION VERSION_GREATER 2.8.10)
+-    CONFIGURE_FILE(
+-        CTestCustom.cmake.in "${LIGHTSD_BINARY_DIR}/CTestCustom.cmake" @ONLY
+-    )
++    CONFIGURE_FILE(CTestCustom.cmake.in "${LIGHTSD_BINARY_DIR}/CTestCustom.cmake" @ONLY)
+     ADD_SUBDIRECTORY(tests)
+ ELSE ()
+     MESSAGE(
+@@ -105,7 +110,10 @@
  ENDIF ()
  
  IF (SPHINX_FOUND)
@@ -24,16 +42,32 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      ADD_SUBDIRECTORY(docs)
 +ELSE ()
 +    MESSAGE(STATUS "Shpinx wasn't found, docs generation disabled")
-+ENDIF ()
-+
-+IF (PYTHONINTERP_FOUND AND PYTHON_VERSION_MAJOR EQUAL 3 AND VIRTUALENV_FOUND)
-+    MESSAGE(STATUS "Python 3 and virtualenv found, release commands enabled")
-+    ADD_SUBDIRECTORY(dist)  # release script for buildbot integration
-+ELSE ()
-+    MESSAGE(STATUS "Python 3 and/or virtualenv weren't found, release commands disabled")
  ENDIF ()
  
  INSTALL(
+diff --git a/CMakeScripts/FindBsdTar.cmake b/CMakeScripts/FindBsdTar.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/FindBsdTar.cmake
+@@ -0,0 +1,6 @@
++FIND_PROGRAM(
++    BSDTAR_EXECUTABLE NAMES bsdtar
++    DOC "Path to the bsdtar executable"
++)
++
++FIND_PACKAGE_HANDLE_STANDARD_ARGS(BsdTar DEFAULT_MSG BSDTAR_EXECUTABLE)
+diff --git a/CMakeScripts/FindSphinx.cmake b/CMakeScripts/FindSphinx.cmake
+--- a/CMakeScripts/FindSphinx.cmake
++++ b/CMakeScripts/FindSphinx.cmake
+@@ -1,7 +1,7 @@
+ FIND_PROGRAM(
+     SPHINX_EXECUTABLE
+     NAMES sphinx-build sphinx-build2
+-    DOC "Path to sphinx-build executable"
++    DOC "Path to the sphinx-build executable"
+ )
+ 
+ FIND_PACKAGE_HANDLE_STANDARD_ARGS(Sphinx DEFAULT_MSG SPHINX_EXECUTABLE)
 diff --git a/CMakeScripts/FindVirtualenv.cmake b/CMakeScripts/FindVirtualenv.cmake
 new file mode 100644
 --- /dev/null
@@ -46,59 +80,123 @@ new file mode 100644
 +)
 +
 +FIND_PACKAGE_HANDLE_STANDARD_ARGS(Virtualenv DEFAULT_MSG VIRTUALENV_EXECUTABLE)
+diff --git a/CMakeScripts/FindXz.cmake b/CMakeScripts/FindXz.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/FindXz.cmake
+@@ -0,0 +1,6 @@
++FIND_PROGRAM(
++    XZ_EXECUTABLE NAMES xz
++    DOC "Path to the xz executable"
++)
++
++FIND_PACKAGE_HANDLE_STANDARD_ARGS(Xz DEFAULT_MSG XZ_EXECUTABLE)
 diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,102 @@
 +CONFIGURE_FILE(release.py.in "${CMAKE_CURRENT_BINARY_DIR}/release.py")
 +
-+SET(VENV_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/py-env")
++SET(TAR_ARCHIVE "${CMAKE_CURRENT_BINARY_DIR}/lightsd-${LIGHTSD_VERSION}.tar")
++SET(TARGZ_ARCHIVE "${TAR_ARCHIVE}.gz")
++SET(TARXZ_ARCHIVE "${TAR_ARCHIVE}.xz")
 +
-+ADD_CUSTOM_COMMAND(
-+    OUTPUT "${VENV_DIRECTORY}.stamp"
-+    COMMAND "${VIRTUALENV_EXECUTABLE}" -p "${PYTHON_EXECUTABLE}" "${VENV_DIRECTORY}"
-+    COMMAND "${VENV_DIRECTORY}/bin/pip" install -Ur "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
-+    COMMAND "${CMAKE_COMMAND}" -E touch "${VENV_DIRECTORY}.stamp"
-+    COMMENT "Setting up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
-+    VERBATIM
-+)
-+
-+ADD_CUSTOM_TARGET(
-+    release
-+    COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/release.py"
-+    COMMENT "Starting release for ${LIGHTSD_VERSION}"
-+    DEPENDS "${VENV_DIRECTORY}.stamp"
-+    VERBATIM
-+)
-+
-+IF (DEFINED "${LIGHTSD_RELEASE_PACKAGES_DIR}")
-+    MESSAGE(
-+        STATUS
-+        "Downstream packages directory specified at "
-+        "${LIGHTSD_RELEASE_PACKAGES_DIR}, enabling package release integration"
-+    )
++# I wanted to use hg export but then dpkg gave me troubles:
++IF (BSDTAR_FOUND AND HG_FOUND)
++    MESSAGE(STATUS "bsdtar and mercurial found, archives generation enabled")
 +
 +    ADD_CUSTOM_TARGET(
-+        release_new_tag
-+        COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
-+        COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
-+        DEPENDS "${VENV_DIRECTORY}.stamp"
++        clean_source_dir
++        COMMAND "${HG_EXECUTABLE}" -R "${LIGHTSD_SOURCE_DIR}" --config extensions.purge= purge -a --all --files --dirs
 +        VERBATIM
 +    )
-+    ADD_CUSTOM_TARGET(
-+        release_new_tag
-+        COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
-+        COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
-+        DEPENDS "${VENV_DIRECTORY}.stamp"
++
++    ADD_CUSTOM_COMMAND(
++        OUTPUT "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}"
++        COMMAND "${BSDTAR_EXECUTABLE}" -C "${LIGHTSD_SOURCE_DIR}" -cf "${TAR_ARCHIVE}" -s "/^/lightsd-${LIGHTSD_VERSION}/" .
++        COMMAND "${BSDTAR_EXECUTABLE}" -C "${LIGHTSD_SOURCE_DIR}" -czf "${TARGZ_ARCHIVE}" -s "/^/lightsd-${LIGHTSD_VERSION}/" .
++        DEPENDS clean_source_dir
 +        VERBATIM
 +    )
++
++    IF (XZ_FOUND)
++        ADD_CUSTOM_COMMAND(
++            OUTPUT "${TARXZ_ARCHIVE}"
++            COMMAND "${XZ_EXECUTABLE}" -k "${TAR_ARCHIVE}"
++            DEPENDS "${TAR_ARCHIVE}"
++            VERBATIM
++        )
++        ADD_CUSTOM_TARGET(
++            archives
++            COMMENT "Creating tarballs for release ${LIGHTSD_VERSION}"
++            DEPENDS "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}" "${TARXZ_ARCHIVE}"
++        )
++    ELSE ()
++        MESSAGE(WARNING "Not creating a xz compressed tarball since xz wasn't found")
++        ADD_CUSTOM_TARGET(
++            archives
++            COMMENT "Creating tarballs for release ${LIGHTSD_VERSION}"
++            DEPENDS "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}"
++        )
++    ENDIF ()
 +ELSE ()
-+    MESSAGE(
-+        STATUS
-+        "No directory specified for downstream packages, "
-+        "package release integration disabled"
++    MESSAGE(STATUS "bsdtar and/or mercurial weren't found, archives generation disabled")
++ENDIF ()
++
++SET(VENV_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/py-env")
++SET(VENV_PYTHON "${VENV_DIRECTORY}/bin/python")
++
++IF (PYTHONINTERP_FOUND AND PYTHON_VERSION_MAJOR EQUAL 3 AND VIRTUALENV_FOUND)
++    MESSAGE(STATUS "Python 3 and virtualenv found, release commands enabled")
++
++    ADD_CUSTOM_COMMAND(
++        OUTPUT "${VENV_DIRECTORY}.stamp"
++        COMMAND "${VIRTUALENV_EXECUTABLE}" -p "${PYTHON_EXECUTABLE}" "${VENV_DIRECTORY}"
++        COMMAND "${VENV_DIRECTORY}/bin/pip" install -Ur "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
++        COMMAND "${CMAKE_COMMAND}" -E touch "${VENV_DIRECTORY}.stamp"
++        COMMENT "Setting up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
++        VERBATIM
 +    )
++
++    ADD_CUSTOM_TARGET(
++        release
++        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py"
++        COMMENT "Starting release for ${LIGHTSD_VERSION}"
++        DEPENDS "${VENV_DIRECTORY}.stamp"
++        VERBATIM
++    )
++
++    IF (DEFINED "${LIGHTSD_RELEASE_PACKAGES_DIR}")
++        MESSAGE(
++            STATUS
++            "Downstream packages directory specified at "
++            "${LIGHTSD_RELEASE_PACKAGES_DIR}, enabling package release integration"
++        )
++
++        ADD_CUSTOM_TARGET(
++            release_new_tag
++            COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
++            COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
++            DEPENDS "${VENV_DIRECTORY}.stamp"
++            VERBATIM
++        )
++        ADD_CUSTOM_TARGET(
++            release_new_tag
++            COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
++            COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
++            DEPENDS "${VENV_DIRECTORY}.stamp"
++            VERBATIM
++        )
++    ELSE ()
++        MESSAGE(
++            STATUS
++            "No directory specified for downstream packages, "
++            "package release integration disabled"
++        )
++    ENDIF ()
++ELSE ()
++    MESSAGE(STATUS "Python 3 and/or virtualenv weren't found, release commands disabled")
 +ENDIF ()
 diff --git a/dist/dpkg/.hgtags b/dist/dpkg/.hgtags
 new file mode 100644
@@ -769,7 +867,7 @@ new file mode 100644
 +PKG_LICENSE:=GPL-3.0+
 +PKG_SOURCE_URL:=https://downloads.lightsd.io/releases/
 +#PKG_SOURCE_URL:=http://localhost:8000/
-+PKG_SOURCE:=$(PKG_VERSION).tar.gz
++PKG_SOURCE:={{ archive_name }}
 +PKG_MD5SUM:={{ archive_md5 }}
 +PKG_BUILD_DIR:=$(BUILD_DIR)/lightsd-$(PKG_VERSION)
 +
@@ -884,7 +982,7 @@ new file mode 100644
 +    "ipython: makes lightsc.py more user-friendly"
 +)
 +makedepends=("cmake>=2.8.11")
-+source=("https://downloads.lightsd.io/releases/${pkgver}.tar.gz")
++source=("{{ archive_url }}")
 +sha256sums=("{{ archive_sha256 }}")
 +#source=("src/${pkgname}-${pkgver}::hg+file:///home/kal/projs/lightsd")
 +#sha256sums="SKIP"
@@ -943,7 +1041,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,171 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -963,7 +1061,7 @@ new file mode 100644
 +
 +
 +def repopath(repo):
-+    return os.path.join([LIGHTSD_SOURCE_DIR, repo])
++    return os.path.join(LIGHTSD_SOURCE_DIR, repo)
 +
 +
 +class PackageContext:
@@ -993,7 +1091,7 @@ new file mode 100644
 +    def __init__(self, repo):
 +        self._repo = repo
 +        self._render_ctx = jinja2.Environment(loader=jinja2.FileSystemLoader(
-+            os.path.join(LIGHTSD_SOURCE_DIR, "dist", type)
++            os.path.join(LIGHTSD_SOURCE_DIR, "dist", self.TYPE)
 +        ))
 +
 +    def render(self, pkg_ctx):
@@ -1062,7 +1160,8 @@ new file mode 100644
 +)
 +
 +
-+@click.group()
++@click.group(invoke_without_command=True)
++@click.pass_context
 +def release(ctx):
 +    if ctx.invoked_subcommand is None:
 +        # TODO: developer "make release" flow
@@ -1073,11 +1172,11 @@ new file mode 100644
 +@click.command()
 +# hg log -R … -r "max(tag('re:\d+.\d+.\d+'))" -T "{tags}"
 +@click.argument("version")
-+@click.argument("archive", type=click.Path)
++@click.argument("archive", type=click.Path(exists=True))
 +def new_tag(version, archive):
 +    archive_md5 = hashlib.md5()
 +    archive_sha256 = hashlib.sha256()
-+    with open("archive", "rb") as fp:
++    with open(archive, "rb") as fp:
 +        while True:
 +            chunk = fp.read(ARCHIVE_READ_SIZE)
 +            if not chunk:
@@ -1087,14 +1186,15 @@ new file mode 100644
 +    archive_md5 = archive_md5.hexdigest()
 +    archive_sha256 = archive_sha256.hexdigest()
 +
++    archive_name = os.path.basename(archive)
 +    pkg_ctx = PackageContext(
 +        version=version,
 +        dev_version=semver.bump_patch(version),
-+        archive=archive,
++        archive_name=archive_name,
 +        archive_md5=archive_md5,
 +        archive_sha256=archive_sha256,
-+        archive_url="https://downloads.lightsd.io/releases/{}.tar.gz".format(
-+            version
++        archive_url="https://downloads.lightsd.io/releases/{}".format(
++            archive_name
 +        ),
 +    )
 +    for pkg in PACKAGES:
@@ -1118,6 +1218,6 @@ new file mode 100644
 --- /dev/null
 +++ b/dist/requirements-release.txt
 @@ -0,0 +1,3 @@
-+click~=6.6
-+jinja~=1.2
-+semver~=2.4.1
++click>=6.6,<7.0
++jinja2>=2.8,<3.0
++semver>=2.4.1,<3.0.0
