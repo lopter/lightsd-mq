@@ -5,10 +5,11 @@ Add a release command that can be used from buildbot
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -24,7 +24,13 @@
+@@ -24,7 +24,14 @@
  # TODO: we need at least 2.0.19-stable because of the logging defines
  FIND_PACKAGE(Event2 REQUIRED COMPONENTS core)
  FIND_PACKAGE(Endian REQUIRED)
++FIND_PACKAGE(Gzip)
 +FIND_PACKAGE(Hg)
 +SET(Python_ADDITIONAL_VERSIONS 3)
 +FIND_PACKAGE(PythonInterp)
@@ -19,7 +20,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  INCLUDE(CheckFunctionExists)
  INCLUDE(CheckVariableExists)
-@@ -89,12 +95,11 @@
+@@ -89,12 +96,11 @@
  ADD_SUBDIRECTORY(compat)
  ADD_SUBDIRECTORY(core)
  ADD_SUBDIRECTORY(lifx)
@@ -34,7 +35,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      ADD_SUBDIRECTORY(tests)
  ELSE ()
      MESSAGE(
-@@ -105,7 +110,10 @@
+@@ -105,7 +111,10 @@
  ENDIF ()
  
  IF (SPHINX_FOUND)
@@ -56,6 +57,17 @@ new file mode 100644
 +)
 +
 +FIND_PACKAGE_HANDLE_STANDARD_ARGS(BsdTar DEFAULT_MSG BSDTAR_EXECUTABLE)
+diff --git a/CMakeScripts/FindGzip.cmake b/CMakeScripts/FindGzip.cmake
+new file mode 100644
+--- /dev/null
++++ b/CMakeScripts/FindGzip.cmake
+@@ -0,0 +1,6 @@
++FIND_PROGRAM(
++    GZIP_EXECUTABLE NAMES gzip
++    DOC "Path to the gzip executable"
++)
++
++FIND_PACKAGE_HANDLE_STANDARD_ARGS(Gzip DEFAULT_MSG GZIP_EXECUTABLE)
 diff --git a/CMakeScripts/FindSphinx.cmake b/CMakeScripts/FindSphinx.cmake
 --- a/CMakeScripts/FindSphinx.cmake
 +++ b/CMakeScripts/FindSphinx.cmake
@@ -95,106 +107,71 @@ diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,102 @@
-+CONFIGURE_FILE(release.py.in "${CMAKE_CURRENT_BINARY_DIR}/release.py")
-+
-+SET(TAR_ARCHIVE "${CMAKE_CURRENT_BINARY_DIR}/lightsd-${LIGHTSD_VERSION}.tar")
-+SET(TARGZ_ARCHIVE "${TAR_ARCHIVE}.gz")
-+SET(TARXZ_ARCHIVE "${TAR_ARCHIVE}.xz")
-+
+@@ -0,0 +1,67 @@
 +# I wanted to use hg export but then dpkg gave me troubles:
-+IF (BSDTAR_FOUND AND HG_FOUND)
-+    MESSAGE(STATUS "bsdtar and mercurial found, archives generation enabled")
++IF (BSDTAR_FOUND AND GZIP_FOUND AND XZ_FOUND AND HG_FOUND)
++    MESSAGE(STATUS "bsdtar, mercurial (hg), gzip and xz found, archives generation enabled")
++
++    SET(TAR_ARCHIVE "${CMAKE_CURRENT_BINARY_DIR}/lightsd-${LIGHTSD_VERSION}.tar")
++    SET(TARGZ_ARCHIVE "${TAR_ARCHIVE}.gz")
++    SET(TARXZ_ARCHIVE "${TAR_ARCHIVE}.xz")
 +
 +    ADD_CUSTOM_TARGET(
 +        clean_source_dir
-+        COMMAND "${HG_EXECUTABLE}" -R "${LIGHTSD_SOURCE_DIR}" --config extensions.purge= purge -a --all --files --dirs
++        COMMAND "${HG_EXECUTABLE}" -R "${LIGHTSD_SOURCE_DIR}" --config extensions.purge= purge -a --all
 +        VERBATIM
 +    )
 +
 +    ADD_CUSTOM_COMMAND(
-+        OUTPUT "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}"
-+        COMMAND "${BSDTAR_EXECUTABLE}" -C "${LIGHTSD_SOURCE_DIR}" -cf "${TAR_ARCHIVE}" -s "/^/lightsd-${LIGHTSD_VERSION}/" .
-+        COMMAND "${BSDTAR_EXECUTABLE}" -C "${LIGHTSD_SOURCE_DIR}" -czf "${TARGZ_ARCHIVE}" -s "/^/lightsd-${LIGHTSD_VERSION}/" .
++        OUTPUT "${TAR_ARCHIVE}"
++        COMMAND "${BSDTAR_EXECUTABLE}" -C "${LIGHTSD_SOURCE_DIR}" -cf "${TAR_ARCHIVE}" -s "/^\\./lightsd-${LIGHTSD_VERSION}/" --exclude .hg .
 +        DEPENDS clean_source_dir
 +        VERBATIM
 +    )
++    ADD_CUSTOM_COMMAND(
++        OUTPUT "${TARGZ_ARCHIVE}"
++        COMMAND "${GZIP_EXECUTABLE}" -9 -fk "${TAR_ARCHIVE}"
++        DEPENDS "${TAR_ARCHIVE}"
++        VERBATIM
++    )
++    ADD_CUSTOM_COMMAND(
++        OUTPUT "${TARXZ_ARCHIVE}"
++        COMMAND "${XZ_EXECUTABLE}" -fk "${TAR_ARCHIVE}"
++        DEPENDS "${TAR_ARCHIVE}"
++        VERBATIM
++    )
 +
-+    IF (XZ_FOUND)
-+        ADD_CUSTOM_COMMAND(
-+            OUTPUT "${TARXZ_ARCHIVE}"
-+            COMMAND "${XZ_EXECUTABLE}" -k "${TAR_ARCHIVE}"
-+            DEPENDS "${TAR_ARCHIVE}"
-+            VERBATIM
-+        )
-+        ADD_CUSTOM_TARGET(
-+            archives
-+            COMMENT "Creating tarballs for release ${LIGHTSD_VERSION}"
-+            DEPENDS "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}" "${TARXZ_ARCHIVE}"
-+        )
-+    ELSE ()
-+        MESSAGE(WARNING "Not creating a xz compressed tarball since xz wasn't found")
-+        ADD_CUSTOM_TARGET(
-+            archives
-+            COMMENT "Creating tarballs for release ${LIGHTSD_VERSION}"
-+            DEPENDS "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}"
-+        )
-+    ENDIF ()
++    ADD_CUSTOM_TARGET(
++        archives
++        COMMENT "Created tarballs for release ${LIGHTSD_VERSION}"
++        DEPENDS "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}" "${TARXZ_ARCHIVE}"
++    )
 +ELSE ()
-+    MESSAGE(STATUS "bsdtar and/or mercurial weren't found, archives generation disabled")
++    MESSAGE(STATUS "bsdtar and/or mercurial (hg), gzip, xz weren't found, archives generation disabled")
 +ENDIF ()
 +
-+SET(VENV_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/py-env")
-+SET(VENV_PYTHON "${VENV_DIRECTORY}/bin/python")
-+
 +IF (PYTHONINTERP_FOUND AND PYTHON_VERSION_MAJOR EQUAL 3 AND VIRTUALENV_FOUND)
-+    MESSAGE(STATUS "Python 3 and virtualenv found, release commands enabled")
++    MESSAGE(STATUS "Python 3 and virtualenv found, release command enabled")
 +
-+    ADD_CUSTOM_COMMAND(
-+        OUTPUT "${VENV_DIRECTORY}.stamp"
++    SET(VENV_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/py-env")
++    SET(VENV_PYTHON "${VENV_DIRECTORY}/bin/python")
++
++    CONFIGURE_FILE(release.py.in "${CMAKE_CURRENT_BINARY_DIR}/release.py" @ONLY)
++
++    ADD_CUSTOM_TARGET(
++        release_env
 +        COMMAND "${VIRTUALENV_EXECUTABLE}" -p "${PYTHON_EXECUTABLE}" "${VENV_DIRECTORY}"
-+        COMMAND "${VENV_DIRECTORY}/bin/pip" install -Ur "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
-+        COMMAND "${CMAKE_COMMAND}" -E touch "${VENV_DIRECTORY}.stamp"
-+        COMMENT "Setting up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
++        COMMAND "${VENV_DIRECTORY}/bin/pip" install -r "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
++        COMMENT "Set-up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
 +        VERBATIM
 +    )
 +
 +    ADD_CUSTOM_TARGET(
 +        release
 +        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py"
-+        COMMENT "Starting release for ${LIGHTSD_VERSION}"
-+        DEPENDS "${VENV_DIRECTORY}.stamp"
++        DEPENDS release_env
 +        VERBATIM
 +    )
-+
-+    IF (DEFINED "${LIGHTSD_RELEASE_PACKAGES_DIR}")
-+        MESSAGE(
-+            STATUS
-+            "Downstream packages directory specified at "
-+            "${LIGHTSD_RELEASE_PACKAGES_DIR}, enabling package release integration"
-+        )
-+
-+        ADD_CUSTOM_TARGET(
-+            release_new_tag
-+            COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
-+            COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
-+            DEPENDS "${VENV_DIRECTORY}.stamp"
-+            VERBATIM
-+        )
-+        ADD_CUSTOM_TARGET(
-+            release_new_tag
-+            COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" release_new_tag
-+            COMMENT "Starting downstream packages release for ${LIGHTSD_VERSION}"
-+            DEPENDS "${VENV_DIRECTORY}.stamp"
-+            VERBATIM
-+        )
-+    ELSE ()
-+        MESSAGE(
-+            STATUS
-+            "No directory specified for downstream packages, "
-+            "package release integration disabled"
-+        )
-+    ENDIF ()
 +ELSE ()
 +    MESSAGE(STATUS "Python 3 and/or virtualenv weren't found, release commands disabled")
 +ENDIF ()
