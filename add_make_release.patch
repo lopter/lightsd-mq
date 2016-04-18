@@ -1062,7 +1062,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,249 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1083,18 +1083,29 @@ new file mode 100644
 +
 +
 +def repopath(repo):
-+    return os.path.join(LIGHTSD_SOURCE_DIR, repo)
++    return os.path.join(LIGHTSD_PKGS_DIR, repo)
++
++
++def next_dev_version(version):
++    parts = semver.parse(version)
++    if parts["prerelease"] is not None:
++        return semver.bump_prerelease(version)
++    return semver.bump_prerelease(semver.bump_patch(version))
 +
 +
 +class PackageContext:
 +
 +    __slots__ = (
-+        "lightsd_version",
-+        "lightsd_archive",
++        "version",
++        "dev_version",
++        "archive_name",
++        "archive_md5",
++        "archive_sha256",
++        "archive_url",
 +    )
 +
 +    def __init__(self, **kwargs):
-+        for name, value in kwargs.iteritems():
++        for name, value in kwargs.items():
 +            if name not in self.__slots__:
 +                raise TypeError("{}: invalid argument {}".format(
 +                    self.__class__.__name__, name
@@ -1102,7 +1113,7 @@ new file mode 100644
 +            setattr(self, name, value)
 +
 +    def as_dict(self):
-+        return {name: getattr(name) for name in self.__slots__}
++        return {name: getattr(self, name) for name in self.__slots__}
 +
 +
 +class DownstreamPackage:
@@ -1124,6 +1135,9 @@ new file mode 100644
 +            template = self._render_ctx.get_template(filename)
 +            with open(os.path.join(self._repo, filename), "wb") as fp:
 +                template.stream(pkg_ctx.as_dict()).dump(fp, "utf-8")
++
++    def _pre_commit(self, msg):
++        pass
 +
 +    def commit(self, msg):
 +        self._pre_commit(msg)
@@ -1194,9 +1208,6 @@ new file mode 100644
 +SET(CPACK_PACKAGE_VERSION_PATCH "{}")
 +SET(LIGHTSD_VERSION "${{CPACK_PACKAGE_VERSION_MAJOR}}.${{CPACK_PACKAGE_VERSION_MINOR}}.${{CPACK_PACKAGE_VERSION_PATCH}}")
 +""".format(major, minor, patch).encode("utf-8"))  # noqa
-+    subprocess.check_call([
-+        "hg", "-R", LIGHTSD_SOURCE_DIR, "add", lightsd_version_file
-+    ])
 +
 +
 +@click.group(invoke_without_command=True)
@@ -1228,8 +1239,8 @@ new file mode 100644
 +    version["prerelease"] = version["build"] = None
 +    version = click.prompt(
 +        "Confirm the version to release",
-+        default=semver.format_version(version),
-+        type=version.parse
++        default=semver.format_version(**version),
++        type=lambda arg: semver.format_version(**semver.parse(arg))
 +    )
 +    _update_lightsd_version_cmake_include(version)
 +    subprocess.check_call([
@@ -1237,7 +1248,7 @@ new file mode 100644
 +        "tag", "-m", "Tagging release {}".format(version), version
 +        # TODO: use docutils to extract the changelog section
 +    ])
-+    version = semver.bump_prerelease(semver.bump_patch(version))
++    version = next_dev_version(version)
 +    _update_lightsd_version_cmake_include(version)
 +    subprocess.check_call([
 +        "hg", "-R", LIGHTSD_SOURCE_DIR,
@@ -1256,6 +1267,13 @@ new file mode 100644
 +@click.argument("version")
 +@click.argument("archive", type=click.Path(exists=True))
 +def new_tag(version, archive):
++    if not LIGHTSD_PKGS_DIR:
++        click.echo(
++            "Please configure the project with LIGHTSD_RELEASE_PACKAGES_DIR to "
++            "use this command."
++        )
++        sys.exit(1)
++
 +    archive_md5 = hashlib.md5()
 +    archive_sha256 = hashlib.sha256()
 +    with open(archive, "rb") as fp:
@@ -1271,7 +1289,7 @@ new file mode 100644
 +    archive_name = os.path.basename(archive)
 +    pkg_ctx = PackageContext(
 +        version=version,
-+        dev_version=semver.bump_patch(version),
++        dev_version=next_dev_version(version),
 +        archive_name=archive_name,
 +        archive_md5=archive_md5,
 +        archive_sha256=archive_sha256,
