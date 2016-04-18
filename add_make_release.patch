@@ -143,7 +143,7 @@ diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,84 @@
 +# I wanted to use hg export but then dpkg gave me troubles:
 +IF (BSDTAR_FOUND AND GZIP_FOUND AND XZ_FOUND AND HG_FOUND)
 +    MESSAGE(STATUS "bsdtar, mercurial (hg), gzip and xz found, archives generation enabled")
@@ -191,25 +191,34 @@ new file mode 100644
 +ENDIF ()
 +
 +IF (PYTHONINTERP_FOUND AND PYTHON_VERSION_MAJOR EQUAL 3 AND VIRTUALENV_FOUND AND HG_FOUND)
-+    MESSAGE(STATUS "Python 3, virtualenv and mercurial (hg) found, release command enabled")
++    MESSAGE(STATUS "Python 3, virtualenv and mercurial (hg) found, release commands enabled")
 +
 +    SET(VENV_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/py-env")
 +    SET(VENV_PYTHON "${VENV_DIRECTORY}/bin/python")
++    SET(VENV_STAMP "${VENV_DIRECTORY}/stamp")
 +
 +    CONFIGURE_FILE(release.py.in "${CMAKE_CURRENT_BINARY_DIR}/release.py" @ONLY)
 +
-+    ADD_CUSTOM_TARGET(
-+        release_env
-+        COMMAND "${VIRTUALENV_EXECUTABLE}" -p "${PYTHON_EXECUTABLE}" "${VENV_DIRECTORY}"
-+        COMMAND "${VENV_DIRECTORY}/bin/pip" install -r "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
-+        COMMENT "Set-up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
++    ADD_CUSTOM_COMMAND(
++        OUTPUT "${VENV_STAMP}"
++        COMMAND "${VIRTUALENV_EXECUTABLE}" -q -p "${PYTHON_EXECUTABLE}" "${VENV_DIRECTORY}"
++        COMMAND "${VENV_DIRECTORY}/bin/pip" -q install -r "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
++        COMMAND "${CMAKE_COMMAND}" -E touch "${VENV_STAMP}"
++        COMMENT "Setting up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
 +        VERBATIM
 +    )
 +
 +    ADD_CUSTOM_TARGET(
 +        release
 +        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py"
-+        DEPENDS release_env
++        DEPENDS "${VENV_STAMP}"
++        VERBATIM
++    )
++
++    ADD_CUSTOM_TARGET(
++        release_new_tag
++        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "new_tag" "${TARGZ_ARCHIVE}"
++        DEPENDS "${VENV_STAMP}" "${TARGZ_ARCHIVE}"
 +        VERBATIM
 +    )
 +ELSE ()
@@ -1062,7 +1071,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,247 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1263,10 +1272,8 @@ new file mode 100644
 +
 +
 +@click.command()
-+# hg log -R … -r "max(tag('re:\d+.\d+.\d+'))" -T "{tags}"
-+@click.argument("version")
 +@click.argument("archive", type=click.Path(exists=True))
-+def new_tag(version, archive):
++def new_tag(archive):
 +    if not LIGHTSD_PKGS_DIR:
 +        click.echo(
 +            "Please configure the project with LIGHTSD_RELEASE_PACKAGES_DIR to "
@@ -1288,8 +1295,8 @@ new file mode 100644
 +
 +    archive_name = os.path.basename(archive)
 +    pkg_ctx = PackageContext(
-+        version=version,
-+        dev_version=next_dev_version(version),
++        version=LIGHTSD_VERSION,
++        dev_version=next_dev_version(LIGHTSD_VERSION),
 +        archive_name=archive_name,
 +        archive_md5=archive_md5,
 +        archive_sha256=archive_sha256,
@@ -1299,7 +1306,7 @@ new file mode 100644
 +    )
 +    for pkg in PACKAGES:
 +        pkg.render(pkg_ctx)
-+        pkg.commit("New upstream release {}".format(version))
++        pkg.commit("New upstream release {}".format(LIGHTSD_VERSION))
 +
 +
 +@click.command()
