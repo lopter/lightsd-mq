@@ -143,7 +143,7 @@ diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,91 @@
 +# I wanted to use hg export but then dpkg gave me troubles:
 +IF (BSDTAR_FOUND AND GZIP_FOUND AND XZ_FOUND AND HG_FOUND)
 +    MESSAGE(STATUS "bsdtar, mercurial (hg), gzip and xz found, archives generation enabled")
@@ -219,6 +219,13 @@ new file mode 100644
 +        release_new_tag
 +        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "new_tag" "${TARGZ_ARCHIVE}"
 +        DEPENDS "${VENV_STAMP}" "${TARGZ_ARCHIVE}"
++        VERBATIM
++    )
++
++    ADD_CUSTOM_TARGET(
++        release_docs
++        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "docs"
++        DEPENDS "${VENV_STAMP}" docs
 +        VERBATIM
 +    )
 +ELSE ()
@@ -1071,7 +1078,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,272 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1085,8 +1092,14 @@ new file mode 100644
 +LIGHTSD_VERSION = "@LIGHTSD_VERSION@"
 +# where the lightsd sources are:
 +LIGHTSD_SOURCE_DIR = "@LIGHTSD_SOURCE_DIR@"
++# where the build is:
++LIGHTSD_BINARY_DIR = "@LIGHTSD_BINARY_DIR@"
 +# where all the downstream repositories are:
 +LIGHTSD_PKGS_DIR = "@LIGHTSD_RELEASE_PACKAGES_DIR@"
++# where to put the generated archives:
++LIGHTSD_ARCHIVES_DIR = "@LIGHTSD_RELEASE_ARCHIVES_DIR@"
++# where to manage the documentation:
++LIGHTSD_DOCS_DIR = "@LIGHTSD_RELEASE_DOCS_DIR@"
 +
 +ARCHIVE_READ_SIZE = 32768
 +
@@ -1274,10 +1287,10 @@ new file mode 100644
 +@click.command()
 +@click.argument("archive", type=click.Path(exists=True))
 +def new_tag(archive):
-+    if not LIGHTSD_PKGS_DIR:
++    if not LIGHTSD_PKGS_DIR or not LIGHTSD_ARCHIVES_DIR:
 +        click.echo(
-+            "Please configure the project with LIGHTSD_RELEASE_PACKAGES_DIR to "
-+            "use this command."
++            "Please configure the project with LIGHTSD_RELEASE_PACKAGES_DIR "
++            "and LIGHTSD_RELEASE_ARCHIVES_DIR to use this command."
 +        )
 +        sys.exit(1)
 +
@@ -1310,11 +1323,30 @@ new file mode 100644
 +
 +
 +@click.command()
++def docs():
++    version = semver.parse(LIGHTSD_VERSION)
++    dest_dir = os.path.join(LIGHTSD_DOCS_DIR, LIGHTSD_VERSION)
++    docs_dir = os.path.join(LIGHTSD_BINARY_DIR, "docs", "_build")
++    os.makedirs(dest_dir, exist_ok=True)
++    if version["prerelease"] is None and version["build"] is None:
++        alias = "current"
++    else:
++        alias = "latest"
++    subprocess.check_call([
++        "ln", "-snf", dest_dir, os.path.join(LIGHTSD_DOCS_DIR, alias)
++    ])
++    subprocess.check_call([
++        "rsync", "-aH", docs_dir + os.path.sep, dest_dir + os.path.sep
++    ])
++
++
++@click.command()
 +def packages():
 +    pass
 +
 +
 +release.add_command(new_tag)
++release.add_command(docs)
 +release.add_command(packages)
 +
 +if __name__ == "__main__":
