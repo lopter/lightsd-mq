@@ -36,7 +36,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +IF (CMAKE_BUILD_TYPE MATCHES RELEASE)
 +  FIND_PACKAGE(Gzip)
 +  FIND_PACKAGE(Hg)
-+  SET(Python_ADDITIONAL_VERSIONS 3)
++  SET(Python_ADDITIONAL_VERSIONS 3) # actually >= 3.3 (os.replace)
 +  FIND_PACKAGE(PythonInterp)
 +  FIND_PACKAGE(BsdTar)
 +  FIND_PACKAGE(Virtualenv)
@@ -143,67 +143,36 @@ diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,91 @@
-+# I wanted to use hg export but then dpkg gave me troubles:
-+IF (BSDTAR_FOUND AND GZIP_FOUND AND XZ_FOUND AND HG_FOUND)
-+    MESSAGE(STATUS "bsdtar, mercurial (hg), gzip and xz found, archives generation enabled")
-+
-+    SET(TAR_ARCHIVE "${CMAKE_CURRENT_BINARY_DIR}/lightsd-${LIGHTSD_VERSION}.tar")
-+    SET(TARGZ_ARCHIVE "${TAR_ARCHIVE}.gz")
-+    SET(TARXZ_ARCHIVE "${TAR_ARCHIVE}.xz")
-+
-+    ADD_CUSTOM_TARGET(
-+        clean_source_dir
-+        COMMAND "${HG_EXECUTABLE}" -R "${LIGHTSD_SOURCE_DIR}" --config extensions.purge= purge -a --all
-+        VERBATIM
-+    )
-+
-+    ADD_CUSTOM_COMMAND(
-+        OUTPUT "${TAR_ARCHIVE}"
-+        COMMAND "${BSDTAR_EXECUTABLE}" -C "${LIGHTSD_SOURCE_DIR}" -cf "${TAR_ARCHIVE}" -s "/^\\./lightsd-${LIGHTSD_VERSION}/" --exclude .hg .
-+        DEPENDS clean_source_dir
-+        VERBATIM
-+    )
-+    ADD_CUSTOM_COMMAND(
-+        OUTPUT "${TARGZ_ARCHIVE}"
-+        COMMAND "${GZIP_EXECUTABLE}" -9 -fk "${TAR_ARCHIVE}"
-+        DEPENDS "${TAR_ARCHIVE}"
-+        VERBATIM
-+    )
-+    ADD_CUSTOM_COMMAND(
-+        OUTPUT "${TARXZ_ARCHIVE}"
-+        COMMAND "${XZ_EXECUTABLE}" -fk "${TAR_ARCHIVE}"
-+        DEPENDS "${TAR_ARCHIVE}"
-+        VERBATIM
-+    )
-+
-+    ADD_CUSTOM_TARGET(
-+        archives
-+        COMMENT "Created tarballs for release ${LIGHTSD_VERSION}"
-+        DEPENDS "${TAR_ARCHIVE}" "${TARGZ_ARCHIVE}" "${TARXZ_ARCHIVE}"
-+    )
-+ELSE ()
+@@ -0,0 +1,60 @@
++IF (
++    PYTHONINTERP_FOUND
++    AND PYTHON_VERSION_MAJOR EQUAL 3
++    AND PYTHON_VERSION_MINOR GREATER 2 # os.replace
++    AND VIRTUALENV_FOUND
++    AND HG_FOUND
++    AND BSDTAR_FOUND
++    AND GZIP_FOUND
++    AND XZ_FOUND
++)
 +    MESSAGE(
 +        STATUS
-+        "bsdtar and/or mercurial (hg), gzip, xz weren't found, "
-+        "archives generation disabled"
++        "Python >= 3.3, virtualenv, bsdtar, gzip, xz, and mercurial (hg) "
++        "found, release commands enabled"
 +    )
-+ENDIF ()
-+
-+IF (PYTHONINTERP_FOUND AND PYTHON_VERSION_MAJOR EQUAL 3 AND VIRTUALENV_FOUND AND HG_FOUND)
-+    MESSAGE(STATUS "Python 3, virtualenv and mercurial (hg) found, release commands enabled")
 +
 +    SET(VENV_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/py-env")
 +    SET(VENV_PYTHON "${VENV_DIRECTORY}/bin/python")
 +    SET(VENV_STAMP "${VENV_DIRECTORY}/stamp")
++    SET(PIP_REQUIREMENTS "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt")
 +
 +    CONFIGURE_FILE(release.py.in "${CMAKE_CURRENT_BINARY_DIR}/release.py" @ONLY)
 +
 +    ADD_CUSTOM_COMMAND(
 +        OUTPUT "${VENV_STAMP}"
 +        COMMAND "${VIRTUALENV_EXECUTABLE}" -q -p "${PYTHON_EXECUTABLE}" "${VENV_DIRECTORY}"
-+        COMMAND "${VENV_DIRECTORY}/bin/pip" -q install -r "${CMAKE_CURRENT_SOURCE_DIR}/requirements-release.txt"
++        COMMAND "${VENV_DIRECTORY}/bin/pip" -q install -r "${PIP_REQUIREMENTS}"
 +        COMMAND "${CMAKE_COMMAND}" -E touch "${VENV_STAMP}"
++        DEPENDS "${PIP_REQUIREMENTS}"
 +        COMMENT "Setting up a Python virtualenv at ${VENV_DIRECTORY} for the release script"
 +        VERBATIM
 +    )
@@ -217,8 +186,8 @@ new file mode 100644
 +
 +    ADD_CUSTOM_TARGET(
 +        release_new_tag
-+        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "new_tag" "${TARGZ_ARCHIVE}"
-+        DEPENDS "${VENV_STAMP}" "${TARGZ_ARCHIVE}"
++        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "new_tag"
++        DEPENDS "${VENV_STAMP}"
 +        VERBATIM
 +    )
 +
@@ -231,8 +200,8 @@ new file mode 100644
 +ELSE ()
 +    MESSAGE(
 +        STATUS
-+        "Python 3 and/or virtualenv, mercurial (hg) weren't found, "
-+        "release commands disabled"
++        "Python >= 3.3 and/or virtualenv, bsdtar, gzip, xz, mercurial (hg) "
++        "weren't found, release commands disabled"
 +    )
 +ENDIF ()
 diff --git a/dist/dpkg/.hgtags b/dist/dpkg/.hgtags
@@ -1078,13 +1047,19 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,387 @@
 +#!/usr/bin/env python3
 +
 +import click
++import datetime
++import functools
 +import hashlib
 +import os
++import itertools
 +import jinja2
++import locale
++import pytz
++import requests
 +import semver
 +import subprocess
 +import sys
@@ -1094,14 +1069,35 @@ new file mode 100644
 +LIGHTSD_SOURCE_DIR = "@LIGHTSD_SOURCE_DIR@"
 +# where the build is:
 +LIGHTSD_BINARY_DIR = "@LIGHTSD_BINARY_DIR@"
-+# where all the downstream repositories are:
++# where all the downstream repositories are, they will be pushed by by buildbot
++# (which manage the credentials to those repositories)
 +LIGHTSD_PKGS_DIR = "@LIGHTSD_RELEASE_PACKAGES_DIR@"
-+# where to put the generated archives:
++# where to put the generated archives served at
++# https://downloads.lightsd.io/releases/:
 +LIGHTSD_ARCHIVES_DIR = "@LIGHTSD_RELEASE_ARCHIVES_DIR@"
-+# where to manage the documentation:
++# where to manage the documentation served at https://docs.lighsd.io/:
 +LIGHTSD_DOCS_DIR = "@LIGHTSD_RELEASE_DOCS_DIR@"
 +
-+ARCHIVE_READ_SIZE = 32768
++# paths to utilities:
++HG_EXECUTABLE = "@HG_EXECUTABLE@"
++BSDTAR_EXECUTABLE = "@BSDTAR_EXECUTABLE@"
++GZIP_EXECUTABLE = "@GZIP_EXECUTABLE@"
++XZ_EXECUTABLE = "@XZ_EXECUTABLE@"
++
++COMMIT_AUTHOR = "Buildbot <builbot@kalessin.fr>"
++
++FILE_READ_SIZE = 32768
++
++TARBALL_COMPRESSORS = [
++    # suffix, path, extra_flags
++    ("gz", GZIP_EXECUTABLE, ["--best"]),
++    ("xz", XZ_EXECUTABLE, []),
++]
++
++prereq_echo = functools.partial(click.secho, fg="magenta", bold=True)
++action_echo = functools.partial(click.secho, fg="blue", bold=True)
++result_echo = functools.partial(click.secho, fg="green", bold=True)
++error_echo = functools.partial(click.secho, bold=True)
 +
 +
 +def repopath(repo):
@@ -1113,6 +1109,13 @@ new file mode 100644
 +    if parts["prerelease"] is not None:
 +        return semver.bump_prerelease(version)
 +    return semver.bump_prerelease(semver.bump_patch(version))
++
++
++def readfile(fp, read_size=FILE_READ_SIZE):
++    chunk = fp.read(read_size)
++    while chunk:
++        yield chunk
++        chunk = fp.read(read_size)
 +
 +
 +class PackageContext:
@@ -1158,6 +1161,8 @@ new file mode 100644
 +            with open(os.path.join(self._repo, filename), "wb") as fp:
 +                template.stream(pkg_ctx.as_dict()).dump(fp, "utf-8")
 +
++        # TODO: copy the other files too.
++
 +    def _pre_commit(self, msg):
 +        pass
 +
@@ -1165,31 +1170,67 @@ new file mode 100644
 +        self._pre_commit(msg)
 +
 +        dirty = bool(len(subprocess.check_output([
-+            "hg", "-R", self._repo, "status"
++            HG_EXECUTABLE, "-R", self._repo, "status"
 +        ])))
-+        if dirty is False:  # be idempotent
-+            return
-+
-+        subprocess.check_call([
-+            "hg", "-R", self._repo, "commit", "-m", msg
-+        ])
++        if dirty:
++            subprocess.check_call([
++                HG_EXECUTABLE, "-R", self._repo, "commit", "-m", msg
++            ])
++        return dirty
 +
 +
 +class DebianPackage(DownstreamPackage):
 +
 +    TYPE = "dpkg"
 +
++    _CHANGELOG_ENTRY_FORMAT = (
++"""lightsd ({version}-1) unstable; urgency=low
++
++  * {msg}
++
++ -- {author}  {date}
++
++"""  # noqa
++    )
++
 +    def render(self, pkg_ctx):
-+        if pkg_ctx.version is not None:
-+            self._version = ["-v", pkg_ctx.version]
-+        else:
-+            self._version = ["-i"]
++        self._version = pkg_ctx.version
 +
 +    def _pre_commit(self, msg):
-+        cmd = ["dch"]
-+        cmd.extend(self._version)
-+        cmd.append(msg)
-+        subprocess.check_call(cmd, cwd=self._repo)
++        changelog_path = os.path.join(self._repo, "debian", "changelog")
++        staging_changelog_path = "-".join([changelog_path, "next"])
++        user_date_locale = locale.getlocale(locale.LC_TIME)
++        utcnow = datetime.datetime.now(pytz.utc)
++
++        # prepare new changelog:
++        with open(staging_changelog_path, "wb") as ofp:
++            try:
++                locale.setlocale(locale.LC_TIME, "C")
++                new_entry = self._CHANGELOG_ENTRY_FORMAT.format(
++                    version=self._version,
++                    msg=msg,
++                    author=COMMIT_AUTHOR,
++                    date=utcnow.strftime("%a, %d %b %Y %H:%M:%S %z")
++                ).encode("utf-8")
++                ofp.write(new_entry)
++                with open(changelog_path, "rb") as ifp:
++                    prev_entry = next(ifp)  # get the first line
++                    if new_entry.startswith(prev_entry):
++                        os.unlink(staging_changelog_path)
++                        return  # we already released that version.
++                    ofp.write(prev_entry)
++                    for chunk in readfile(ifp):
++                        ofp.write(chunk)
++            except Exception:
++                os.unlink(staging_changelog_path)
++                raise
++            finally:
++                user_date_locale = locale.setlocale(
++                    locale.LC_TIME, user_date_locale
++                )
++
++        # and replace the old one:
++        os.replace(staging_changelog_path, changelog_path)
 +
 +
 +class HomebrewPackage(DownstreamPackage):
@@ -1201,7 +1242,7 @@ new file mode 100644
 +class OpenWRTPackage(DownstreamPackage):
 +
 +    TYPE = "openwrt"
-+    TEMPLATES = ("Makefile",)
++    TEMPLATES = ("utils/lightsd/Makefile",)
 +
 +
 +class PKGBUILDPackage(DownstreamPackage):
@@ -1222,14 +1263,15 @@ new file mode 100644
 +    lightsd_version_file = os.path.join(
 +        LIGHTSD_SOURCE_DIR, "CMakeScripts", "LightsdVersion.cmake"
 +    )
-+    major, minor, patch = version.split(".", 2)
 +    with open(lightsd_version_file, "wb") as fp:
 +        fp.write("""# NOTE: auto-generated by the release target
-+SET(CPACK_PACKAGE_VERSION_MAJOR "{}")
-+SET(CPACK_PACKAGE_VERSION_MINOR "{}")
-+SET(CPACK_PACKAGE_VERSION_PATCH "{}")
-+SET(LIGHTSD_VERSION "${{CPACK_PACKAGE_VERSION_MAJOR}}.${{CPACK_PACKAGE_VERSION_MINOR}}.${{CPACK_PACKAGE_VERSION_PATCH}}")
-+""".format(major, minor, patch).encode("utf-8"))  # noqa
++SET(CPACK_PACKAGE_VERSION_MAJOR "{major}")
++SET(CPACK_PACKAGE_VERSION_MINOR "{minor}")
++SET(CPACK_PACKAGE_VERSION_PATCH "{patch}")
++SET(LIGHTSD_PRERELEASE "{prerelease}")
++SET(LIGHTSD_BUILD "{build}")
++SET(LIGHTSD_VERSION "${{{version}}}")
++""".format(version=version, **semver.parse(version)).encode("utf-8"))  # noqa
 +
 +
 +@click.group(invoke_without_command=True)
@@ -1240,14 +1282,15 @@ new file mode 100644
 +
 +    revision, branch = [
 +        part.strip() for part in subprocess.check_output([
-+            "hg", "-R", LIGHTSD_SOURCE_DIR, "id", "-ib"
++            HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "id", "--id", "--branch"
 +        ]).split()
 +    ]
 +    qapplied = bool(len(subprocess.check_output([
-+        "hg", "-R", LIGHTSD_SOURCE_DIR, "--config", "extensions.mq=", "qapplied"
++        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
++        "--config", "extensions.mq=", "qapplied"
 +    ])))
 +    if qapplied or revision.endswith("+") or branch != "default":
-+        click.echo(
++        error_echo(
 +            "Can't do a release over a dirty repository! "
 +            "(rev={}, branch={}, patched={})".format(
 +                revision.decode("utf-8"), branch.decode("utf-8"), qapplied
@@ -1266,63 +1309,110 @@ new file mode 100644
 +    )
 +    _update_lightsd_version_cmake_include(version)
 +    subprocess.check_call([
-+        "hg", "-R", LIGHTSD_SOURCE_DIR,
++        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
 +        "tag", "-m", "Tagging release {}".format(version), version
 +        # TODO: use docutils to extract the changelog section
 +    ])
 +    version = next_dev_version(version)
 +    _update_lightsd_version_cmake_include(version)
 +    subprocess.check_call([
-+        "hg", "-R", LIGHTSD_SOURCE_DIR,
++        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
 +        "commit", "-m", "Back to development, {}".format(version)
 +    ])
 +
-+    subprocess.check_call(["hg", "-R", LIGHTSD_SOURCE_DIR, "out"])
++    subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "out"])
 +    if click.confirm("Are you ready to push those commit?"):
-+        subprocess.check_call(["hg", "-R", LIGHTSD_SOURCE_DIR, "push"])
-+
-+    return
++        subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "push"])
 +
 +
-+@click.command()
-+@click.argument("archive", type=click.Path(exists=True))
-+def new_tag(archive):
++@release.command()
++def new_tag():
 +    if not LIGHTSD_PKGS_DIR or not LIGHTSD_ARCHIVES_DIR:
-+        click.echo(
++        error_echo(
 +            "Please configure the project with LIGHTSD_RELEASE_PACKAGES_DIR "
 +            "and LIGHTSD_RELEASE_ARCHIVES_DIR to use this command."
 +        )
 +        sys.exit(1)
 +
-+    archive_md5 = hashlib.md5()
-+    archive_sha256 = hashlib.sha256()
-+    with open(archive, "rb") as fp:
-+        while True:
-+            chunk = fp.read(ARCHIVE_READ_SIZE)
-+            if not chunk:
-+                break
-+            archive_md5.update(chunk)
-+            archive_sha256.update(chunk)
-+    archive_md5 = archive_md5.hexdigest()
-+    archive_sha256 = archive_sha256.hexdigest()
++    archive_name = "lightsd-{}.tar".format(LIGHTSD_VERSION)
++    archive = os.path.join(LIGHTSD_BINARY_DIR, "dist", archive_name)
++    gz_archive_name = ".".join([archive_name, "gz"])
++    gz_archive = os.path.join(LIGHTSD_ARCHIVES_DIR, gz_archive_name)
++    gz_archive_url = "https://downloads.lightsd.io/releases/{}".format(
++        gz_archive_name
++    )
 +
-+    archive_name = os.path.basename(archive)
++#   action_echo("Checking for an existing release")
++#   response = requests.head(gz_archive_url, allow_redirects=True)
++#   if response.status_code == requests.codes.ok:
++#       error_echo("Release already found at {}!".format(gz_archive_url))
++
++    prereq_echo("Cleaning-up the source tree")
++    subprocess.check_call([
++        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
++        "--config", "extensions.purge=", "purge", "--abort-on-err", "--all"
++    ])
++
++    # NOTE: I wanted to use hg export but then dpkg gave me troubles because
++    #       the archive had extra files or something:
++    action_echo("Tarballing the sources into {}".format(archive))
++    if not os.path.exists(archive):
++        subprocess.check_call([
++            BSDTAR_EXECUTABLE,
++            "-C", LIGHTSD_SOURCE_DIR,
++            "-cf", archive,
++            "-s", "/^\\./{}/".format(os.path.basename(archive)),
++            "--exclude", ".hg",
++            "."
++        ])
++    os.makedirs(LIGHTSD_ARCHIVES_DIR, exist_ok=True)
++    for suffix, bin, extra_flags in TARBALL_COMPRESSORS:
++        dest = ".".join([
++            os.path.join(LIGHTSD_ARCHIVES_DIR, archive_name), suffix
++        ])
++        if os.path.exists(dest):
++            click.echo("[=] compressing with {}".format(suffix))
++            continue
++        cmd = itertools.chain.from_iterable([
++            [bin, "--stdout"], extra_flags, [archive]
++        ])
++        click.echo("[+] compressing with {}".format(suffix))
++        with open(dest, "wb") as fp:
++            subprocess.check_call(cmd, stdout=fp)
++
++    action_echo("Computing MD5 and SHA256 checksums for {}".format(gz_archive))
++    gz_archive_md5 = hashlib.md5()
++    gz_archive_sha256 = hashlib.sha256()
++    with open(gz_archive, "rb") as fp:
++        for chunk in readfile(fp):
++            gz_archive_md5.update(chunk)
++            gz_archive_sha256.update(chunk)
++    gz_archive_md5 = gz_archive_md5.hexdigest()
++    gz_archive_sha256 = gz_archive_sha256.hexdigest()
++    click.echo("[+] MD5 {}".format(gz_archive_md5))
++    click.echo("[+] SHA256 {}".format(gz_archive_sha256))
++
 +    pkg_ctx = PackageContext(
 +        version=LIGHTSD_VERSION,
 +        dev_version=next_dev_version(LIGHTSD_VERSION),
-+        archive_name=archive_name,
-+        archive_md5=archive_md5,
-+        archive_sha256=archive_sha256,
-+        archive_url="https://downloads.lightsd.io/releases/{}".format(
-+            archive_name
-+        ),
++        archive_name=gz_archive_name,
++        archive_md5=gz_archive_md5,
++        archive_sha256=gz_archive_sha256,
++        archive_url=gz_archive_url,
 +    )
++    action_echo("Updating packages")
 +    for pkg in PACKAGES:
-+        pkg.render(pkg_ctx)
++        dirty = pkg.render(pkg_ctx)
++        if not dirty:
++            click.echo("[=] {} package".format(pkg.TYPE))
++            continue
++        click.echo("[+] {} package".format(pkg.TYPE))
 +        pkg.commit("New upstream release {}".format(LIGHTSD_VERSION))
 +
++    result_echo("New upstream release {}".format(LIGHTSD_VERSION))
 +
-+@click.command()
++
++@release.command()
 +def docs():
 +    version = semver.parse(LIGHTSD_VERSION)
 +    dest_dir = os.path.join(LIGHTSD_DOCS_DIR, LIGHTSD_VERSION)
@@ -1332,22 +1422,16 @@ new file mode 100644
 +        alias = "current"
 +    else:
 +        alias = "latest"
++    action_echo("Copying files into {}".format(dest_dir))
++    subprocess.check_call([
++        "cp", "-a", docs_dir + os.path.sep, dest_dir + os.path.sep
++    ])
++    action_echo("Updating alias {}".format(alias))
 +    subprocess.check_call([
 +        "ln", "-snf", dest_dir, os.path.join(LIGHTSD_DOCS_DIR, alias)
 +    ])
-+    subprocess.check_call([
-+        "rsync", "-aH", docs_dir + os.path.sep, dest_dir + os.path.sep
-+    ])
++    result_echo("{} ({}) updated".format(dest_dir, alias))
 +
-+
-+@click.command()
-+def packages():
-+    pass
-+
-+
-+release.add_command(new_tag)
-+release.add_command(docs)
-+release.add_command(packages)
 +
 +if __name__ == "__main__":
 +    release()
@@ -1355,7 +1439,10 @@ diff --git a/dist/requirements-release.txt b/dist/requirements-release.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/requirements-release.txt
-@@ -0,0 +1,3 @@
+@@ -0,0 +1,6 @@
 +click>=6.6,<7.0
 +jinja2>=2.8,<3.0
++requests>=2.9.1,<3.0
 +semver>=2.4.1,<3.0.0
++
++pytz
