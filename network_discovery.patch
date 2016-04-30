@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  f434982d40b06deb54a81294952159fabac079cc
+# Parent  f2c72d4c5e6aff10ff67b00c83451f64c8a84ea9
 Properly broadcast LIFX discovery packets on all networks (closes GH-2)
 
 This is really the proper way of achieving the same semantic as
@@ -15,20 +15,6 @@ So that people running lightsd on a machine connected to Internet (that
 can happen quickly on a laptop or a phone/tabled) don't have to firewall
 56700.
 
-diff --git a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -4,8 +4,8 @@
- PROJECT(LIGHTSD C)
- 
- SET(CPACK_PACKAGE_VERSION_MAJOR "1")
--SET(CPACK_PACKAGE_VERSION_MINOR "1")
--SET(CPACK_PACKAGE_VERSION_PATCH "3")
-+SET(CPACK_PACKAGE_VERSION_MINOR "2")
-+SET(CPACK_PACKAGE_VERSION_PATCH "0")
- SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
- 
- MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h

@@ -1,26 +1,24 @@
 # HG changeset patch
-# Parent  d16f6ed548379278b946b5ed7caf291ba0ac4e6e
-Add a release command that can be used from buildbot
+# Parent  4b74a5b40d1d3fdeab6a639975ae941544839e33
+Monorepo the packages and setup continuous integration
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -3,10 +3,10 @@
+@@ -3,10 +3,8 @@
  
  PROJECT(LIGHTSD C)
  
 -SET(CPACK_PACKAGE_VERSION_MAJOR "1")
--SET(CPACK_PACKAGE_VERSION_MINOR "2")
--SET(CPACK_PACKAGE_VERSION_PATCH "0")
+-SET(CPACK_PACKAGE_VERSION_MINOR "1")
+-SET(CPACK_PACKAGE_VERSION_PATCH "2")
 -SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
 +SET(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${LIGHTSD_SOURCE_DIR}/CMakeScripts")
-+
-+STRING(TOUPPER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE)
 +INCLUDE(LightsdVersion)
  
  MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
  MESSAGE(STATUS "CMake version: ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}.${CMAKE_PATCH_VERSION}")
-@@ -15,8 +15,6 @@
+@@ -15,8 +13,6 @@
  MESSAGE(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
  MESSAGE(STATUS "Source directory: ${LIGHTSD_SOURCE_DIR}")
  
@@ -29,7 +27,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ENABLE_TESTING()
  
  ### Platform checks ############################################################
-@@ -26,6 +24,16 @@
+@@ -26,6 +22,16 @@
  FIND_PACKAGE(Endian REQUIRED)
  FIND_PACKAGE(Sphinx)
  
@@ -46,7 +44,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  INCLUDE(CheckFunctionExists)
  INCLUDE(CheckVariableExists)
  INCLUDE(TestBigEndian)
-@@ -92,9 +100,7 @@
+@@ -92,9 +98,7 @@
  
  # 2.8.11 is the first version with TARGET_INCLUDE_DIRECTORIES:
  IF (CMAKE_VERSION VERSION_GREATER 2.8.10)
@@ -57,7 +55,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      ADD_SUBDIRECTORY(tests)
  ELSE ()
      MESSAGE(
-@@ -105,7 +111,14 @@
+@@ -105,7 +109,14 @@
  ENDIF ()
  
  IF (SPHINX_FOUND)
@@ -768,7 +766,7 @@ diff --git a/dist/homebrew/lightsd.rb b/dist/homebrew/lightsd.rb
 new file mode 100644
 --- /dev/null
 +++ b/dist/homebrew/lightsd.rb
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,95 @@
 +require "formula"
 +
 +class Lightsd < Formula
@@ -776,7 +774,7 @@ new file mode 100644
 +  homepage "https://github.com/lopter/lightsd/"
 +  url "{{ archive_url  }}"
 +  sha256 "{{ archive_sha256 }}"
-+  revision 1
++  revision {{ build_number }}
 +
 +  depends_on "cmake" => :build
 +  depends_on "libevent" => :build
@@ -851,11 +849,6 @@ new file mode 100644
 +    url "https://github.com/lopter/lightsd.git"
 +  end
 +
-+  devel do
-+    url "file:///Users/louis/projs/lightsd", :using => :hg
-+    version "{{ dev_version }}"
-+  end
-+
 +  test do
 +    Dir.mktmpdir("lightsd-test") do |dir|
 +      args = %W[
@@ -868,11 +861,12 @@ new file mode 100644
 +    end
 +  end
 +end
++
 diff --git a/dist/openwrt/utils/lightsd/Makefile b/dist/openwrt/utils/lightsd/Makefile
 new file mode 100644
 --- /dev/null
 +++ b/dist/openwrt/utils/lightsd/Makefile
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,63 @@
 +#
 +# Copyright (C) 2015 Louis Opter <kalessin@kalessin.fr>
 +#
@@ -884,7 +878,7 @@ new file mode 100644
 +
 +PKG_NAME:=lightsd
 +PKG_VERSION:={{ version }}
-+PKG_RELEASE:=1
++PKG_RELEASE:={{ build_number }}
 +PKG_MAINTAINER:=Louis Opter <kalessin@kalessin.fr>
 +PKG_LICENSE:=GPL-3.0+
 +PKG_SOURCE_URL:=https://downloads.lightsd.io/releases/
@@ -935,6 +929,7 @@ new file mode 100644
 +endef
 +
 +$(eval $(call BuildPackage,lightsd))
++
 diff --git a/dist/openwrt/utils/lightsd/files/lightsd.init b/dist/openwrt/utils/lightsd/files/lightsd.init
 new file mode 100644
 --- /dev/null
@@ -963,11 +958,11 @@ diff --git a/dist/pkgbuild/.SRCINFO b/dist/pkgbuild/.SRCINFO
 new file mode 100644
 --- /dev/null
 +++ b/dist/pkgbuild/.SRCINFO
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,20 @@
 +pkgbase = lightsd
 +	pkgdesc = Daemon to control your LIFX smart bulbs via a JSON-RPC API
 +	pkgver = {{ version }}
-+	pkgrel = 1
++	pkgrel = {{ build_number }}
 +	epoch = 1
 +	url = https://www.github.com/lopter/lightsd/
 +	install = lightsd.install
@@ -983,16 +978,17 @@ new file mode 100644
 +
 +pkgname = lightsd
 +
++
 diff --git a/dist/pkgbuild/PKGBUILD b/dist/pkgbuild/PKGBUILD
 new file mode 100644
 --- /dev/null
 +++ b/dist/pkgbuild/PKGBUILD
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,43 @@
 +# Maintainer: Louis Opter <kalessin@kalessin.fr>
 +
 +pkgname=lightsd
 +pkgver={{ version }}
-+pkgrel=1
++pkgrel={{ build_number }}
 +epoch=1
 +pkgdesc="Daemon to control your LIFX smart bulbs via a JSON-RPC API"
 +arch=("i686" "x86_64")
@@ -1006,8 +1002,6 @@ new file mode 100644
 +makedepends=("cmake>=2.8.11")
 +source=("{{ archive_url }}")
 +sha256sums=("{{ archive_sha256 }}")
-+#source=("src/${pkgname}-${pkgver}::hg+file:///home/kal/projs/lightsd")
-+#sha256sums="SKIP"
 +install=lightsd.install
 +
 +build() {
@@ -1032,6 +1026,7 @@ new file mode 100644
 +
 +    make DESTDIR="$pkgdir/" install
 +}
++
 diff --git a/dist/pkgbuild/lightsd.install b/dist/pkgbuild/lightsd.install
 new file mode 100644
 --- /dev/null
@@ -1063,7 +1058,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,456 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1100,7 +1095,7 @@ new file mode 100644
 +GZIP_EXECUTABLE = "@GZIP_EXECUTABLE@"
 +XZ_EXECUTABLE = "@XZ_EXECUTABLE@"
 +
-+COMMIT_AUTHOR = "Buildbot <builbot@kalessin.fr>"
++COMMIT_AUTHOR = "Buildbot <buildbot@kalessin.fr>"
 +
 +FILE_READ_SIZE = 32768
 +
@@ -1148,7 +1143,7 @@ new file mode 100644
 +
 +    __slots__ = (
 +        "version",
-+        "dev_version",
++        "build_number",
 +        "archive_name",
 +        "archive_md5",
 +        "archive_sha256",
@@ -1178,16 +1173,19 @@ new file mode 100644
 +            os.path.join(LIGHTSD_SOURCE_DIR, "dist", self.TYPE)
 +        ))
 +
-+    def render(self, pkg_ctx):
-+        if self.TEMPLATES is None:
-+            return
++    def _render(self, msg):
++        pass
 +
-+        for filename in self.TEMPLATES:
-+            template = self._render_ctx.get_template(filename)
-+            with open(os.path.join(self._repo, filename), "wb") as fp:
-+                template.stream(pkg_ctx.as_dict()).dump(fp, "utf-8")
++    def render(self, pkg_ctx):
++        if self.TEMPLATES is not None:
++            for filename in self.TEMPLATES:
++                template = self._render_ctx.get_template(filename)
++                with open(os.path.join(self._repo, filename), "wb") as fp:
++                    template.stream(pkg_ctx.as_dict()).dump(fp, "utf-8")
 +
 +        # TODO: copy the other files too.
++
++        self._render(pkg_ctx)
 +
 +    def _pre_commit(self, msg):
 +        pass
@@ -1210,7 +1208,7 @@ new file mode 100644
 +    TYPE = "dpkg"
 +
 +    _CHANGELOG_ENTRY_FORMAT = (
-+"""lightsd ({version}-1) unstable; urgency=low
++"""lightsd ({version}-{build_number}) unstable; urgency=low
 +
 +  * {msg}
 +
@@ -1219,8 +1217,9 @@ new file mode 100644
 +"""  # noqa
 +    )
 +
-+    def render(self, pkg_ctx):
++    def _render(self, pkg_ctx):
 +        self._version = pkg_ctx.version
++        self._build_number = pkg_ctx.build_number
 +
 +    def _pre_commit(self, msg):
 +        changelog_path = os.path.join(self._repo, "debian", "changelog")
@@ -1234,6 +1233,7 @@ new file mode 100644
 +                locale.setlocale(locale.LC_TIME, "C")
 +                new_entry = self._CHANGELOG_ENTRY_FORMAT.format(
 +                    version=self._version,
++                    build_number=self._build_number,
 +                    msg=msg,
 +                    author=COMMIT_AUTHOR,
 +                    date=utcnow.strftime("%a, %d %b %Y %H:%M:%S %z")
@@ -1340,7 +1340,7 @@ new file mode 100644
 +    subprocess.check_call([
 +        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
 +        "tag", "-m", "Tagging release {}".format(version), version
-+        # TODO: use docutils to extract the changelog section
++        # TODO: Use docutils to extract the changelog section
 +    ])
 +    _update_lightsd_version_cmake_include(next_version)
 +    subprocess.check_call([
@@ -1349,9 +1349,9 @@ new file mode 100644
 +    ])
 +
 +    subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "out"])
-+    if click.confirm("Are you ready to push those commit?"):
-+        return
-+        subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "push"])
++#   if click.confirm("Are you ready to push those commit?"):
++#       return
++#       subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "push"])
 +
 +
 +@click.group()
@@ -1411,7 +1411,10 @@ new file mode 100644
 +
 +    action_echo("Checking for an existing release")
 +    response = requests.head(gz_archive_url, allow_redirects=True)
-+    if response.status_code == requests.codes.ok:
++    click.echo("[+] {}: {} {}".format(
++        gz_archive_url, response.status_code, response.reason
++    ))
++    if response.status_code != requests.codes.not_found:
 +        error_echo("Release already found at {}!".format(gz_archive_url))
 +
 +    prereq_echo("Cleaning-up the source tree")
@@ -1440,9 +1443,7 @@ new file mode 100644
 +        if os.path.exists(dest):
 +            click.echo("[=] compressing with {}".format(suffix))
 +            continue
-+        cmd = itertools.chain.from_iterable([
-+            [bin, "--stdout"], extra_flags, [archive]
-+        ])
++        cmd = itertools.chain([bin, "--stdout"], extra_flags, [archive])
 +        click.echo("[+] compressing with {}".format(suffix))
 +        with open(dest, "wb") as fp:
 +            subprocess.check_call(cmd, stdout=fp)
@@ -1459,24 +1460,36 @@ new file mode 100644
 +    click.echo("[+] MD5 {}".format(gz_archive_md5))
 +    click.echo("[+] SHA256 {}".format(gz_archive_sha256))
 +
++    version = semver.parse(LIGHTSD_VERSION)
++    build_number = "1"
++    if version["build"] is not None:
++        # NOTE: It would be cool to know which package really changed so we can
++        #       just render and release that one. I guess the easiest way is to
++        #       implement that with different schedulers in buildbot or a
++        #       scheduler that's able to fill-in a property that could be passed
++        #       to CMake (even better: generate a release target for each pkg).
++        build_number = str(int(version["build"].split(".")[-1]) + 1)
++    version["build"] = None
 +    pkg_ctx = PackageContext(
-+        version=LIGHTSD_VERSION,
-+        dev_version=next_dev_version(semver.parse(LIGHTSD_VERSION)),
++        version=semver.format_version(**version),
++        build_number=build_number,
 +        archive_name=gz_archive_name,
 +        archive_md5=gz_archive_md5,
 +        archive_sha256=gz_archive_sha256,
 +        archive_url=gz_archive_url,
 +    )
 +    action_echo("Updating packages")
++    release_type = "upstream" if build_number == "1" else "package"
++    release_msg = "New {} release {}".format(release_type, LIGHTSD_VERSION)
 +    for pkg in PACKAGES:
-+        dirty = pkg.render(pkg_ctx)
++        pkg.render(pkg_ctx)
++        dirty = pkg.commit(release_msg)
 +        if not dirty:
-+            click.echo("[=] {} package".format(pkg.TYPE))
++            click.echo("[=] {}".format(pkg.TYPE))
 +            continue
 +        click.echo("[+] {} package".format(pkg.TYPE))
-+        pkg.commit("New upstream release {}".format(LIGHTSD_VERSION))
 +
-+    result_echo("New upstream release {}".format(LIGHTSD_VERSION))
++    result_echo(release_msg)
 +
 +
 +@cli.command()

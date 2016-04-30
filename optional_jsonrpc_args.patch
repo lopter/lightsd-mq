@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  4b74a5b40d1d3fdeab6a639975ae941544839e33
+# Parent  f53fd0ef32c475da14c00890cf0b2d0f65bc1e9a
 Correctly support optional arguments in the JSON-RPC API
 
 Passing too many arguments as an array also properly fails now.
@@ -7,18 +7,6 @@ Passing too many arguments as an array also properly fails now.
 While we are at it, put the correct argument names in the documentation
 so that it works for people passing argument by name.
 
-diff --git a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -5,7 +5,7 @@
- 
- SET(CPACK_PACKAGE_VERSION_MAJOR "1")
- SET(CPACK_PACKAGE_VERSION_MINOR "1")
--SET(CPACK_PACKAGE_VERSION_PATCH "2")
-+SET(CPACK_PACKAGE_VERSION_PATCH "3")
- SET(LIGHTSD_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
- 
- MESSAGE(STATUS "lightsd version: ${LIGHTSD_VERSION}")
 diff --git a/core/jsonrpc.c b/core/jsonrpc.c
 --- a/core/jsonrpc.c
 +++ b/core/jsonrpc.c
