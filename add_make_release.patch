@@ -270,13 +270,13 @@ diff --git a/dist/dpkg/debian/control b/dist/dpkg/debian/control
 new file mode 100644
 --- /dev/null
 +++ b/dist/dpkg/debian/control
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,24 @@
 +Source: lightsd
 +Section: contrib/utils
 +Priority: optional
 +Maintainer: Louis Opter <kalessin@kalessin.fr>
++Uploaders: Buildbot <buildbot@kalessin.fr>
 +Build-Depends: debhelper (>= 9), cmake (>= 2.8.9), libevent-dev (>= 2.0.19)
-+Suggests: python3, ipython3
 +Standards-Version: 3.9.6
 +Homepage: https://github.com/lopter/lightsd/
 +Vcs-Git: https://github.com/lopter/dpkg-lightsd.git
@@ -285,6 +285,7 @@ new file mode 100644
 +Package: lightsd
 +Architecture: any
 +Depends: ${shlibs:Depends}, ${misc:Depends}
++Suggests: python3, ipython3
 +Description: Centralized daemon to control your LIFX bulbs
 + lightsd discovers LIFX bulbs on the local network and acts as a central
 + point of control for them via a JSON-RPC interface.
@@ -293,7 +294,7 @@ new file mode 100644
 + sockets and allows you to retrieve the state of the bulbs or set their
 + colors. Effects, grouping and de-grouping operations are also supported.
 + .
-+ Visit http://lightsd.readthedocs.org/ for more informations.
++ Visit https://docs.lightsd.io/ for more information.
 diff --git a/dist/dpkg/debian/copyright b/dist/dpkg/debian/copyright
 new file mode 100644
 --- /dev/null
@@ -651,9 +652,9 @@ new file mode 100755
 +endif
 +
 +ifeq (,$(wildcard /run))
-+    RUNTIME_DIRECTORY=/run
-+else
 +    RUNTIME_DIRECTORY=/var/run
++else
++    RUNTIME_DIRECTORY=/run
 +endif
 +
 +# main packaging script based on dh7 syntax
@@ -866,7 +867,7 @@ diff --git a/dist/openwrt/utils/lightsd/Makefile b/dist/openwrt/utils/lightsd/Ma
 new file mode 100644
 --- /dev/null
 +++ b/dist/openwrt/utils/lightsd/Makefile
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,62 @@
 +#
 +# Copyright (C) 2015 Louis Opter <kalessin@kalessin.fr>
 +#
@@ -882,7 +883,6 @@ new file mode 100644
 +PKG_MAINTAINER:=Louis Opter <kalessin@kalessin.fr>
 +PKG_LICENSE:=GPL-3.0+
 +PKG_SOURCE_URL:=https://downloads.lightsd.io/releases/
-+#PKG_SOURCE_URL:=http://localhost:8000/
 +PKG_SOURCE:={{ archive_name }}
 +PKG_MD5SUM:={{ archive_md5 }}
 +PKG_BUILD_DIR:=$(BUILD_DIR)/lightsd-$(PKG_VERSION)
@@ -1058,7 +1058,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,456 @@
+@@ -0,0 +1,482 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1072,6 +1072,7 @@ new file mode 100644
 +import pytz
 +import requests
 +import semver
++import shutil
 +import subprocess
 +import sys
 +
@@ -1166,12 +1167,13 @@ new file mode 100644
 +
 +    TYPE = None
 +    TEMPLATES = None
++    STATIC_FILES = None
 +
 +    def __init__(self, repo):
 +        self._repo = repo
-+        self._render_ctx = jinja2.Environment(loader=jinja2.FileSystemLoader(
-+            os.path.join(LIGHTSD_SOURCE_DIR, "dist", self.TYPE)
-+        ))
++        self._src_dir = os.path.join(LIGHTSD_SOURCE_DIR, "dist", self.TYPE)
++        jinja_loader = jinja2.FileSystemLoader(self._src_dir)
++        self._render_ctx = jinja2.Environment(loader=jinja_loader)
 +
 +    def _render(self, msg):
 +        pass
@@ -1183,7 +1185,12 @@ new file mode 100644
 +                with open(os.path.join(self._repo, filename), "wb") as fp:
 +                    template.stream(pkg_ctx.as_dict()).dump(fp, "utf-8")
 +
-+        # TODO: copy the other files too.
++        if self.STATIC_FILES is not None:
++            for filename in self.STATIC_FILES:
++                dest = os.path.join(self._src_dir, filename)
++                dirname = os.path.dirname(dest)
++                os.makedirs(dirname, exist_ok=True)
++                shutil.copyfile(dest, os.path.join(self._repo, filename))
 +
 +        self._render(pkg_ctx)
 +
@@ -1206,6 +1213,19 @@ new file mode 100644
 +class DebianPackage(DownstreamPackage):
 +
 +    TYPE = "dpkg"
++    STATIC_FILES = (
++        "debian/init.d",
++        "debian/source/format",
++        "debian/postinst",
++        "debian/control",
++        "debian/postrm",
++        "debian/copyright",
++        "debian/rules",
++        "debian/compat",
++        "debian/watch",
++        "debian/docs",
++        "debian/lightsd.default",
++    )
 +
 +    _CHANGELOG_ENTRY_FORMAT = (
 +"""lightsd ({version}-{build_number}) unstable; urgency=low
@@ -1216,9 +1236,11 @@ new file mode 100644
 +
 +"""  # noqa
 +    )
++    _CHANGELOG_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z"
 +
 +    def _render(self, pkg_ctx):
-+        self._version = pkg_ctx.version
++        # change -rc.# into ~rc.# to keep lintian happy
++        self._version = pkg_ctx.version.replace("-", "~")
 +        self._build_number = pkg_ctx.build_number
 +
 +    def _pre_commit(self, msg):
@@ -1236,7 +1258,7 @@ new file mode 100644
 +                    build_number=self._build_number,
 +                    msg=msg,
 +                    author=COMMIT_AUTHOR,
-+                    date=utcnow.strftime("%a, %d %b %Y %H:%M:%S %z")
++                    date=utcnow.strftime(self._CHANGELOG_DATE_FORMAT)
 +                ).encode("utf-8")
 +                ofp.write(new_entry)
 +                with open(changelog_path, "rb") as ifp:
@@ -1263,12 +1285,14 @@ new file mode 100644
 +
 +    TYPE = "homebrew"
 +    TEMPLATES = ("lightsd.rb",)
++    STATIC_FILES = ("LICENSE", "README.rst")
 +
 +
 +class OpenWRTPackage(DownstreamPackage):
 +
 +    TYPE = "openwrt"
 +    TEMPLATES = ("utils/lightsd/Makefile",)
++    STATIC_FILES = ("utils/lightsd/files/lightsd.init",)
 +
 +
 +class PKGBUILDPackage(DownstreamPackage):
@@ -1431,7 +1455,9 @@ new file mode 100644
 +            BSDTAR_EXECUTABLE,
 +            "-C", LIGHTSD_SOURCE_DIR,
 +            "-cf", archive,
-+            "-s", "/^\\./{}/".format(os.path.basename(archive)),
++            # Put everything under a top-level directory ("archive_name"
++            # without the .tar extension):
++            "-s", "/^\\./{}/".format(archive_name.rsplit(".", 1)[0]),
 +            "--exclude", ".hg",
 +            "."
 +        ])
