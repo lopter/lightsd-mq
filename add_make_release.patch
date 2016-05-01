@@ -143,7 +143,7 @@ diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,68 @@
 +IF (
 +    PYTHONINTERP_FOUND
 +    AND PYTHON_VERSION_MAJOR EQUAL 3
@@ -177,39 +177,33 @@ new file mode 100644
 +        VERBATIM
 +    )
 +
-+    ADD_CUSTOM_TARGET(
++    SET(
++        RELEASE_COMMANDS
 +        release
-+        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "release"
-+        DEPENDS "${VENV_STAMP}"
-+        VERBATIM
-+    )
-+
-+    ADD_CUSTOM_TARGET(
 +        pre_release
-+        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "pre_release"
-+        DEPENDS "${VENV_STAMP}"
-+        VERBATIM
-+    )
-+
-+    ADD_CUSTOM_TARGET(
 +        package_release
-+        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "package_release"
-+        DEPENDS "${VENV_STAMP}"
-+        VERBATIM
-+    )
-+
-+    ADD_CUSTOM_TARGET(
 +        release_new_tag
-+        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "new_tag"
-+        DEPENDS "${VENV_STAMP}"
-+        VERBATIM
-+    )
-+
-+    ADD_CUSTOM_TARGET(
 +        release_docs
-+        COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "docs"
-+        DEPENDS "${VENV_STAMP}" docs
-+        VERBATIM
++        release_debuild
++    )
++    FOREACH (TARGET ${RELEASE_COMMANDS})
++        ADD_CUSTOM_TARGET(
++            ${TARGET}
++            COMMAND "${VENV_PYTHON}" "${CMAKE_CURRENT_BINARY_DIR}/release.py" "${TARGET}"
++            DEPENDS "${VENV_STAMP}"
++            VERBATIM
++        )
++    ENDFOREACH ()
++
++    SET(
++        EXTRA_OUTPUT
++        "${CMAKE_CURRENT_BINARY_DIR}/debuild" # release_debuild
++        "${CMAKE_CURRENT_BINARY_DIR}/lightsd-${LIGHTSD_VERSION}.tar" # release_new_tag
++        "${VENV_DIRECTORY}"
++        "${VENV_STAMP}"
++    )
++    SET_DIRECTORY_PROPERTIES(
++        PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "${EXTRA_OUTPUT}"
 +    )
 +ELSE ()
 +    MESSAGE(
@@ -1058,7 +1052,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,482 @@
+@@ -0,0 +1,546 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1087,6 +1081,8 @@ new file mode 100644
 +# where to put the generated archives served at
 +# https://downloads.lightsd.io/releases/:
 +LIGHTSD_ARCHIVES_DIR = "@LIGHTSD_RELEASE_ARCHIVES_DIR@"
++# where to put generated debian packages
++LIGHTSD_DEBS_DIR = "@LIGHTSD_RELEASE_DEBS_DIR@"
 +# where to manage the documentation served at https://docs.lighsd.io/:
 +LIGHTSD_DOCS_DIR = "@LIGHTSD_RELEASE_DOCS_DIR@"
 +
@@ -1131,6 +1127,14 @@ new file mode 100644
 +def next_build_release(version):
 +    version = semver.format_version(**version)
 +    return semver.parse(semver.bump_build(version))
++
++
++def extract_build_number(version):
++    if version["build"] is None:
++        return "1"
++    rv = str(int(version["build"].split(".")[-1]) + 1)
++    version["build"] = None
++    return rv
 +
 +
 +def readfile(fp, read_size=FILE_READ_SIZE):
@@ -1373,9 +1377,9 @@ new file mode 100644
 +    ])
 +
 +    subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "out"])
-+#   if click.confirm("Are you ready to push those commit?"):
-+#       return
-+#       subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "push"])
++    if click.confirm("Are you ready to push those commit?"):
++        return
++        subprocess.check_call([HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "push"])
 +
 +
 +@click.group()
@@ -1417,8 +1421,8 @@ new file mode 100644
 +
 +
 +@cli.command()
-+def new_tag():
-+    if not LIGHTSD_PKGS_DIR or not LIGHTSD_ARCHIVES_DIR:
++def release_new_tag():
++    if not all([LIGHTSD_PKGS_DIR, LIGHTSD_ARCHIVES_DIR]):
 +        error_echo(
 +            "Please configure the project with LIGHTSD_RELEASE_PACKAGES_DIR "
 +            "and LIGHTSD_RELEASE_ARCHIVES_DIR to use this command."
@@ -1433,7 +1437,7 @@ new file mode 100644
 +        gz_archive_name
 +    )
 +
-+    action_echo("Checking for an existing release")
++    prereq_echo("Checking for an existing release")
 +    response = requests.head(gz_archive_url, allow_redirects=True)
 +    click.echo("[+] {}: {} {}".format(
 +        gz_archive_url, response.status_code, response.reason
@@ -1447,8 +1451,8 @@ new file mode 100644
 +        "--config", "extensions.purge=", "purge", "--abort-on-err", "--all"
 +    ])
 +
-+    # NOTE: I wanted to use hg export but then dpkg gave me troubles because
-+    #       the archive had extra files or something:
++    # NOTE: I wanted to use hg archive but then dpkg gave me troubles because the
++    #       archive had extra files or something:
 +    action_echo("Tarballing the sources into {}".format(archive))
 +    if not os.path.exists(archive):
 +        subprocess.check_call([
@@ -1487,15 +1491,12 @@ new file mode 100644
 +    click.echo("[+] SHA256 {}".format(gz_archive_sha256))
 +
 +    version = semver.parse(LIGHTSD_VERSION)
-+    build_number = "1"
-+    if version["build"] is not None:
-+        # NOTE: It would be cool to know which package really changed so we can
-+        #       just render and release that one. I guess the easiest way is to
-+        #       implement that with different schedulers in buildbot or a
-+        #       scheduler that's able to fill-in a property that could be passed
-+        #       to CMake (even better: generate a release target for each pkg).
-+        build_number = str(int(version["build"].split(".")[-1]) + 1)
-+    version["build"] = None
++    # NOTE: It would be cool to know which package really changed so we can just
++    #       render and release that one. I guess the easiest way is to implement
++    #       that with different schedulers in buildbot or a scheduler that's
++    #       able to fill-in a property that could be passed to CMake (even
++    #       better: generate a release target for each pkg).
++    build_number = extract_build_number(version)
 +    pkg_ctx = PackageContext(
 +        version=semver.format_version(**version),
 +        build_number=build_number,
@@ -1515,11 +1516,11 @@ new file mode 100644
 +            continue
 +        click.echo("[+] {} package".format(pkg.TYPE))
 +
-+    result_echo(release_msg)
++    result_echo(release_msg.replace("upstream", "downstream"))
 +
 +
 +@cli.command()
-+def docs():
++def release_docs():
 +    version = semver.parse(LIGHTSD_VERSION)
 +    dest_dir = os.path.join(LIGHTSD_DOCS_DIR, LIGHTSD_VERSION)
 +    docs_dir = os.path.join(LIGHTSD_BINARY_DIR, "docs", "_build")
@@ -1537,6 +1538,63 @@ new file mode 100644
 +        "ln", "-snf", dest_dir, os.path.join(LIGHTSD_DOCS_DIR, alias)
 +    ])
 +    result_echo("{} ({}) updated".format(dest_dir, alias))
++
++
++@cli.command()
++def release_debuild():
++    if not all([LIGHTSD_DEBS_DIR, LIGHTSD_ARCHIVES_DIR]):
++        error_echo(
++            "Please configure the project with LIGHTSD_RELEASE_DEBS_DIR "
++            "and LIGHTSD_RELEASE_ARCHIVES_DIR to use this command."
++        )
++        sys.exit(1)
++
++    # This is just too painful to do from buildbot atm (we need to parametrize
++    # the build with the version):
++    debuild_dir = os.path.join(LIGHTSD_BINARY_DIR, "dist", "debuild")
++    if os.path.exists(debuild_dir):
++        prereq_echo("Cleaning-up previous build in {}".format(debuild_dir))
++        shutil.rmtree(debuild_dir)
++    os.makedirs(debuild_dir, exist_ok=True)
++    version = semver.parse(LIGHTSD_VERSION)
++    build_number = extract_build_number(version)
++    version = semver.format_version(**version)
++    archive_name = "lightsd-{}.tar.gz".format(version)
++    archive_path = os.path.join(LIGHTSD_ARCHIVES_DIR, archive_name)
++    deb_archive_name = archive_name.replace("-rc", "~rc")
++    deb_archive_name = deb_archive_name.replace("lightsd-", "lightsd_")
++    prereq_echo("Setting-up sources under {}".format(debuild_dir))
++    deb_archive_path = os.path.join(debuild_dir, deb_archive_name)
++    shutil.copyfile(archive_path, deb_archive_path)
++    click.echo("[+] Archive copied to {}".format(deb_archive_path))
++    src_dir = os.path.join(debuild_dir, "lightsd-{}".format(version))
++    subprocess.check_call([
++        BSDTAR_EXECUTABLE, "-C", debuild_dir, "-xzf", deb_archive_path,
++    ])
++    click.echo("[+] Archive extracted in {}".format(src_dir))
++    shutil.copytree(
++        os.path.join(LIGHTSD_PKGS_DIR, "dpkg-lightsd", "debian"),
++        os.path.join(src_dir, "debian")
++    )
++    click.echo("[+] dpkg sources copied to {}".format(
++        os.path.join(src_dir, "debian")
++    ))
++    dpkg_arch = subprocess.check_output(["dpkg", "--print-architecture"])
++    deb_pkg_name = "lightsd_{version}-{build_number}_{dpkg_arch}.deb".format(
++        version=version,
++        build_number=build_number,
++        dpkg_arch=dpkg_arch,
++    )
++    action_echo("Building {}".format(deb_pkg_name))
++    subprocess.check_call(["debuild"], cwd=src_dir)
++    shutil.copyfile(
++        os.path.join(debuild_dir, deb_pkg_name),
++        os.path.join(LIGHTSD_DEBS_DIR, deb_pkg_name),
++    )
++    click.echo("[+] Copied {} under {}".format(
++        deb_pkg_name, LIGHTSD_DEBS_DIR
++    ))
++    result_echo("New Debian package {}".format(deb_pkg_name))
 +
 +
 +if __name__ == "__main__":
