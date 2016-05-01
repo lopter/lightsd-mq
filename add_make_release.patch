@@ -355,7 +355,7 @@ new file mode 100644
 + SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 + CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 + OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
++ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 diff --git a/dist/dpkg/debian/docs b/dist/dpkg/debian/docs
 new file mode 100644
 --- /dev/null
@@ -653,7 +653,7 @@ new file mode 100755
 +
 +# main packaging script based on dh7 syntax
 +%:
-+	dh $@ 
++	dh $@
 +
 +# debmake generated override targets
 +# This is example for Cmake (See http://bugs.debian.org/641051 )
@@ -1052,7 +1052,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,546 @@
+@@ -0,0 +1,549 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1095,6 +1095,8 @@ new file mode 100644
 +COMMIT_AUTHOR = "Buildbot <buildbot@kalessin.fr>"
 +
 +FILE_READ_SIZE = 32768
++
++USER_ENCODING = locale.getpreferredencoding()
 +
 +TARBALL_COMPRESSORS = [
 +    # suffix, path, extra_flags
@@ -1342,17 +1344,17 @@ new file mode 100644
 +    revision, branch = [
 +        part.strip() for part in subprocess.check_output([
 +            HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR, "id", "--id", "--branch"
-+        ]).split()
++        ]).decode(USER_ENCODING).split()
 +    ]
 +    qapplied = bool(len(subprocess.check_output([
 +        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
 +        "--config", "extensions.mq=", "qapplied"
-+    ])))
++    ]).decode(USER_ENCODING)))
 +    if qapplied or revision.endswith("+") or branch != "default":
 +        error_echo(
 +            "Can't do a release over a dirty repository! "
 +            "(rev={}, branch={}, patched={})".format(
-+                revision.decode("utf-8"), branch.decode("utf-8"), qapplied
++                revision, branch, qapplied
 +            )
 +        )
 +        sys.exit(1)
@@ -1580,6 +1582,7 @@ new file mode 100644
 +        os.path.join(src_dir, "debian")
 +    ))
 +    dpkg_arch = subprocess.check_output(["dpkg", "--print-architecture"])
++    dpkg_arch = dpkg_arch.decode(USER_ENCODING)
 +    deb_pkg_name = "lightsd_{version}-{build_number}_{dpkg_arch}.deb".format(
 +        version=version,
 +        build_number=build_number,
