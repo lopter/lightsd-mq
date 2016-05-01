@@ -27,15 +27,14 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ENABLE_TESTING()
  
  ### Platform checks ############################################################
-@@ -26,6 +22,16 @@
+@@ -26,6 +22,15 @@
  FIND_PACKAGE(Endian REQUIRED)
  FIND_PACKAGE(Sphinx)
  
 +IF (CMAKE_BUILD_TYPE MATCHES RELEASE)
 +  FIND_PACKAGE(Gzip)
 +  FIND_PACKAGE(Hg)
-+  SET(Python_ADDITIONAL_VERSIONS 3) # actually >= 3.3 (os.replace)
-+  FIND_PACKAGE(PythonInterp)
++  FIND_PACKAGE(PythonInterp 3.3) # >= 3.3 for os.replace
 +  FIND_PACKAGE(BsdTar)
 +  FIND_PACKAGE(Virtualenv)
 +  FIND_PACKAGE(Xz)
@@ -44,7 +43,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  INCLUDE(CheckFunctionExists)
  INCLUDE(CheckVariableExists)
  INCLUDE(TestBigEndian)
-@@ -92,9 +98,7 @@
+@@ -92,9 +97,7 @@
  
  # 2.8.11 is the first version with TARGET_INCLUDE_DIRECTORIES:
  IF (CMAKE_VERSION VERSION_GREATER 2.8.10)
@@ -55,7 +54,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      ADD_SUBDIRECTORY(tests)
  ELSE ()
      MESSAGE(
-@@ -105,7 +109,14 @@
+@@ -105,7 +108,14 @@
  ENDIF ()
  
  IF (SPHINX_FOUND)
