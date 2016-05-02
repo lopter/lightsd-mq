@@ -1051,7 +1051,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,549 @@
+@@ -0,0 +1,561 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1325,6 +1325,22 @@ new file mode 100644
 +)
 +
 +
++def _abort_if_release_exists(version):
++    gz_archive_url = (
++        "https://downloads.lightsd.io/"
++        "releases/lightsd-{}.tar.gz".format(version)
++    )
++
++    prereq_echo("Checking for an existing release")
++    response = requests.head(gz_archive_url, allow_redirects=True)
++    click.echo("[+] {}: {} {}".format(
++        gz_archive_url, response.status_code, response.reason
++    ))
++    if response.status_code != requests.codes.not_found:
++        error_echo("Release already found at {}!".format(gz_archive_url))
++        sys.exit(1)
++
++
 +def _update_lightsd_version_cmake_include(version):
 +    version_parts = {
 +        k: v if v is not None else ""
@@ -1390,6 +1406,7 @@ new file mode 100644
 +
 +@cli.command()
 +def pre_release():
++    _abort_if_release_exists(LIGHTSD_VERSION)
 +    version = semver.parse(LIGHTSD_VERSION)
 +    if version["prerelease"] is None:
 +        version = next_pre_release(version)
@@ -1401,6 +1418,7 @@ new file mode 100644
 +
 +@cli.command()
 +def release():
++    _abort_if_release_exists(LIGHTSD_VERSION)
 +    version = semver.parse(LIGHTSD_VERSION)
 +    version["prerelease"] = version["build"] = None
 +    _release(
@@ -1430,6 +1448,14 @@ new file mode 100644
 +        )
 +        sys.exit(1)
 +
++    _abort_if_release_exists(LIGHTSD_VERSION)
++
++    prereq_echo("Cleaning-up the source tree")
++    subprocess.check_call([
++        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
++        "--config", "extensions.purge=", "purge", "--abort-on-err", "--all"
++    ])
++
 +    archive_name = "lightsd-{}.tar".format(LIGHTSD_VERSION)
 +    archive = os.path.join(LIGHTSD_BINARY_DIR, "dist", archive_name)
 +    gz_archive_name = ".".join([archive_name, "gz"])
@@ -1438,22 +1464,8 @@ new file mode 100644
 +        gz_archive_name
 +    )
 +
-+    prereq_echo("Checking for an existing release")
-+    response = requests.head(gz_archive_url, allow_redirects=True)
-+    click.echo("[+] {}: {} {}".format(
-+        gz_archive_url, response.status_code, response.reason
-+    ))
-+    if response.status_code != requests.codes.not_found:
-+        error_echo("Release already found at {}!".format(gz_archive_url))
-+
-+    prereq_echo("Cleaning-up the source tree")
-+    subprocess.check_call([
-+        HG_EXECUTABLE, "-R", LIGHTSD_SOURCE_DIR,
-+        "--config", "extensions.purge=", "purge", "--abort-on-err", "--all"
-+    ])
-+
-+    # NOTE: I wanted to use hg archive but then dpkg gave me troubles because the
-+    #       archive had extra files or something:
++    # NOTE: I wanted to use hg archive but then dpkg gave me troubles because
++    #       the archive had extra files or something:
 +    action_echo("Tarballing the sources into {}".format(archive))
 +    if not os.path.exists(archive):
 +        subprocess.check_call([
