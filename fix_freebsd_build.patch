@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  0c7aec226bf65211a21118fc5092ac9ab96a8f4d
+# Parent  631ea4f01b043da184393acd8cd055619e8eaa1f
 Fix build on FreeBSD 10.3
 
 - properly use _XOPEN_SOURCE=700 instead of _POSIX_C_SOURCE;
@@ -14,7 +14,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99")
  SET(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE} "")
  
-+IF (LINUX)
++IF (CMAKE_SYSTEM_NAME MATCHES "Linux")
 +    ADD_DEFINITIONS(
 +        # see feature_test_macros(7)
 +        "-D_XOPEN_SOURCE=700"
