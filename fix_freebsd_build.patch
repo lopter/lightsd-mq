@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  631ea4f01b043da184393acd8cd055619e8eaa1f
+# Parent  28701ca70422b882028b7fd0e6c52401b394041a
 Fix build on FreeBSD 10.3
 
 - properly use _XOPEN_SOURCE=700 instead of _POSIX_C_SOURCE;

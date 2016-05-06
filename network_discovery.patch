@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  d6245f382c7a85dd48328f670698ee9f8c421ef8
+# Parent  3b2d568c18f44ef51ec69c4b8d19eb15e8b7a057
 Properly broadcast LIFX discovery packets on all networks (closes GH-2)
 
 This is really the proper way of achieving the same semantic as
@@ -64,12 +64,13 @@ diff --git a/core/lightsd.h b/core/lightsd.h
 diff --git a/lifx/broadcast.c b/lifx/broadcast.c
 --- a/lifx/broadcast.c
 +++ b/lifx/broadcast.c
-@@ -17,12 +17,14 @@
+@@ -17,12 +17,15 @@
  
  #include <sys/queue.h>
  #include <sys/tree.h>
 +#include <sys/socket.h>
  #include <arpa/inet.h>
++#include <net/if.h>
  #include <netinet/in.h>
  #include <assert.h>
  #include <endian.h>
@@ -79,7 +80,7 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
  #include <stdarg.h>
  #include <stdbool.h>
  #include <stdint.h>
-@@ -52,16 +54,37 @@
+@@ -52,16 +55,37 @@
  };
  
  static bool
@@ -123,7 +124,7 @@ diff --git a/lifx/broadcast.c b/lifx/broadcast.c
      struct lgtd_lifx_packet_header get_pan_gateway;
      lgtd_lifx_wire_setup_header(
          &get_pan_gateway,
-@@ -71,31 +94,50 @@
+@@ -71,31 +95,50 @@
          LGTD_LIFX_GET_PAN_GATEWAY
      );
  
