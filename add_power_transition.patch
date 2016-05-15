@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  1bc2c2b54e56ebeb4dd5cfee17b55137ca1f1409
+# Parent  3f479a4932f848032f3af1bcd58f91dc3b04e4f8
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -17,7 +17,7 @@ version tested for the Original bulbs is 1.5.
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -94,6 +94,7 @@
+@@ -99,6 +99,7 @@
  
  ADD_SUBDIRECTORY(compat)
  ADD_SUBDIRECTORY(core)
@@ -1238,17 +1238,6 @@ diff --git a/examples/lightsc.py b/examples/lightsc.py
  
      def get_light_state(self, target):
          return self._jsonrpc_call("get_light_state", [target])
-diff --git a/lifx/broadcast.c b/lifx/broadcast.c
---- a/lifx/broadcast.c
-+++ b/lifx/broadcast.c
-@@ -19,6 +19,7 @@
- #include <sys/tree.h>
- #include <sys/socket.h>
- #include <arpa/inet.h>
-+#include <net/if.h>
- #include <netinet/in.h>
- #include <assert.h>
- #include <endian.h>
 diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
 --- a/lifx/wire_proto.c
 +++ b/lifx/wire_proto.c
