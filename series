@@ -1,5 +1,6 @@
 add_make_release.patch
 fix_freebsd_build.patch
+docs_setup_alabaster_and_ga.patch
 optional_jsonrpc_args.patch
 network_discovery.patch
 dont_use_ev_assign.patch
