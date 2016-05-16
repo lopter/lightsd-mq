@@ -142,7 +142,7 @@ diff --git a/dist/CMakeLists.txt b/dist/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/dist/CMakeLists.txt
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,70 @@
 +IF (
 +    PYTHONINTERP_FOUND
 +    AND PYTHON_VERSION_MAJOR EQUAL 3
@@ -193,6 +193,8 @@ new file mode 100644
 +            VERBATIM
 +        )
 +    ENDFOREACH ()
++
++    ADD_DEPENDENCIES(release_docs docs)
 +
 +    SET(
 +        EXTRA_OUTPUT
@@ -1051,7 +1053,7 @@ diff --git a/dist/release.py.in b/dist/release.py.in
 new file mode 100644
 --- /dev/null
 +++ b/dist/release.py.in
-@@ -0,0 +1,561 @@
+@@ -0,0 +1,559 @@
 +#!/usr/bin/env python3
 +
 +import click
@@ -1536,19 +1538,17 @@ new file mode 100644
 +def release_docs():
 +    version = semver.parse(LIGHTSD_VERSION)
 +    dest_dir = os.path.join(LIGHTSD_DOCS_DIR, LIGHTSD_VERSION)
-+    docs_dir = os.path.join(LIGHTSD_BINARY_DIR, "docs", "_build")
++    docs_dir = os.path.join(LIGHTSD_BINARY_DIR, "docs", "_build", ".")
 +    os.makedirs(dest_dir, exist_ok=True)
 +    if version["prerelease"] is None and version["build"] is None:
 +        alias = "current"
 +    else:
 +        alias = "latest"
 +    action_echo("Copying files into {}".format(dest_dir))
-+    subprocess.check_call([
-+        "cp", "-a", docs_dir + os.path.sep, dest_dir + os.path.sep
-+    ])
++    subprocess.check_call(["cp", "-av", docs_dir, dest_dir])
 +    action_echo("Updating alias {}".format(alias))
 +    subprocess.check_call([
-+        "ln", "-snf", dest_dir, os.path.join(LIGHTSD_DOCS_DIR, alias)
++        "ln", "-vrsnf", dest_dir, os.path.join(LIGHTSD_DOCS_DIR, alias)
 +    ])
 +    result_echo("{} ({}) updated".format(dest_dir, alias))
 +
