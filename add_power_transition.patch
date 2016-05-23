@@ -1381,22 +1381,43 @@ diff --git a/tests/core/effect/test_effect_start.c b/tests/core/effect/test_effe
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/effect/test_effect_start.c
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,38 @@
 +#include "core/effect.c"
 +
 +#include "mock_log.h"
 +#include "mock_timer.h"
 +
++union lgtd_effect_ctx TEST_EFFECT_CTX = { .as_uint = 0 };
++
 +enum {
-+    FINITE,     // duration != 0
++    FINITE_WITHOUT_CALLBACK,    // duration != 0
++    FINITE_WITH_CALLBACK,
 +    INSTANT,    // duration == 0
 +    PERIODIC,   // timer_ms != 0
 +    ONE_SHOT,   // timer_ms == 0
-+} TEST_CASES;
++} test_case = 0;;
++
++static int test_apply_callback_call_count = 0;
++
++static void
++test_apply_callback(const struct lgtd_effect *effect)
++{
++    test_apply_callback_call_count++;
++}
++
 +
 +int
 +main(void)
 +{
++    switch (test_case++) {
++        case FINITE_WITH_CALLBACK:
++            lgtd_effect_start(
++                "test", 420, NULL, 0, 0, test_apply_callback, TEST_EFFECT_CTX
++            );
++        default:
++            break;
++    }
++
 +    return 0;
 +}
 diff --git a/tests/core/jsonrpc/test_jsonrpc_batch.c b/tests/core/jsonrpc/test_jsonrpc_batch.c
