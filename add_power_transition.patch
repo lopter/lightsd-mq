@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  3f479a4932f848032f3af1bcd58f91dc3b04e4f8
+# Parent  f2d3c102353fd3d3ca1ab2a8a27d7961458a25a6
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -1359,6 +1359,46 @@ diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
      ${CMAKE_CURRENT_BINARY_DIR}/../lifx
  )
  
+diff --git a/tests/core/effect/CMakeLists.txt b/tests/core/effect/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/core/effect/CMakeLists.txt
+@@ -0,0 +1,13 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++FUNCTION(ADD_EFFECT_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} ${TIME_MONOTONIC_LIBRARY})
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_EFFECT_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/core/effect/test_effect_start.c b/tests/core/effect/test_effect_start.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/effect/test_effect_start.c
+@@ -0,0 +1,17 @@
++#include "core/effect.c"
++
++#include "mock_log.h"
++#include "mock_timer.h"
++
++enum {
++    FINITE,     // duration != 0
++    INSTANT,    // duration == 0
++    PERIODIC,   // timer_ms != 0
++    ONE_SHOT,   // timer_ms == 0
++} TEST_CASES;
++
++int
++main(void)
++{
++    return 0;
++}
 diff --git a/tests/core/jsonrpc/test_jsonrpc_batch.c b/tests/core/jsonrpc/test_jsonrpc_batch.c
 --- a/tests/core/jsonrpc/test_jsonrpc_batch.c
 +++ b/tests/core/jsonrpc/test_jsonrpc_batch.c
