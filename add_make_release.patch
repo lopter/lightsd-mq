@@ -54,7 +54,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      ADD_SUBDIRECTORY(tests)
  ELSE ()
      MESSAGE(
-@@ -105,7 +108,14 @@
+@@ -105,9 +108,14 @@
  ENDIF ()
  
  IF (SPHINX_FOUND)
@@ -62,13 +62,13 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      ADD_SUBDIRECTORY(docs)
 +ELSE ()
 +    MESSAGE(STATUS "Shpinx wasn't found, docs generation disabled")
-+ENDIF ()
-+
-+IF (CMAKE_BUILD_TYPE MATCHES RELEASE)
-+  ADD_SUBDIRECTORY(dist)
  ENDIF ()
  
++ADD_SUBDIRECTORY(dist)
++
  INSTALL(
+     FILES COPYING README.rst docs/protocol.rst
+     DESTINATION share/doc/lightsd
 diff --git a/CMakeScripts/FindBsdTar.cmake b/CMakeScripts/FindBsdTar.cmake
 new file mode 100644
 --- /dev/null
