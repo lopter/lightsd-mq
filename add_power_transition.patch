@@ -59,7 +59,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,213 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -133,18 +133,17 @@ new file mode 100644
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +
 +    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
-+    if (now < effect->created_at + effect->duration) { // avoid overflow
++    // if the effect is finite, check that this callback isn't being called
++    // after the effect has ended (e.g: the computer went to sleep):
++    if (effect->duration && now > effect->created_at + effect->duration) {
 +        lgtd_time_mono_t diff = now - effect->created_at + effect->duration;
-+        // maybe the computer was sleepy
-+        if (diff > LGTD_EFFECT_STALE_THRESHOLD_MSECS) {
-+            lgtd_warnx(
-+                "stopping stale periodic effect %s created %jums ago, id=%p, "
-+                "duration=%dms",
-+                effect->name, (uintmax_t)diff, effect, effect->duration
-+            );
-+            lgtd_effect_stop(effect);
-+            return;
-+        }
++        lgtd_warnx(
++            "stopping stale periodic effect %s created %jums ago, id=%p, "
++            "duration=%dms",
++            effect->name, (uintmax_t)diff, effect, effect->duration
++        );
++        lgtd_effect_stop(effect);
++        return;
 +    }
 +
 +    lgtd_info(
@@ -278,7 +277,7 @@ diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,54 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -297,8 +296,6 @@ new file mode 100644
 +// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +#pragma once
-+
-+enum { LGTD_EFFECT_STALE_THRESHOLD_MSECS = 60 * 1000 };
 +
 +union lgtd_effect_ctx {
 +    uint64_t    as_uint;
@@ -1421,11 +1418,102 @@ new file mode 100644
 +FOREACH(TEST ${TESTS})
 +    ADD_EFFECT_TEST(${TEST})
 +ENDFOREACH()
+diff --git a/tests/core/effect/test_effect_duration_callback.c b/tests/core/effect/test_effect_duration_callback.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/effect/test_effect_duration_callback.c
+@@ -0,0 +1,86 @@
++#include "core/effect.c"
++
++#include "mock_log.h"
++#define MOCKED_LGTD_TIMER_STOP
++#include "mock_timer.h"
++
++struct lgtd_timer *MOCK_DURATION_TIMER = (struct lgtd_timer *)0x2a;
++
++static int timer_stop_call_count = 0;
++
++void
++lgtd_timer_stop(struct lgtd_timer *timer)
++{
++    if (timer != MOCK_DURATION_TIMER) {
++        lgtd_errx(
++            1, "lgtd_timer_stop called with timer %p (expected %p)",
++            timer, MOCK_DURATION_TIMER
++        );
++    }
++
++    timer_stop_call_count++;
++}
++
++static int duration_callback_call_count = 0;
++
++static void
++test_duration_callback(const struct lgtd_effect *effect)
++{
++    if (!effect) {
++        lgtd_errx(1, "test_duration_callback didn't receive an effect");
++    }
++
++    duration_callback_call_count++;
++}
++
++int
++main(void)
++{
++    struct lgtd_effect *effect = NULL;
++    union lgtd_timer_ctx ctx;
++
++    effect = calloc(1, sizeof(*effect));
++    effect->name = "test";
++    effect->duration_cb =  test_duration_callback;
++    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
++    ctx.as_ptr = effect;
++    lgtd_effect_duration_callback(MOCK_DURATION_TIMER, ctx);
++    if (duration_callback_call_count != 1) {
++        lgtd_errx(
++            1, "duration_callback_call_count = %d (expected 1)",
++            duration_callback_call_count
++        );
++    }
++    if (timer_stop_call_count != 1) {
++        lgtd_errx(
++            1, "timer_stop_call_count = %d (expected 1)",
++            timer_stop_call_count
++        );
++    }
++    if (!LIST_EMPTY(&lgtd_effects)) {
++        lgtd_errx(1, "the effects list should be empty");
++    }
++
++    effect = calloc(1, sizeof(*effect));
++    effect->name = "test_without_callback";
++    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
++    ctx.as_ptr = effect;
++    lgtd_effect_duration_callback(MOCK_DURATION_TIMER, ctx);
++    if (duration_callback_call_count != 1) {
++        lgtd_errx(
++            1, "duration_callback_call_count = %d (expected 1)",
++            duration_callback_call_count
++        );
++    }
++    if (timer_stop_call_count != 2) {
++        lgtd_errx(
++            1, "timer_stop_call_count = %d (expected 2)",
++            timer_stop_call_count
++        );
++    }
++    if (!LIST_EMPTY(&lgtd_effects)) {
++        lgtd_errx(1, "the effects list should be empty");
++    }
++
++    return 0;
++}
 diff --git a/tests/core/effect/test_effect_start.c b/tests/core/effect/test_effect_start.c
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/effect/test_effect_start.c
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,284 @@
 +#include "core/effect.c"
 +
 +#include "mock_log.h"
@@ -1638,6 +1726,8 @@ new file mode 100644
 +    }                                                           \
 +} while (0)
 +
++    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++
 +    for (; test_case != TEST_CASES_COUNT; test_case++) {
 +        reset_call_counts();
 +
@@ -1652,6 +1742,50 @@ new file mode 100644
 +        );
 +        if (!effect && params->expected_effect) {
 +            lgtd_errx(1, "lgtd_effect_start didn't return an effect object");
++            if (LIST_FIRST(&lgtd_effects) != effect) {
++                lgtd_errx(
++                    1, "lgtd_effect_start didn't insert the new effect at the "
++                    "head of the effects list"
++                );
++            }
++            if (effect->created_at < now) {
++                lgtd_errx(
++                    1, "effect->created_at = %ju (expected >= %ju)",
++                    effect->created_at, now
++                );
++            }
++            if (effect->duration != params->duration) {
++                lgtd_errx(
++                    1, "effect->duration = %d (expected %d)",
++                    effect->duration, params->duration
++                );
++            }
++            if (!effect->name || strcmp(effect->name, params->name)) {
++                lgtd_errx(
++                    1, "effect->name = %s (expected %s)",
++                    effect->name, params->name
++                );
++            }
++            if (effect->apply_cb != params->apply_cb) {
++                lgtd_errx(
++                    1, "effect->apply_cb = %p (expected %p)",
++                    effect->apply_cb, params->apply_cb
++                );
++            }
++            if (effect->duration_cb != params->duration_cb) {
++                lgtd_errx(
++                    1, "effect->duration_cb = %p (expected %p)",
++                    effect->duration_cb, params->duration_cb
++                );
++            }
++            if (memcmp(&effect->ctx, &params->ctx, sizeof(effect->ctx))) {
++                lgtd_errx(1, "unexpected effect->ctx");
++            }
++            if (effect->apply_cnt != 0) {
++                lgtd_errx(
++                    1, "effect->apply_cnt = %u (expected 0)", effect->apply_cnt
++                );
++            }
 +        }
 +        if (effect && !params->expected_effect) {
 +            lgtd_errx(1, "lgtd_effect_start returned an effect object");
@@ -1660,6 +1794,144 @@ new file mode 100644
 +        CHECK_CALL_COUNT(apply_callback);
 +        CHECK_CALL_COUNT(duration_callback);
 +        lgtd_info("--- end ---");
++    }
++
++    return 0;
++}
+diff --git a/tests/core/effect/test_effect_stop.c b/tests/core/effect/test_effect_stop.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/effect/test_effect_stop.c
+@@ -0,0 +1,61 @@
++#include "core/effect.c"
++
++#include "mock_log.h"
++#define MOCKED_LGTD_TIMER_STOP
++#include "mock_timer.h"
++
++struct lgtd_timer *MOCK_TIMER = (struct lgtd_timer *)0x2a;
++
++static int timer_stop_call_count = 0;
++
++void
++lgtd_timer_stop(struct lgtd_timer *timer)
++{
++    if (timer != MOCK_TIMER) {
++        lgtd_errx(
++            1, "lgtd_timer_stop called with timer %p (expected %p)",
++            timer, MOCK_TIMER
++        );
++    }
++
++    timer_stop_call_count++;
++}
++
++int
++main(void)
++{
++    struct lgtd_effect *effect;
++    
++    effect = calloc(1, sizeof(*effect));
++    effect->name = "test";
++    effect->timer = MOCK_TIMER;
++    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
++    lgtd_effect_stop(effect);
++    if (!LIST_EMPTY(&lgtd_effects)) {
++        lgtd_errx(
++            1, "lgtd_effect_stop didn't remove the effect from the effects list"
++        );
++    }
++    if (timer_stop_call_count != 1) {
++        lgtd_errx(
++            1, "timer_stop_call_count = %d (expected 1)", timer_stop_call_count
++        );
++    }
++
++    effect = calloc(1, sizeof(*effect));
++    effect->name = "test_without_timer";
++    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
++    lgtd_effect_stop(effect);
++    if (!LIST_EMPTY(&lgtd_effects)) {
++        lgtd_errx(
++            1, "lgtd_effect_stop didn't remove the effect from the effects list"
++        );
++    }
++    if (timer_stop_call_count != 1) {
++        lgtd_errx(
++            1, "timer_stop_call_count = %d (expected 1)", timer_stop_call_count
++        );
++    }
++
++    return 0;
++}
+diff --git a/tests/core/effect/test_effect_timer_callback.c b/tests/core/effect/test_effect_timer_callback.c
+new file mode 100644
+--- /dev/null
++++ b/tests/core/effect/test_effect_timer_callback.c
+@@ -0,0 +1,67 @@
++#include "core/effect.c"
++
++#include "mock_log.h"
++#include "mock_timer.h"
++
++static int apply_callback_call_count = 0;
++
++static void
++test_apply_callback(const struct lgtd_effect *effect)
++{
++    if (!effect) {
++        lgtd_errx(1, "test_apply_callback didn't receive an effect");
++    }
++
++    apply_callback_call_count++;
++}
++
++int
++main(void)
++{
++    struct lgtd_effect *effect = NULL;
++    union lgtd_timer_ctx ctx;
++    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++
++    effect = calloc(1, sizeof(*effect));
++    effect->name = "test";
++    effect->created_at = now;
++    effect->duration = 420;
++    effect->apply_cb =  test_apply_callback;
++    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
++
++    ctx.as_ptr = effect;
++    lgtd_effect_timer_callback(NULL, ctx);
++    if (apply_callback_call_count != 1) {
++        lgtd_errx(
++            1, "apply_callback_call_count = %d (expected 1)",
++            apply_callback_call_count
++        );
++    }
++    if (effect->apply_cnt != 1) {
++        lgtd_errx(
++            1, "effect->apply_cnt = %u (expected 1)",
++            apply_callback_call_count
++        );
++    }
++
++    // make it stale (call time > effect end)
++    effect->created_at = now - effect->duration * 2;
++    lgtd_effect_timer_callback(NULL, ctx);
++    if (apply_callback_call_count != 1) {
++        lgtd_errx(
++            1, "apply_callback_call_count = %d (expected 1)",
++            apply_callback_call_count
++        );
++    }
++    if (effect->apply_cnt != 1) {
++        lgtd_errx(
++            1, "effect->apply_cnt = %u (expected 1)",
++            apply_callback_call_count
++        );
++    }
++    if (!LIST_EMPTY(&lgtd_effects)) {
++        lgtd_errx(1, "stale effect not stopped"); 
 +    }
 +
 +    return 0;
