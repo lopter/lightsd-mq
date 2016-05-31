@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  f2d3c102353fd3d3ca1ab2a8a27d7961458a25a6
+# Parent  37abecb2b0d3417349a2081a541cfbe4609f6892
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -17,7 +17,7 @@ version tested for the Original bulbs is 1.5.
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -99,6 +99,7 @@
+@@ -98,6 +98,7 @@
  
  ADD_SUBDIRECTORY(compat)
  ADD_SUBDIRECTORY(core)
@@ -59,7 +59,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,214 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -115,6 +115,10 @@ new file mode 100644
 +{
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +    if (effect->duration_cb) {
++        lgtd_info(
++            "calling duration callback for effect %s, id=%p",
++            effect->name, effect
++        );
 +        effect->duration_cb(effect);
 +    }
 +    lgtd_timer_stop(timer);
@@ -134,7 +138,7 @@ new file mode 100644
 +        // maybe the computer was sleepy
 +        if (diff > LGTD_EFFECT_STALE_THRESHOLD_MSECS) {
 +            lgtd_warnx(
-+                "stopping stale effect %s created %jums ago, id=%p, "
++                "stopping stale periodic effect %s created %jums ago, id=%p, "
 +                "duration=%dms",
 +                effect->name, (uintmax_t)diff, effect, effect->duration
 +            );
@@ -143,6 +147,10 @@ new file mode 100644
 +        }
 +    }
 +
++    lgtd_info(
++        "calling apply callback for effect %s, id=%p", effect->name, effect
++    );
++    assert(effect->apply_cb);
 +    effect->apply_cb(effect);
 +    effect->apply_cnt++;
 +}
@@ -157,10 +165,10 @@ new file mode 100644
 +                  union lgtd_effect_ctx ctx)
 +{
 +    assert(name);
++    assert(duration >= 0);
 +    assert(timer_ms >= 0);
-+    assert(timer_ms < duration);
-+    if (timer_ms) {
-+        assert(apply_cb);
++    if (timer_ms && duration) {
++        assert(timer_ms < duration);
 +    }
 +
 +    struct lgtd_effect *effect = calloc(1, sizeof(*effect));
@@ -191,23 +199,58 @@ new file mode 100644
 +        }
 +    }
 +
-+    if (timer_ms) {
++    if (timer_ms) { // periodic or delayed effect
++        assert(apply_cb);
++        if (!apply_cb) {
++            lgtd_warnx(
++                "cannot create periodic effect %s without a callback", name
++            );
++            goto err;
++        }
++        assert(duration || (timer_flags & LGTD_TIMER_PERSISTENT));
++        if (!duration && !(timer_flags & LGTD_TIMER_PERSISTENT)) {
++            lgtd_warnx(
++                "cannot create infinite effect %s without a persistent timer",
++                name
++            );
++            goto err;
++        }
 +        effect->timer = lgtd_timer_start(
 +            timer_flags, timer_ms, lgtd_effect_timer_callback, timer_ctx
 +        );
 +        if (!effect->timer) {
 +            goto err;
 +        }
-+        lgtd_info(
-+            "starting effect %s, id=%p, duration=%dms, tick=%dms",
-+            name, effect, duration, timer_ms
-+        );
-+    } else {
-+        lgtd_info(
-+            "starting effect %s, id=%p, duration=%dms", name, effect, duration
-+        );
++        if (duration) {
++            lgtd_info(
++                "starting effect %s, id=%p, tick=%dms, duration=%dms",
++                name, effect, timer_ms, duration
++            );
++        } else {
++            lgtd_info(
++                "starting effect %s, id=%p, tick=%dms, duration=infinite",
++                name, effect, timer_ms
++            );
++        }
++    } else { // finite or instant effect
++        if (duration) {
++            lgtd_info(
++                "starting effect %s, id=%p, duration=%dms", name, effect, duration
++            );
++        } else {
++            lgtd_info(
++                "starting effect %s, id=%p, duration=instant", name, effect
++            );
++        }
 +        if (effect->apply_cb) {
 +            effect->apply_cb(effect);
++        }
++        if (!duration) { // instant effect
++            if (effect->duration_cb) {
++                effect->duration_cb(effect);
++            }
++            lgtd_effect_stop(effect);
++            return NULL;
 +        }
 +    }
 +
@@ -283,7 +326,7 @@ new file mode 100644
 +    return (uintptr_t)effect;
 +}
 +
-+struct lgtd_effect *lgtd_effect_start(const char *,
++struct lgtd_effect *lgtd_effect_start(const char *, // name
 +                                      int, // duration
 +                                      void (*)(const struct lgtd_effect *), // duration cb
 +                                      int, // timer flags
@@ -804,22 +847,23 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
  -----------------
  
 -.. function:: power_off(target)
+-
+-   Power off the given bulb(s).
 +.. function:: power_off(target[, transition])
  
--   Power off the given bulb(s).
+-.. function:: power_on(target)
 +   Power off the given bulb(s) with an optional transition.
  
--.. function:: power_on(target)
+-   Power on the given bulb(s).
 +   :param int transition: Optional time in ms it will take for the bulb to turn
 +                          off.
  
--   Power on the given bulb(s).
+-.. function:: power_toggle(target)
 +.. function:: power_on(target[, transition])
  
--.. function:: power_toggle(target)
-+   Power on the given bulb(s) with an optional transition.
- 
 -   Power on (if they are off) or power off (if they are on) the given bulb(s).
++   Power on the given bulb(s) with an optional transition.
++
 +   :param int transition: Optional time in ms it will take for the bulb to turn
 +                          on.
 +
@@ -1381,41 +1425,241 @@ diff --git a/tests/core/effect/test_effect_start.c b/tests/core/effect/test_effe
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/effect/test_effect_start.c
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,238 @@
 +#include "core/effect.c"
 +
 +#include "mock_log.h"
++#define MOCKED_LGTD_TIMER_START
++#define MOCKED_LGTD_TIMER_STOP
 +#include "mock_timer.h"
 +
-+union lgtd_effect_ctx TEST_EFFECT_CTX = { .as_uint = 0 };
-+
 +enum {
-+    FINITE_WITHOUT_CALLBACK,    // duration != 0
-+    FINITE_WITH_CALLBACK,
-+    INSTANT,    // duration == 0
-+    PERIODIC,   // timer_ms != 0
-+    ONE_SHOT,   // timer_ms == 0
-+} test_case = 0;;
++    FINITE_WITHOUT_CALLBACKS = 0,   // timer_ms == 0, duration != 0
++    FINITE_WITH_CALLBACKS,
++    INSTANT_WITHOUT_CALLBACKS,      // duration == 0
++    INSTANT_WITH_CALLBACKS,         // duration == 0
++    PERIODIC_INFINITE,              // timer_ms != 0, duration == 0
++    PERIODIC_FINITE,                // timer_ms != 0, duration != 0
++    TEST_CASES_COUNT,
++} test_case = FINITE_WITHOUT_CALLBACKS;
 +
-+static int test_apply_callback_call_count = 0;
++static void test_apply_callback(const struct lgtd_effect *);
++static void test_duration_callback(const struct lgtd_effect *);
++
++const struct test_parameters {
++    const char              *name;
++    int                     duration;
++    void                    (*duration_cb)(const struct lgtd_effect *);
++    int                     timer_flags;
++    int                     timer_ms;
++    void                    (*apply_cb)(const struct lgtd_effect *);
++    union lgtd_effect_ctx   ctx;
++    int                     expected_timer_start_calls;
++    int                     expected_duration_callback_calls;
++    int                     expected_apply_callback_calls;
++    bool                    expected_effect;
++} test_cases_parameters[] = {
++    {
++        .name = "FINITE_WITHOUT_CALLBACKS",
++        .duration = 420,
++        .ctx = { .as_uint = 1 },
++        .expected_timer_start_calls = 1,
++        .expected_effect = true,
++    },
++    {
++        .name = "FINITE_WITH_CALLBACKS",
++        .duration = 419,
++        .duration_cb = test_duration_callback,
++        .apply_cb = test_apply_callback,
++        .ctx = { .as_uint = 2 },
++        .expected_timer_start_calls = 1,
++        .expected_apply_callback_calls = 1,
++        .expected_effect = true,
++    },
++    {
++        .name = "INSTANT_WITHOUT_CALLBACKS",
++        .expected_effect = false,
++        .ctx = { .as_uint = 3 },
++    },
++    {
++        .name = "INSTANT_WITH_CALLBACKS",
++        .expected_effect = false,
++        .apply_cb = test_apply_callback,
++        .ctx = { .as_uint = 4 },
++        .duration_cb = test_duration_callback,
++        .expected_apply_callback_calls = 1,
++        .expected_duration_callback_calls = 1,
++    },
++    {
++        .name = "PERIODIC_FINITE",
++        .expected_effect = true,
++        .apply_cb = test_apply_callback,
++        .duration_cb = test_duration_callback,
++        .duration = 370,
++        .timer_ms = 180,
++        .timer_flags = LGTD_TIMER_PERSISTENT,
++        .ctx = { .as_uint = 5 },
++        .expected_timer_start_calls = 2,
++    },
++    {
++        .name = "PERIODIC_INFINITE",
++        .expected_effect = true,
++        .apply_cb = test_apply_callback,
++        .timer_ms = 60,
++        .timer_flags = LGTD_TIMER_PERSISTENT|LGTD_TIMER_ACTIVATE_NOW,
++        .ctx = { .as_uint = 6 },
++        .expected_timer_start_calls = 1,
++    },
++};
++
++
++static int timer_start_call_count = 0;
++
++struct lgtd_timer *
++lgtd_timer_start(int flags,
++                 int ms,
++                 void (*cb)(struct lgtd_timer *,
++                            union lgtd_timer_ctx),
++                 union lgtd_timer_ctx ctx)
++{
++    const struct test_parameters *params = &test_cases_parameters[test_case];
++    if (cb == lgtd_effect_duration_callback) {
++        if (flags != LGTD_TIMER_DEFAULT_FLAGS) {
++            lgtd_errx(
++                1, "lgtd_timer_start called with unexpected flags %#x "
++                "(expected %#x)", flags, LGTD_TIMER_DEFAULT_FLAGS
++            );
++        }
++        if (ms != params->duration) {
++            lgtd_errx(
++                1, "lgtd_timer_start called with unexpected duration %d "
++                "(expected %d)", ms, params->duration
++            );
++        }
++    } else if (cb == lgtd_effect_timer_callback) {
++        if (flags != params->timer_flags) {
++            lgtd_errx(
++                1, "lgtd_timer_start called with unexpected flags %#x "
++                "(expected %#x)", flags, params->timer_flags
++            );
++        }
++        if (ms != params->timer_ms) {
++            lgtd_errx(
++                1, "lgtd_timer_start called with unexpected duration %d "
++                "(expected %d)", ms, params->timer_ms
++            );
++        }
++    } else {
++        lgtd_errx(
++            1, "lgtd_timer_start called with unexpected callback at %p", cb
++        );
++    }
++
++    if (!ctx.as_ptr) {
++        lgtd_errx(1, "lgtd_timer_start called without a callback context");
++    }
++
++    timer_start_call_count++;
++
++    return (struct lgtd_timer *)(intptr_t)timer_start_call_count;
++}
++
++static int timer_stop_call_count = 0;
++
++void
++lgtd_timer_stop(struct lgtd_timer *timer)
++{
++    if (!timer) {
++        lgtd_errx(1, "lgtd_timer_stop called without a timer");
++    }
++
++    timer_stop_call_count++;
++}
++
++static int apply_callback_call_count = 0;
 +
 +static void
 +test_apply_callback(const struct lgtd_effect *effect)
 +{
-+    test_apply_callback_call_count++;
++    if (!effect) {
++        lgtd_errx(1, "test_apply_callback didn't receive an effect");
++    }
++
++    const struct test_parameters *params = &test_cases_parameters[test_case];
++    if (params->name != effect->name) {
++        lgtd_errx(
++            1, "test_apply_callback got effect %s (expected %s)",
++            effect->name, params->name
++        );
++    }
++
++    apply_callback_call_count++;
 +}
 +
++static int duration_callback_call_count = 0;
++
++static void
++test_duration_callback(const struct lgtd_effect *effect)
++{
++    if (!effect) {
++        lgtd_errx(1, "test_duration_callback didn't receive an effect");
++    }
++
++    const struct test_parameters *params = &test_cases_parameters[test_case];
++    if (params->name != effect->name) {
++        lgtd_errx(
++            1, "test_duration_callback got effect %s (expected %s)",
++            effect->name, params->name
++        );
++    }
++    duration_callback_call_count++;
++}
++
++static void
++reset_call_counts(void)
++{
++    timer_start_call_count = 0;
++    timer_stop_call_count = 0;
++    apply_callback_call_count = 0;
++    duration_callback_call_count = 0;
++}
 +
 +int
 +main(void)
 +{
-+    switch (test_case++) {
-+        case FINITE_WITH_CALLBACK:
-+            lgtd_effect_start(
-+                "test", 420, NULL, 0, 0, test_apply_callback, TEST_EFFECT_CTX
-+            );
-+        default:
-+            break;
++#define CHECK_CALL_COUNT(cnt_name) do {                         \
++    int call_count = cnt_name ## _call_count;                   \
++    int expectation = params->expected_ ## cnt_name ## _calls;  \
++    if (call_count != expectation) {                            \
++        lgtd_errx(                                              \
++            1, # cnt_name " = %d (expected) %d",                \
++            call_count, expectation                             \
++        );                                                      \
++    }                                                           \
++} while (0)
++
++    for (; test_case != TEST_CASES_COUNT; test_case++) {
++        reset_call_counts();
++
++        const struct test_parameters *params;
++        params = &test_cases_parameters[test_case];
++        lgtd_info("--- test case: %s ---", params->name);
++        const struct lgtd_effect *effect = lgtd_effect_start(
++            params->name,
++            params->duration, params->duration_cb,
++            params->timer_flags, params->timer_ms, params->apply_cb,
++            params->ctx
++        );
++        if (!effect && params->expected_effect) {
++            lgtd_errx(1, "lgtd_effect_start didn't return an effect object");
++        }
++        if (effect && !params->expected_effect) {
++            lgtd_errx(1, "lgtd_effect_start returned an effect object");
++        }
++        CHECK_CALL_COUNT(timer_start);
++        CHECK_CALL_COUNT(apply_callback);
++        CHECK_CALL_COUNT(duration_callback);
++        lgtd_info("--- end ---");
 +    }
 +
 +    return 0;
