@@ -958,9 +958,9 @@ new file mode 100644
 +
 +    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(device_id);
 +    if (!bulb) {
-+        char addr[LGTD_LIFX_ADDR_LENGTH];
-+        LGTD_IEEE8023MACTOA(bulb->addr, addr);
-+        lgtd_warn(
++        char addr[LGTD_LIFX_ADDR_STRLEN];
++        LGTD_IEEE8023MACTOA(device_id, addr);
++        lgtd_warnx(
 +            "bulb %s is unavailable: can't restore its original brightness "
 +            "at the end of a power_off transition", addr
 +        );
@@ -1778,13 +1778,13 @@ new file mode 100644
 +                    effect->duration_cb, params->duration_cb
 +                );
 +            }
-+            if (memcmp(&effect->ctx, &params->ctx, sizeof(effect->ctx))) {
-+                lgtd_errx(1, "unexpected effect->ctx");
-+            }
 +            if (effect->apply_cnt != 0) {
 +                lgtd_errx(
 +                    1, "effect->apply_cnt = %u (expected 0)", effect->apply_cnt
 +                );
++            }
++            if (memcmp(&effect->ctx, &params->ctx, sizeof(effect->ctx))) {
++                lgtd_errx(1, "unexpected effect->ctx");
 +            }
 +        }
 +        if (effect && !params->expected_effect) {
@@ -2193,15 +2193,10 @@ diff --git a/tests/core/mock_effect.h b/tests/core/mock_effect.h
 new file mode 100644
 --- /dev/null
 +++ b/tests/core/mock_effect.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,40 @@
 +#pragma once
 +
-+struct lgtd_effect;
-+
-+union lgtd_effect_ctx {
-+    uint64_t    as_uint;
-+    void        *as_ptr;
-+};
++#include "core/effect.h" // to pull the union definition
 +
 +#ifndef MOCKED_LGTD_EFFECT_STOP
 +void
@@ -2579,6 +2574,21 @@ diff --git a/tests/core/proto/test_proto_untag_tag_does_not_exist.c b/tests/core
  #include "mock_client_buf.h"
  #include "mock_daemon.h"
  #include "mock_gateway.h"
+diff --git a/tests/effects/CMakeLists.txt b/tests/effects/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/effects/CMakeLists.txt
+@@ -0,0 +1,10 @@
++INCLUDE_DIRECTORIES(
++    ${LIGHTSD_SOURCE_DIR}
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_SOURCE_DIR}/../
++    ${LIGHTSD_BINARY_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}/../
++)
++
++ADD_ALL_SUBDIRECTORIES()
 diff --git a/tests/effects/mock_all.h b/tests/effects/mock_all.h
 new file mode 100644
 --- /dev/null
@@ -2599,3 +2609,112 @@ new file mode 100644
 +    return NULL;
 +}
 +#endif
+diff --git a/tests/effects/power_transition/CMakeLists.txt b/tests/effects/power_transition/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/effects/power_transition/CMakeLists.txt
+@@ -0,0 +1,18 @@
++INCLUDE_DIRECTORIES(
++    ${CMAKE_CURRENT_SOURCE_DIR}
++    ${CMAKE_CURRENT_BINARY_DIR}
++)
++
++ADD_CORE_LIBRARY(
++    test_effects_power_transition STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/utils.c
++)
++
++FUNCTION(ADD_POWER_TRANSITION_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} test_effects_power_transition)
++ENDFUNCTION()
++
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_POWER_TRANSITION_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/effects/power_transition/test_power_transition_clear_target_list.c b/tests/effects/power_transition/test_power_transition_clear_target_list.c
+new file mode 100644
+--- /dev/null
++++ b/tests/effects/power_transition/test_power_transition_clear_target_list.c
+@@ -0,0 +1,28 @@
++#include "effects/power_transition.c"
++
++#include "core/mock_effect.h"
++#include "core/mock_log.h"
++#include "core/mock_router.h"
++#include "lifx/mock_bulb.h"
++#include "lifx/mock_wire_proto.h"
++
++int
++main(void)
++{
++    struct lgtd_effect_power_transition_target *targets = calloc(
++        2, sizeof(*targets)
++    );
++    struct lgtd_effect_power_transition_target_list list;
++    for (int i = 0; i != LGTD_ARRAY_SIZE(targets); i++) {
++        SLIST_INSERT_HEAD(&list, &targets[i], link);
++    }
++
++    for (int i = 0; i != 2; i++) {
++        lgtd_effect_power_transition_clear_target_list(&list);
++        if (!SLIST_EMPTY(&list)) {
++            lgtd_errx(1, "the list wasn't cleared");
++        }
++    }
++
++    return 0;
++}
+diff --git a/tests/effects/power_transition/test_power_transition_off_possibly_get_bulb.c b/tests/effects/power_transition/test_power_transition_off_possibly_get_bulb.c
+new file mode 100644
+--- /dev/null
++++ b/tests/effects/power_transition/test_power_transition_off_possibly_get_bulb.c
+@@ -0,0 +1,48 @@
++#include "effects/power_transition.c"
++
++#include "core/mock_effect.h"
++#include "core/mock_log.h"
++#include "core/mock_router.h"
++#define MOCKED_LGTD_LIFX_BULB_GET
++#include "lifx/mock_bulb.h"
++#include "lifx/mock_wire_proto.h"
++
++uint8_t TEST_DEVICE_ID[LGTD_LIFX_ADDR_LENGTH] = { 0, 1, 2, 3, 4, 5 };
++
++struct lgtd_lifx_bulb TEST_BULB = { };
++
++static int bulb_get_call_count = 0;
++
++struct lgtd_lifx_bulb *
++lgtd_lifx_bulb_get(const uint8_t *addr)
++{
++    if (addr != TEST_DEVICE_ID) {
++        lgtd_errx(
++            1, "unexpected addr %p (expected %p)", addr, TEST_DEVICE_ID
++        );
++    }
++
++    if (!bulb_get_call_count++) {
++        return &TEST_BULB;
++    }
++
++    return NULL;
++}
++
++int
++main(void)
++{
++    struct lgtd_lifx_bulb *bulb;
++
++    bulb = lgtd_effect_power_transition_off_possibly_get_bulb(TEST_DEVICE_ID);
++    if (!bulb) {
++        lgtd_errx(1, "expected a bulb but got NULL instead");
++    }
++
++    bulb = lgtd_effect_power_transition_off_possibly_get_bulb(TEST_DEVICE_ID);
++    if (bulb) {
++        lgtd_errx(1, "expected NULL but got %p instead", bulb);
++    }
++
++    return 0;
++}
