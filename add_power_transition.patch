@@ -894,7 +894,7 @@ diff --git a/effects/power_transition.c b/effects/power_transition.c
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.c
-@@ -0,0 +1,303 @@
+@@ -0,0 +1,305 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -1015,15 +1015,17 @@ new file mode 100644
 +        struct lgtd_lifx_bulb *bulb;
 +        uint8_t *device_id = target->device_id;
 +        bulb = lgtd_effect_power_transition_off_possibly_get_bulb(device_id);
-+        struct lgtd_lifx_packet_light_color pkt = {
-+            .hue = bulb->state.hue,
-+            .saturation = bulb->state.saturation,
-+            .brightness = 0,
-+            .kelvin = bulb->state.kelvin,
-+            .transition = duration
-+        };
-+        lgtd_lifx_wire_encode_light_color(&pkt);
-+        lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt);
++        if (bulb) {
++            struct lgtd_lifx_packet_light_color pkt = {
++                .hue = bulb->state.hue,
++                .saturation = bulb->state.saturation,
++                .brightness = 0,
++                .kelvin = bulb->state.kelvin,
++                .transition = duration
++            };
++            lgtd_lifx_wire_encode_light_color(&pkt);
++            lgtd_router_send_to_device(bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt);
++        }
 +    }
 +}
 +
@@ -1057,7 +1059,7 @@ new file mode 100644
 +    switch (effect->apply_cnt) {
 +    case 0:
 +        lgtd_effect_power_transition_off_set_brightness_to_zero(
-+            &ctx->targets, effect->duration
++            &ctx->targets, ctx->duration
 +        );
 +        break;
 +    case 1:
@@ -1202,7 +1204,7 @@ diff --git a/effects/power_transition.h b/effects/power_transition.h
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.h
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,51 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -1245,6 +1247,9 @@ new file mode 100644
 +
 +struct lgtd_effect_power_transition_ctx {
 +    struct lgtd_effect_power_transition_target_list targets;
++    // For power off transitions the effect duration might be a bit longer than
++    // the actual transition duration (see RESTORE_LIGHT_COLOR_DELAY_MSECS)
++    // hence why the context also contains the duration:
 +    int                                             duration;
 +};
 +
@@ -2574,6 +2579,24 @@ diff --git a/tests/core/proto/test_proto_untag_tag_does_not_exist.c b/tests/core
  #include "mock_client_buf.h"
  #include "mock_daemon.h"
  #include "mock_gateway.h"
+diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
+--- a/tests/core/tests_utils.c
++++ b/tests/core/tests_utils.c
+@@ -74,7 +74,13 @@
+         .as_scalar = LGTD_BIG_ENDIAN_SYSTEM ?
+             htobe64(addr) << 16 : htobe64(addr) >> 16
+     };
+-    struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_open(gw, bulb_addr.as_array);
++
++    struct lgtd_lifx_bulb *bulb = calloc(1, sizeof(*bulb));
++    bulb->gw = gw;
++    memcpy(bulb->addr, bulb_addr.as_array, sizeof(bulb->addr));
++    RB_INSERT(lgtd_lifx_bulb_map, &lgtd_lifx_bulbs_table, bulb);
++    LGTD_STATS_ADD_AND_UPDATE_PROCTITLE(bulbs, 1);
++    bulb->last_light_state_at = lgtd_time_monotonic_msecs();
+ 
+     SLIST_INSERT_HEAD(&gw->bulbs, bulb, link_by_gw);
+ 
 diff --git a/tests/effects/CMakeLists.txt b/tests/effects/CMakeLists.txt
 new file mode 100644
 --- /dev/null
@@ -2613,7 +2636,7 @@ diff --git a/tests/effects/power_transition/CMakeLists.txt b/tests/effects/power
 new file mode 100644
 --- /dev/null
 +++ b/tests/effects/power_transition/CMakeLists.txt
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,21 @@
 +INCLUDE_DIRECTORIES(
 +    ${CMAKE_CURRENT_SOURCE_DIR}
 +    ${CMAKE_CURRENT_BINARY_DIR}
@@ -2621,7 +2644,10 @@ new file mode 100644
 +
 +ADD_CORE_LIBRARY(
 +    test_effects_power_transition STATIC
++    ${LIGHTSD_SOURCE_DIR}/core/stats.c
 +    ${LIGHTSD_SOURCE_DIR}/core/utils.c
++    ../../core/tests_utils.c
++    ../../core/tests_shims.c
 +)
 +
 +FUNCTION(ADD_POWER_TRANSITION_TEST TEST_SOURCE)
@@ -2661,6 +2687,377 @@ new file mode 100644
 +        if (!SLIST_EMPTY(&list)) {
 +            lgtd_errx(1, "the list wasn't cleared");
 +        }
++    }
++
++    return 0;
++}
+diff --git a/tests/effects/power_transition/test_power_transition_off_apply_callback.c b/tests/effects/power_transition/test_power_transition_off_apply_callback.c
+new file mode 100644
+--- /dev/null
++++ b/tests/effects/power_transition/test_power_transition_off_apply_callback.c
+@@ -0,0 +1,201 @@
++#include "effects/power_transition.c"
++
++#include "core/mock_daemon.h"
++#include "core/mock_effect.h"
++#include "core/mock_log.h"
++#define MOCKED_LGTD_ROUTER_SEND_TO_DEVICE
++#include "core/mock_router.h"
++#define MOCKED_LGTD_LIFX_BULB_GET
++#include "lifx/mock_bulb.h"
++#include "lifx/mock_gateway.h"
++#include "lifx/mock_tagging.h"
++#include "lifx/mock_wire_proto.h"
++
++#include "core/tests_utils.h"
++
++enum { TEST_TRANSITION_DURATION = 120 };
++
++struct lgtd_lifx_bulb *mock_bulb_1 = NULL;
++struct lgtd_lifx_bulb *mock_bulb_2 = NULL;
++enum { MOCK_BULB_2_INITIAL_BRIGHTNESS = 0xafaf };
++struct lgtd_effect *mock_effect = NULL;
++
++static int lifx_bulb_get_call_count = 0;
++
++struct lgtd_lifx_bulb *lgtd_lifx_bulb_get(const uint8_t *addr)
++{
++    if (lifx_bulb_get_call_count++ >= 2) {
++        return NULL;
++    }
++
++    if (memcmp(addr, mock_bulb_2->addr, sizeof(mock_bulb_2->addr))) {
++        char bufs[2][LGTD_LIFX_ADDR_STRLEN];
++        lgtd_errx(
++            1, "bulb_get: expected bulb %s but got %s instead",
++            LGTD_IEEE8023MACTOA(mock_bulb_2->addr, bufs[0]),
++            LGTD_IEEE8023MACTOA(addr, bufs[1])
++        );
++    }
++
++    return mock_bulb_2;
++}
++
++static int router_send_to_device_call_count = 0;
++
++void
++lgtd_router_send_to_device(struct lgtd_lifx_bulb *bulb,
++                           enum lgtd_lifx_packet_type pkt_type,
++                           void *pkt)
++{
++    if (bulb != mock_bulb_2) {
++        char bufs[2][LGTD_LIFX_ADDR_STRLEN];
++        lgtd_errx(
++            1, "router_send_to_device: expected bulb %s but got %s instead",
++            LGTD_IEEE8023MACTOA(mock_bulb_2->addr, bufs[0]),
++            LGTD_IEEE8023MACTOA(bulb->addr, bufs[1])
++        );
++    }
++
++    struct lgtd_lifx_packet_light_color *pkt_brightness;
++    struct lgtd_lifx_packet_power *pkt_power;
++    switch (router_send_to_device_call_count++) {
++    case 0: // set brightness to zero
++        pkt_brightness = pkt;
++        if (pkt_type != LGTD_LIFX_SET_LIGHT_COLOR) {
++            lgtd_errx(
++                1, "brightness transition: pkt_type = %d (expected %d)",
++                pkt_type, LGTD_LIFX_SET_LIGHT_COLOR
++            );
++        }
++        if (pkt_brightness->hue != mock_bulb_2->state.hue) {
++            lgtd_errx(
++                1, "brightness transition: hue = %hu (expected %hu)",
++                pkt_brightness->hue, mock_bulb_2->state.hue
++            );
++        }
++        if (pkt_brightness->saturation != mock_bulb_2->state.saturation) {
++            lgtd_errx(
++                1, "brightness transition: saturation = %hu (expected %hu)",
++                pkt_brightness->saturation, mock_bulb_2->state.saturation
++            );
++        }
++        if (pkt_brightness->brightness != 0) {
++            lgtd_errx(
++                1, "brightness transition: brightness = %hu (expected 0)",
++                pkt_brightness->brightness
++            );
++        }
++        if (pkt_brightness->kelvin != bulb->state.kelvin) {
++            lgtd_errx(
++                1, "brightness transition: kelvin = %hu (expected 0)",
++                pkt_brightness->kelvin
++            );
++        }
++        if (pkt_brightness->transition != TEST_TRANSITION_DURATION) {
++            lgtd_errx(
++                1, "brightness transition: transition = %u (expected %u)",
++                pkt_brightness->transition, TEST_TRANSITION_DURATION
++            );
++        }
++        break;
++    case 1: // set power off
++        pkt_power = pkt;
++        if (pkt_type != LGTD_LIFX_SET_POWER_STATE) {
++            lgtd_errx(
++                1, "power off: pkt_type = %d (expected %d)",
++                pkt_type, LGTD_LIFX_SET_POWER_STATE
++            );
++        }
++        if (pkt_power->power != LGTD_LIFX_POWER_OFF) {
++            lgtd_errx(
++                1, "powering off: power = %hu (expected %u)",
++                pkt_power->power, LGTD_LIFX_POWER_OFF
++            );
++        }
++        break;
++    default:
++        break;
++    }
++}
++
++int
++main(void)
++{
++    struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
++    mock_bulb_1 = lgtd_tests_insert_mock_bulb(gw_1, 1);
++    mock_bulb_2 = lgtd_tests_insert_mock_bulb(gw_1, 2);
++    mock_bulb_2->state.brightness = MOCK_BULB_2_INITIAL_BRIGHTNESS;
++    mock_bulb_2->state.hue = 0xbae;
++    mock_bulb_2->state.saturation = 0x4444;
++    mock_bulb_2->state.kelvin = 3500;
++
++    struct lgtd_effect_power_transition_ctx ctx = {
++        .duration = TEST_TRANSITION_DURATION
++    };
++    struct lgtd_effect_power_transition_target transition_target = {
++        .initial_brightness = mock_bulb_2->state.brightness
++    };
++    memcpy(
++        &transition_target.device_id,
++        mock_bulb_2->addr,
++        sizeof(mock_bulb_2->addr)
++    );
++    SLIST_INSERT_HEAD(&ctx.targets, &transition_target, link);
++
++    mock_effect = calloc(1, sizeof(*mock_effect));
++    union lgtd_effect_ctx effect_ctx = { .as_ptr = &ctx };
++    mock_effect->ctx = effect_ctx;
++
++    // 1st application: should set brightness to zero on bulb_2:
++    // 2nd application: should turn the power off on bulb_2:
++    for (int i = 0; i++ != 2; mock_effect->apply_cnt++) {
++        lgtd_effect_power_transition_off_apply_callback(mock_effect);
++        if (lifx_bulb_get_call_count != i) {
++            lgtd_errx(
++                1, "lifx_bulb_get_call_count = %d (expected %d)",
++                lifx_bulb_get_call_count, i
++            );
++        }
++        if (router_send_to_device_call_count != i) {
++            lgtd_errx(
++                1, "router_send_to_device_call_count = %d (expected %d)",
++                router_send_to_device_call_count, i
++            );
++        }
++    }
++
++    // shouldn't do anything:
++    lgtd_effect_power_transition_off_apply_callback(mock_effect);
++    if (lifx_bulb_get_call_count != 2) {
++        lgtd_errx(
++            1, "lifx_bulb_get_call_count = %d (expected 2)",
++            lifx_bulb_get_call_count
++        );
++    }
++    if (router_send_to_device_call_count != 2) {
++        lgtd_errx(
++            1, "router_send_to_device_call_count = %d (expected 2)",
++            router_send_to_device_call_count
++        );
++    }
++
++    // repeat the first test case with lgtd_lifx_bulb_get returning NULL:
++    mock_effect->apply_cnt = 0;
++    for (int i = 0; i++ != 2; mock_effect->apply_cnt++) {
++        lgtd_effect_power_transition_off_apply_callback(mock_effect);
++        if (lifx_bulb_get_call_count != 2 + i) {
++            lgtd_errx(
++                1, "lifx_bulb_get_call_count = %d (expected %d)",
++                lifx_bulb_get_call_count, 2 + i
++            );
++        }
++        if (router_send_to_device_call_count != 2) {
++            lgtd_errx(
++                1, "router_send_to_device_call_count = %d (expected 2)",
++                router_send_to_device_call_count
++            );
++        }
++    }
++
++    return 0;
++}
+diff --git a/tests/effects/power_transition/test_power_transition_off_duration_callback.c b/tests/effects/power_transition/test_power_transition_off_duration_callback.c
+new file mode 100644
+--- /dev/null
++++ b/tests/effects/power_transition/test_power_transition_off_duration_callback.c
+@@ -0,0 +1,160 @@
++#include "effects/power_transition.c"
++
++#include "core/mock_daemon.h"
++#include "core/mock_effect.h"
++#include "core/mock_log.h"
++#define MOCKED_LGTD_ROUTER_SEND_TO_DEVICE
++#include "core/mock_router.h"
++#define MOCKED_LGTD_LIFX_BULB_GET
++#include "lifx/mock_bulb.h"
++#include "lifx/mock_gateway.h"
++#include "lifx/mock_tagging.h"
++#include "lifx/mock_wire_proto.h"
++
++#include "core/tests_utils.h"
++
++struct lgtd_lifx_bulb *mock_bulb_1 = NULL;
++struct lgtd_lifx_bulb *mock_bulb_2 = NULL;
++enum { MOCK_BULB_2_INITIAL_BRIGHTNESS = 0xafaf };
++struct lgtd_effect *mock_effect = NULL;
++
++static int lifx_bulb_get_call_count = 0;
++
++struct lgtd_lifx_bulb *lgtd_lifx_bulb_get(const uint8_t *addr)
++{
++    if (lifx_bulb_get_call_count++) {
++        return NULL;
++    }
++
++    if (memcmp(addr, mock_bulb_2->addr, sizeof(mock_bulb_2->addr))) {
++        char bufs[2][LGTD_LIFX_ADDR_STRLEN];
++        lgtd_errx(
++            1, "bulb_get: expected bulb %s but got %s instead",
++            LGTD_IEEE8023MACTOA(mock_bulb_2->addr, bufs[0]),
++            LGTD_IEEE8023MACTOA(addr, bufs[1])
++        );
++    }
++
++    return mock_bulb_2;
++}
++
++static int router_send_to_device_call_count = 0;
++
++void
++lgtd_router_send_to_device(struct lgtd_lifx_bulb *bulb,
++                           enum lgtd_lifx_packet_type pkt_type,
++                           void *pkt)
++{
++    router_send_to_device_call_count++;
++
++    if (bulb != mock_bulb_2) {
++        char bufs[2][LGTD_LIFX_ADDR_STRLEN];
++        lgtd_errx(
++            1, "router_send_to_device: expected bulb %s but got %s instead",
++            LGTD_IEEE8023MACTOA(mock_bulb_2->addr, bufs[0]),
++            LGTD_IEEE8023MACTOA(bulb->addr, bufs[1])
++        );
++    }
++
++    struct lgtd_lifx_packet_light_color *pkt_brightness = pkt;
++    if (pkt_type != LGTD_LIFX_SET_LIGHT_COLOR) {
++        lgtd_errx(
++            1, "router_send_to_device: pkt_type %u (expected %U)",
++            pkt_type, LGTD_LIFX_SET_LIGHT_COLOR
++        );
++    }
++    if (pkt_brightness->hue != mock_bulb_2->state.hue) {
++        lgtd_errx(
++            1, "brightness restore: hue = %hu (expected %hu)",
++            pkt_brightness->hue, mock_bulb_2->state.hue
++        );
++    }
++    if (pkt_brightness->saturation != mock_bulb_2->state.saturation) {
++        lgtd_errx(
++            1, "brightness restore: saturation = %hu (expected %hu)",
++            pkt_brightness->saturation, mock_bulb_2->state.saturation
++        );
++    }
++    if (pkt_brightness->brightness != MOCK_BULB_2_INITIAL_BRIGHTNESS) {
++        lgtd_errx(
++            1, "brightness restore: brightness = %hu (expected %u)",
++            pkt_brightness->brightness, MOCK_BULB_2_INITIAL_BRIGHTNESS
++        );
++    }
++    if (pkt_brightness->kelvin != bulb->state.kelvin) {
++        lgtd_errx(
++            1, "brightness restore: kelvin = %hu (expected 0)",
++            pkt_brightness->kelvin
++        );
++    }
++    if (pkt_brightness->transition != 0) {
++        lgtd_errx(
++            1, "brightness restore: transition = %u (expected 0)",
++            pkt_brightness->transition
++        );
++    }
++}
++
++static struct lgtd_effect_power_transition_ctx *
++allocate_ctx(void)
++{
++    struct lgtd_effect_power_transition_ctx *ctx = calloc(1, sizeof(*ctx));
++    struct lgtd_effect_power_transition_target *transition_target = calloc(
++        1, sizeof(*ctx)
++    );
++    transition_target->initial_brightness = MOCK_BULB_2_INITIAL_BRIGHTNESS;
++    memcpy(
++        &transition_target->device_id,
++        mock_bulb_2->addr,
++        sizeof(mock_bulb_2->addr)
++    );
++    SLIST_INSERT_HEAD(&ctx->targets, transition_target, link);
++
++    return ctx;
++}
++
++int
++main(void)
++{
++    struct lgtd_lifx_gateway *gw_1 = lgtd_tests_insert_mock_gateway(1);
++    mock_bulb_1 = lgtd_tests_insert_mock_bulb(gw_1, 1);
++    mock_bulb_2 = lgtd_tests_insert_mock_bulb(gw_1, 2);
++    mock_bulb_2->state.brightness = 0;
++    mock_bulb_2->state.hue = 0xbae;
++    mock_bulb_2->state.saturation = 0x4444;
++    mock_bulb_2->state.kelvin = 3500;
++
++    mock_effect = calloc(1, sizeof(*mock_effect));
++
++    mock_effect->ctx.as_ptr = allocate_ctx();
++    lgtd_effect_power_transition_off_duration_callback(mock_effect);
++    if (lifx_bulb_get_call_count != 1) {
++        lgtd_errx(
++            1, "bulb_get_call_count = %d (expected 1)", lifx_bulb_get_call_count
++        );
++    }
++    if (router_send_to_device_call_count != 1) {
++        lgtd_errx(
++            1, "bulb_get_call_count = %d (expected 1)",
++            router_send_to_device_call_count
++        );
++    }
++
++    // if the bulb was turned before the end of the transition make sure that's
++    // handled correctly:
++    mock_effect->ctx.as_ptr = allocate_ctx();
++    lgtd_effect_power_transition_off_duration_callback(mock_effect);
++    if (lifx_bulb_get_call_count != 2) {
++        lgtd_errx(
++            1, "bulb_get_call_count = %d (expected 2)", lifx_bulb_get_call_count
++        );
++    }
++    if (router_send_to_device_call_count != 1) {
++        lgtd_errx(
++            1, "bulb_get_call_count = %d (expected 1)",
++            router_send_to_device_call_count
++        );
 +    }
 +
 +    return 0;
@@ -2718,3 +3115,15 @@ new file mode 100644
 +
 +    return 0;
 +}
+diff --git a/tests/lifx/mock_bulb.h b/tests/lifx/mock_bulb.h
+--- a/tests/lifx/mock_bulb.h
++++ b/tests/lifx/mock_bulb.h
+@@ -1,5 +1,8 @@
+ #pragma once
+ 
++struct lgtd_lifx_bulb_map lgtd_lifx_bulbs_table =
++    RB_INITIALIZER(&lgtd_lifx_bulbs_table);
++
+ #ifndef MOCKED_LGTD_LIFX_BULB_GET
+ struct lgtd_lifx_bulb *
+ lgtd_lifx_bulb_get(const uint8_t *addr)
