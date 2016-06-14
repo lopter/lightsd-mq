@@ -3117,6 +3117,14 @@ new file mode 100644
 +}
 diff --git a/tests/effects/power_transition/test_power_transition_on_apply_callback.c b/tests/effects/power_transition/test_power_transition_on_apply_callback.c
 new file mode 100644
+--- /dev/null
++++ b/tests/effects/power_transition/test_power_transition_on_apply_callback.c
+@@ -0,0 +1,5 @@
++int
++main(void)
++{
++    return 0;
++}
 diff --git a/tests/lifx/mock_bulb.h b/tests/lifx/mock_bulb.h
 --- a/tests/lifx/mock_bulb.h
 +++ b/tests/lifx/mock_bulb.h
