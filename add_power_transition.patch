@@ -844,23 +844,22 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
  -----------------
  
 -.. function:: power_off(target)
--
--   Power off the given bulb(s).
 +.. function:: power_off(target[, transition])
  
--.. function:: power_on(target)
+-   Power off the given bulb(s).
 +   Power off the given bulb(s) with an optional transition.
  
--   Power on the given bulb(s).
+-.. function:: power_on(target)
 +   :param int transition: Optional time in ms it will take for the bulb to turn
 +                          off.
  
--.. function:: power_toggle(target)
+-   Power on the given bulb(s).
 +.. function:: power_on(target[, transition])
  
--   Power on (if they are off) or power off (if they are on) the given bulb(s).
+-.. function:: power_toggle(target)
 +   Power on the given bulb(s) with an optional transition.
-+
+ 
+-   Power on (if they are off) or power off (if they are on) the given bulb(s).
 +   :param int transition: Optional time in ms it will take for the bulb to turn
 +                          on.
 +
@@ -2662,7 +2661,7 @@ diff --git a/tests/effects/power_transition/test_power_transition_clear_target_l
 new file mode 100644
 --- /dev/null
 +++ b/tests/effects/power_transition/test_power_transition_clear_target_list.c
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,29 @@
 +#include "effects/power_transition.c"
 +
 +#include "core/mock_effect.h"
@@ -2678,6 +2677,7 @@ new file mode 100644
 +        2, sizeof(*targets)
 +    );
 +    struct lgtd_effect_power_transition_target_list list;
++    memset(&list, 0, sizeof(list));
 +    for (int i = 0; i != LGTD_ARRAY_SIZE(targets); i++) {
 +        SLIST_INSERT_HEAD(&list, &targets[i], link);
 +    }
