@@ -1,0 +1,68 @@
+# HG changeset patch
+# Parent  37abecb2b0d3417349a2081a541cfbe4609f6892
+Typedef lgtd_time_mono_t to an uint64_t on all platforms
+
+time_t is 32 bits on 32 bits platforms (at least on Linux).
+
+This should fix the current armhf test failures.
+
+Not sure what's gonna be the fix in the future since struct timespec
+uses time_t.
+
+diff --git a/compat/Darwin/time_monotonic.c b/compat/Darwin/time_monotonic.c
+--- a/compat/Darwin/time_monotonic.c
++++ b/compat/Darwin/time_monotonic.c
+@@ -22,12 +22,13 @@
+ #include <mach/mach_time.h>
+ #include <sys/time.h>
+ #include <assert.h>
++#include <stdint.h>
+ 
+ #include "time_monotonic.h"
+ 
+ enum { MSECS_IN_NSEC = 1000000 };
+ 
+-time_t
++lgtd_time_mono_t
+ lgtd_time_monotonic_msecs(void)
+ {
+     static mach_timebase_info_data_t timebase = { 0, 0 };
+diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
+--- a/compat/Darwin/time_monotonic.h
++++ b/compat/Darwin/time_monotonic.h
+@@ -17,6 +17,6 @@
+ 
+ #pragma once
+ 
+-typedef time_t lgtd_time_mono_t;
++typedef uint64_t lgtd_time_mono_t;
+ 
+ lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
+diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
+--- a/compat/generic/time_monotonic.c
++++ b/compat/generic/time_monotonic.c
+@@ -15,11 +15,12 @@
+ // You should have received a copy of the GNU General Public License
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
++#include <stdint.h>
+ #include <time.h>
+ 
+ #include "time_monotonic.h"
+ 
+-time_t
++lgtd_time_mono_t
+ lgtd_time_monotonic_msecs(void)
+ {
+     struct timespec tp;
+diff --git a/compat/generic/time_monotonic.h b/compat/generic/time_monotonic.h
+--- a/compat/generic/time_monotonic.h
++++ b/compat/generic/time_monotonic.h
+@@ -17,6 +17,6 @@
+ 
+ #pragma once
+ 
+-typedef time_t lgtd_time_mono_t;
++typedef uint64_t lgtd_time_mono_t;
+ 
+ lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
