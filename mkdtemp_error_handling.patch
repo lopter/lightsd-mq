@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  a427bc665234bd40731e481f96a9273510a6e4d3
+# Parent  37abecb2b0d3417349a2081a541cfbe4609f6892
 Improve error handling in lgtd_tests_make_temp_dir
 
 Hopefully let me solve those segfaults in the unit-tests of the pipe
@@ -8,7 +8,7 @@ module.
 diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
 --- a/tests/core/tests_utils.c
 +++ b/tests/core/tests_utils.c
-@@ -186,10 +186,13 @@
+@@ -180,10 +180,13 @@
  {
      char buf[PATH_MAX] = { 0 };
      int n = snprintf(buf, sizeof(buf), "%s/lightsd.test.XXXXXXXX", P_tmpdir);
@@ -19,7 +19,7 @@ diff --git a/tests/core/tests_utils.c b/tests/core/tests_utils.c
      }
 -    return strdup(mkdtemp(buf));
 +    if (!mkdtemp(buf)) {
-+        lgtd_errx(1, "cannot create temporary directory");
++        lgtd_err(1, "cannot create temporary directory");
 +    }
 +    return strdup(buf);
  }
