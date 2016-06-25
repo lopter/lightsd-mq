@@ -1,5 +1,7 @@
 mkdtemp_error_handling.patch
 dont_use_time_t.patch
+do_not_warn_on_unknown_packets.patch
+pkgbuild_fix.patch
 add_power_transition.patch
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future

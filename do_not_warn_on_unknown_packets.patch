@@ -1,0 +1,18 @@
+# HG changeset patch
+# Parent  0609b70c96424f0d43b1a7d97171f7831b3d33a4
+Do not warn when receiving unknown LIFX packets
+
+This is confusing people, INFO is good enough.
+
+diff --git a/lifx/wire_proto.c b/lifx/wire_proto.c
+--- a/lifx/wire_proto.c
++++ b/lifx/wire_proto.c
+@@ -810,7 +810,7 @@
+         const struct lgtd_lifx_packet_info *pkt_info =
+             lgtd_lifx_wire_get_packet_info(read.hdr.packet_type);
+         if (!pkt_info) {
+-            lgtd_warnx(
++            lgtd_info(
+                 "received unknown packet %#x from %s",
+                 read.hdr.packet_type, peer_addr
+             );
