@@ -2,6 +2,9 @@ mkdtemp_error_handling.patch
 dont_use_time_t.patch
 do_not_warn_on_unknown_packets.patch
 pkgbuild_fix.patch
+fix_stack_underflow_in_jsonrpc.patch
+fix_stack_overflow_in_jsmn.patch
+use_systemd_user_group_keys.patch
 add_power_transition.patch
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future

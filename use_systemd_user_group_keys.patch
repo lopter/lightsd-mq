@@ -1,0 +1,20 @@
+# HG changeset patch
+# User Xavier Deguillard <deguilx@gmail.com>
+# Parent  bc553481b7df85b46889177adb80d0428b98130c
+Use systemd's User/Group keys
+
+diff --git a/dist/lightsd.service b/dist/lightsd.service
+--- a/dist/lightsd.service
++++ b/dist/lightsd.service
+@@ -3,7 +3,10 @@
+ After=network.target
+ 
+ [Service]
+-ExecStart=/usr/bin/lightsd -t -v warning -u lightsd -s %t/lightsd/socket -c %t/lightsd/pipe
++ExecStart=/usr/bin/lightsd -t -v warning -s %t/lightsd/socket -c %t/lightsd/pipe
++User=lightsd
++Group=lightsd
++RuntimeDirectory=lightsd
+ Restart=on-failure
+ 
+ [Install]
