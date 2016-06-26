@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  37abecb2b0d3417349a2081a541cfbe4609f6892
+# Parent  c8cac4ab39f01e6d391de3a1e36889359410d810
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -844,22 +844,23 @@ diff --git a/docs/protocol.rst b/docs/protocol.rst
  -----------------
  
 -.. function:: power_off(target)
+-
+-   Power off the given bulb(s).
 +.. function:: power_off(target[, transition])
  
--   Power off the given bulb(s).
+-.. function:: power_on(target)
 +   Power off the given bulb(s) with an optional transition.
  
--.. function:: power_on(target)
+-   Power on the given bulb(s).
 +   :param int transition: Optional time in ms it will take for the bulb to turn
 +                          off.
  
--   Power on the given bulb(s).
+-.. function:: power_toggle(target)
 +.. function:: power_on(target[, transition])
  
--.. function:: power_toggle(target)
-+   Power on the given bulb(s) with an optional transition.
- 
 -   Power on (if they are off) or power off (if they are on) the given bulb(s).
++   Power on the given bulb(s) with an optional transition.
++
 +   :param int transition: Optional time in ms it will take for the bulb to turn
 +                          on.
 +
@@ -2963,7 +2964,7 @@ new file mode 100644
 +    struct lgtd_lifx_packet_light_color *pkt_brightness = pkt;
 +    if (pkt_type != LGTD_LIFX_SET_LIGHT_COLOR) {
 +        lgtd_errx(
-+            1, "router_send_to_device: pkt_type %u (expected %U)",
++            1, "router_send_to_device: pkt_type %u (expected %u)",
 +            pkt_type, LGTD_LIFX_SET_LIGHT_COLOR
 +        );
 +    }
