@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c8cac4ab39f01e6d391de3a1e36889359410d810
+# Parent  e2823e109f6276343e856094843e659bff2a023e
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -1756,7 +1756,7 @@ new file mode 100644
 +            if (effect->created_at < now) {
 +                lgtd_errx(
 +                    1, "effect->created_at = %ju (expected >= %ju)",
-+                    effect->created_at, now
++                    (uintmax_t)effect->created_at, (uintmax_t)now
 +                );
 +            }
 +            if (effect->duration != params->duration) {
@@ -3067,7 +3067,7 @@ diff --git a/tests/effects/power_transition/test_power_transition_off_possibly_g
 new file mode 100644
 --- /dev/null
 +++ b/tests/effects/power_transition/test_power_transition_off_possibly_get_bulb.c
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,46 @@
 +#include "effects/power_transition.c"
 +
 +#include "core/mock_effect.h"
@@ -3077,18 +3077,16 @@ new file mode 100644
 +#include "lifx/mock_bulb.h"
 +#include "lifx/mock_wire_proto.h"
 +
-+uint8_t TEST_DEVICE_ID[LGTD_LIFX_ADDR_LENGTH] = { 0, 1, 2, 3, 4, 5 };
-+
-+struct lgtd_lifx_bulb TEST_BULB = { };
++struct lgtd_lifx_bulb TEST_BULB = { .addr = { 0, 1, 2, 3, 4, 5 } };
 +
 +static int bulb_get_call_count = 0;
 +
 +struct lgtd_lifx_bulb *
 +lgtd_lifx_bulb_get(const uint8_t *addr)
 +{
-+    if (addr != TEST_DEVICE_ID) {
++    if (addr != TEST_BULB.addr) {
 +        lgtd_errx(
-+            1, "unexpected addr %p (expected %p)", addr, TEST_DEVICE_ID
++            1, "unexpected addr %p (expected %p)", addr, TEST_BULB.addr
 +        );
 +    }
 +
@@ -3104,12 +3102,12 @@ new file mode 100644
 +{
 +    struct lgtd_lifx_bulb *bulb;
 +
-+    bulb = lgtd_effect_power_transition_off_possibly_get_bulb(TEST_DEVICE_ID);
++    bulb = lgtd_effect_power_transition_off_possibly_get_bulb(TEST_BULB.addr);
 +    if (!bulb) {
 +        lgtd_errx(1, "expected a bulb but got NULL instead");
 +    }
 +
-+    bulb = lgtd_effect_power_transition_off_possibly_get_bulb(TEST_DEVICE_ID);
++    bulb = lgtd_effect_power_transition_off_possibly_get_bulb(TEST_BULB.addr);
 +    if (bulb) {
 +        lgtd_errx(1, "expected NULL but got %p instead", bulb);
 +    }
