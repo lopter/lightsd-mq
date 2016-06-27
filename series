@@ -1,3 +1,6 @@
+homebrew_fixes.patch
+fix_openwrt_docs_examples_installation.patch
+docker_images.patch
 add_power_transition.patch
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future

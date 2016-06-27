@@ -1,0 +1,23 @@
+# HG changeset patch
+# Parent  0a5e483609801e059956bbba248916b56f2392de
+Install docs and examples at the correct place in OpenWRT
+
+They were installed one level too dee.
+
+diff --git a/dist/openwrt/utils/lightsd/Makefile b/dist/openwrt/utils/lightsd/Makefile
+--- a/dist/openwrt/utils/lightsd/Makefile
++++ b/dist/openwrt/utils/lightsd/Makefile
+@@ -51,11 +51,11 @@
+ 
+ 	$(CP) \
+ 		$(PKG_INSTALL_DIR)/usr/share/lightsd \
+-		$(1)/usr/share/lightsd
++		$(1)/usr/share
+ 
+ 	$(CP) \
+ 		$(PKG_INSTALL_DIR)/usr/share/doc/lightsd \
+-		$(1)/usr/share/doc/lightsd
++		$(1)/usr/share/doc
+ endef
+ 
+ $(eval $(call BuildPackage,lightsd))
