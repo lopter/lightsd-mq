@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  59de5ad1300a5a00b68f9a5933789ba6b1d5893f
+# Parent  092cd4960326f8893619de3271b2c039a1be4fd1
 Add the release_makepkg command and setup linting
 
 This is easier/cleaner to do this here than on Buildbot right now.
@@ -60,10 +60,14 @@ diff --git a/dist/release.py.in b/dist/release.py.in
      version = latest_released_version()
      build_number = extract_build_number(version)
      version = semver.format_version(**version)
-@@ -572,15 +574,66 @@
+@@ -571,16 +573,69 @@
+         dpkg_arch=dpkg_arch,
      )
      action_echo("Building {}".format(deb_pkg_name))
-     subprocess.check_call(["debuild", "-us", "-uc"], cwd=src_dir)
+-    subprocess.check_call(["debuild", "-us", "-uc"], cwd=src_dir)
++    subprocess.check_call(
++        ["debuild", "-us", "-uc", "--no-lintian"], cwd=src_dir
++    )
 +    action_echo("Linting {}".format(deb_pkg_name))
 +    deb_pkg_path = os.path.join(debuild_dir, deb_pkg_name)
 +    subprocess.check_call(["lintian", deb_pkg_path])
