@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  e2823e109f6276343e856094843e659bff2a023e
+# Parent  401bd90c164a23e6b23aa4842135d4ad142894b2
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -59,7 +59,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,242 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -104,6 +104,9 @@ new file mode 100644
 +
 +    lgtd_info("ending effect %s, id=%p", effect->name, effect);
 +    LIST_REMOVE(effect, link);
++    if (effect->duration_timer) {
++        lgtd_timer_stop(effect->duration_timer);
++    }
 +    if (effect->timer) {
 +        lgtd_timer_stop(effect->timer);
 +    }
@@ -113,15 +116,26 @@ new file mode 100644
 +static void
 +lgtd_effect_duration_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
 +{
++    (void)timer;
++
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +    if (effect->duration_cb) {
-+        lgtd_info(
-+            "calling duration callback for effect %s, id=%p",
-+            effect->name, effect
-+        );
-+        effect->duration_cb(effect);
++        lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++        if (effect->ends_at - now < LGTD_EFFECT_STALE_THRESHOLD_MS) {
++            lgtd_info(
++                "calling duration callback for effect %s, id=%p",
++                effect->name, effect
++            );
++            effect->duration_cb(effect);
++        } else {
++            lgtd_warnx(
++                "not calling duration callback for stale effect %s created "
++                "%jums ago, id=%p, duration=%jums",
++                effect->name, now - effect->created_at, effect,
++                effect->ends_at - effect->created_at
++            );
++        }
 +    }
-+    lgtd_timer_stop(timer);
 +    lgtd_effect_stop(effect);
 +}
 +
@@ -133,17 +147,25 @@ new file mode 100644
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +
 +    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
-+    // if the effect is finite, check that this callback isn't being called
-+    // after the effect has ended (e.g: the computer went to sleep):
-+    if (effect->duration && now > effect->created_at + effect->duration) {
-+        lgtd_time_mono_t diff = now - effect->created_at + effect->duration;
-+        lgtd_warnx(
-+            "stopping stale periodic effect %s created %jums ago, id=%p, "
-+            "duration=%dms",
-+            effect->name, (uintmax_t)diff, effect, effect->duration
-+        );
-+        lgtd_effect_stop(effect);
-+        return;
++    if (effect->ends_at && now > effect->ends_at) {
++        // check if the effect is stale (e.g: the computer went to sleep)
++        // and stop it if it is the case:
++        if (effect->ends_at - now > LGTD_EFFECT_STALE_THRESHOLD_MS) {
++            lgtd_warnx(
++                "stopping stale periodic effect %s created %jums ago, "
++                "id=%p, duration=%jums",
++                effect->name, now - effect->created_at, effect,
++                effect->ends_at - effect->created_at
++            );
++            lgtd_effect_stop(effect);
++            return;
++        }
++        // if there is a duration callback pending then stop the periodic
++        // timer but apply the effect one last time (we're not stale yet).
++        if (event_pending(effect->duration_timer->event, EV_TIMEOUT, NULL)) {
++            lgtd_timer_stop(effect->timer);
++            effect->timer = NULL;
++        }
 +    }
 +
 +    lgtd_info(
@@ -177,7 +199,7 @@ new file mode 100644
 +
 +    effect->name = name;
 +    effect->created_at = lgtd_time_monotonic_msecs();
-+    effect->duration = duration;
++    effect->ends_at = effect->created_at + duration;
 +    effect->duration_cb = duration_cb;
 +    effect->apply_cb = apply_cb;
 +    effect->ctx = ctx;
@@ -185,15 +207,14 @@ new file mode 100644
 +
 +    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
 +
-+    struct lgtd_timer *duration_timer = NULL;
 +    if (duration) {
-+        duration_timer = lgtd_timer_start(
++        effect->duration_timer = lgtd_timer_start(
 +            LGTD_TIMER_DEFAULT_FLAGS,
 +            duration,
 +            lgtd_effect_duration_callback,
 +            timer_ctx
 +        );
-+        if (!duration_timer) {
++        if (!effect->duration_timer) {
 +            goto err;
 +        }
 +    }
@@ -214,6 +235,7 @@ new file mode 100644
 +            );
 +            goto err;
 +        }
++        timer_flags |= LGTD_TIMER_EVENT_PRIORITY_HIGHEST;
 +        effect->timer = lgtd_timer_start(
 +            timer_flags, timer_ms, lgtd_effect_timer_callback, timer_ctx
 +        );
@@ -222,23 +244,29 @@ new file mode 100644
 +        }
 +        if (duration) {
 +            lgtd_info(
-+                "starting effect %s, id=%p, tick=%dms, duration=%dms",
-+                name, effect, timer_ms, duration
++                "starting effect %s, id=%p, created_at=%jums, "
++                "tick=%dms, duration=%dms",
++                name, effect, effect->created_at, timer_ms, duration
 +            );
 +        } else {
 +            lgtd_info(
-+                "starting effect %s, id=%p, tick=%dms, duration=infinite",
-+                name, effect, timer_ms
++                "starting effect %s, id=%p, created_a=%jums, "
++                "tick=%dms, duration=infinite",
++                name, effect, effect->created_at, timer_ms
 +            );
 +        }
 +    } else { // finite or instant effect
 +        if (duration) {
 +            lgtd_info(
-+                "starting effect %s, id=%p, duration=%dms", name, effect, duration
++                "starting effect %s, id=%p, created_at=%jums, "
++                "duration=%dms",
++                name, effect, effect->created_at, duration
 +            );
 +        } else {
 +            lgtd_info(
-+                "starting effect %s, id=%p, duration=instant", name, effect
++                "starting effect %s, id=%p, created_at=%jums, "
++                "duration=instant",
++                name, effect, effect->created_at
 +            );
 +        }
 +        if (effect->apply_cb) {
@@ -256,12 +284,13 @@ new file mode 100644
 +    return effect;
 +
 +err:
-+    if (duration_timer) {
-+        lgtd_timer_stop(duration_timer);
++    if (effect->duration_timer) {
++        lgtd_timer_stop(effect->duration_timer);
 +    }
 +    if (effect->timer) {
 +        lgtd_timer_stop(effect->timer);
 +    }
++    LIST_REMOVE(effect, link);
 +    free(effect);
 +    return NULL;
 +}
@@ -277,7 +306,7 @@ diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,59 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -306,7 +335,8 @@ new file mode 100644
 +    LIST_ENTRY(lgtd_effect)         link;
 +    const char                      *name;
 +    lgtd_time_mono_t                created_at;
-+    int                             duration;
++    lgtd_time_mono_t                ends_at;
++    struct lgtd_timer               *duration_timer;
 +    void                            (*duration_cb)(const struct lgtd_effect *);
 +    struct lgtd_timer               *timer;
 +    void                            (*apply_cb)(const struct lgtd_effect *);
@@ -314,6 +344,8 @@ new file mode 100644
 +    union lgtd_effect_ctx           ctx;
 +};
 +LIST_HEAD(lgtd_effect_list, lgtd_effect);
++
++enum { LGTD_EFFECT_STALE_THRESHOLD_MS = 2000 };
 +
 +extern struct lgtd_effect_list lgtd_effects;
 +
@@ -323,6 +355,8 @@ new file mode 100644
 +    return (uintptr_t)effect;
 +}
 +
++// if the duration and apply callback tick at the same time, the apply cb
++// will be executed first.
 +struct lgtd_effect *lgtd_effect_start(const char *, // name
 +                                      int, // duration
 +                                      void (*)(const struct lgtd_effect *), // duration cb
@@ -585,7 +619,36 @@ diff --git a/core/lightsd.c b/core/lightsd.c
  #include "lightsd.h"
  
  struct lgtd_opts lgtd_opts = {
-@@ -188,6 +189,7 @@
+@@ -107,7 +108,15 @@
+ lgtd_configure_libevent(void)
+ {
+     event_set_log_callback(lgtd_libevent_log);
++#ifndef NDEBUG
++    event_enable_debug_mode();
++#endif
+     lgtd_ev_base = event_base_new();
++    if (lgtd_ev_base &&
++        !event_base_priority_init(lgtd_ev_base, LGTD_EVENT_N_PRIORITIES)) {
++        return;
++    }
++    lgtd_err(1, "can't configure libevent");
+ }
+ 
+ static void
+@@ -138,8 +147,10 @@
+ lgtd_close_signal_handling(void)
+ {
+     for (int i = 0; i != LGTD_ARRAY_SIZE(lgtd_signals); i++) {
+-        event_del(lgtd_signal_evs[i]);
+-        event_free(lgtd_signal_evs[i]);
++        if (lgtd_signal_evs[i]) {
++            event_del(lgtd_signal_evs[i]);
++            event_free(lgtd_signal_evs[i]);
++        }
+     }
+ }
+ 
+@@ -188,11 +199,14 @@
      lgtd_listen_close_all();
      lgtd_command_pipe_close_all();
      lgtd_client_close_all();
@@ -593,10 +656,34 @@ diff --git a/core/lightsd.c b/core/lightsd.c
      lgtd_lifx_broadcast_close();
      lgtd_lifx_gateway_close_all();
      lgtd_timer_stop_all();
+     lgtd_close_signal_handling();
+-    event_base_free(lgtd_ev_base);
++    if (lgtd_ev_base) {
++        event_base_free(lgtd_ev_base);
++    }
+ #if LIBEVENT_VERSION_NUMBER >= 0x02010100
+     libevent_global_shutdown();
+ #endif
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
-@@ -137,9 +137,9 @@
+@@ -97,6 +97,15 @@
+     LGTD_ERR
+ };
+ 
++// XXX: Update enum lgtd_timer_flags in timer.h when updating this:
++enum lgtd_event_priority {
++    LGTD_EVENT_PRIORITY_HIGHEST = 0,
++    LGTD_EVENT_PRIORITY_LOWEST = 2,
++    // see libevent documentation:
++    LGTD_EVENT_N_PRIORITIES = LGTD_EVENT_PRIORITY_LOWEST + 1,
++    LGTD_EVENT_PRIORITY_DEFAULT = LGTD_EVENT_N_PRIORITIES / 2,
++};
++
+ enum { LGTD_ERROR_MSG_BUFSIZE = 2048 };
+ 
+ // FIXME: introspect sizeof(sockaddr_un.sun_path) with CMake to generate a
+@@ -137,9 +146,9 @@
  extern struct event_base *lgtd_ev_base;
  extern const char *lgtd_progname;
  
@@ -824,6 +911,88 @@ diff --git a/core/router.h b/core/router.h
  // TODO: return that from the functions in there and handle it:
  enum lgtd_router_error {
      LGTD_ROUTER_INVALID_TARGET_ERROR,
+diff --git a/core/timer.c b/core/timer.c
+--- a/core/timer.c
++++ b/core/timer.c
+@@ -21,6 +21,7 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdlib.h>
++#include <strings.h>
+ 
+ #include <event2/event.h>
+ #include <event2/util.h>
+@@ -42,6 +43,17 @@
+     timer->callback(timer, timer->ctx);
+ }
+ 
++static enum lgtd_event_priority
++lgtd_timer_flags_to_priority(int flags)
++{
++    flags &= LGTD_TIMER_FLAGS_EVENT_PRIORITY_MASK;
++    if (!flags) {
++        return LGTD_EVENT_PRIORITY_DEFAULT;
++    }
++
++    return INT_NBITS - ffs(flags);
++}
++
+ struct lgtd_timer *
+ lgtd_timer_start(int flags,
+                  int ms,
+@@ -60,6 +72,8 @@
+     timer->ctx = ctx;
+     LIST_INSERT_HEAD(&lgtd_timers, timer, link);
+ 
++    enum lgtd_event_priority priority = lgtd_timer_flags_to_priority(flags);
++    lgtd_info("timer priority = %u", priority);
+     struct timeval tv = LGTD_MSECS_TO_TIMEVAL(ms);
+     timer->event = event_new(
+         lgtd_ev_base,
+@@ -68,7 +82,9 @@
+         lgtd_timer_callback,
+         timer
+     );
+-    if (!timer->event || evtimer_add(timer->event, &tv)) {
++    if (!timer->event
++        || event_priority_set(timer->event, priority)
++        || evtimer_add(timer->event, &tv)) {
+         LIST_REMOVE(timer, link);
+         if (timer->event) {
+             event_free(timer->event);
+diff --git a/core/timer.h b/core/timer.h
+--- a/core/timer.h
++++ b/core/timer.h
+@@ -33,10 +33,20 @@
+ };
+ LIST_HEAD(lgtd_timer_list, lgtd_timer);
+ 
++#define INT_NBITS (sizeof(int) * 8)
+ enum lgtd_timer_flags {
+     LGTD_TIMER_DEFAULT_FLAGS = 0,
+     LGTD_TIMER_ACTIVATE_NOW  = 1,
+     LGTD_TIMER_PERSISTENT    = 1 << 1,
++    // XXX: or do the opposite (reserve the first 8 bits for those
++    //      flags so we actually don't have to do any conversion):
++    LGTD_TIMER_EVENT_PRIORITY_LOWEST = 1 << (INT_NBITS - 3),
++    LGTD_TIMER_EVENT_PRIORITY_DEFAULT = 1 << (INT_NBITS - 2),
++    LGTD_TIMER_EVENT_PRIORITY_HIGHEST = 1 << (INT_NBITS - 1),
++};
++enum {
++    LGTD_TIMER_FLAGS_EVENT_PRIORITY_MASK =
++        ~(LGTD_TIMER_EVENT_PRIORITY_LOWEST - 1)
+ };
+ 
+ // Activate the timer now, in other words make the callback pending:
+@@ -70,7 +80,7 @@
+ void lgtd_timer_stop_all(void);
+ // NOTE: if you start a persistent timer and don't keep track of it, make sure
+ //       you don't end up in a callback using a context that has been freed.
+-struct lgtd_timer *lgtd_timer_start(int,
++struct lgtd_timer *lgtd_timer_start(int, // flags
+                                     int, // ms
+                                     void (*)(struct lgtd_timer *,
+                                              union lgtd_timer_ctx),
 diff --git a/core/utils.c b/core/utils.c
 --- a/core/utils.c
 +++ b/core/utils.c
@@ -894,7 +1063,7 @@ diff --git a/effects/power_transition.c b/effects/power_transition.c
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.c
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,333 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -975,6 +1144,9 @@ new file mode 100644
 +    assert(effect);
 +
 +    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
++    lgtd_info(
++        "now = %ju, end_time=%ju", lgtd_time_monotonic_msecs(), ctx->end_time
++    );
 +
 +    struct lgtd_effect_power_transition_target *target;
 +    SLIST_FOREACH(target, &ctx->targets, link) {
@@ -1055,21 +1227,32 @@ new file mode 100644
 +    assert(effect);
 +
 +    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
++    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++    lgtd_time_mono_t next_tick = (
++         now + LGTD_EFFECT_POWER_TRANSITION_TIMER_MS
++    );
 +
-+    switch (effect->apply_cnt) {
-+    case 0:
-+        lgtd_effect_power_transition_off_set_brightness_to_zero(
-+            &ctx->targets, ctx->duration
-+        );
-+        break;
-+    case 1:
++    lgtd_info("now = %ju, next_tick = %ju, end_time=%ju", now, next_tick, ctx->end_time);
++    if (next_tick >= ctx->end_time) {
 +        lgtd_effect_power_transition_off_power_off(&ctx->targets);
-+        break;
-+    default:
-+        // we'll end up there if the transition was less long than
-+        // LGTD_EFFECT_POWER_TRANSITION_OFF_RESTORE_LIGHT_COLOR_DELAY_MSECS
-+        break;
++        return;
 +    }
++    lgtd_effect_power_transition_off_set_brightness_to_zero(
++        &ctx->targets, ctx->end_time - lgtd_time_monotonic_msecs()
++    );
++}
++
++static void
++lgtd_effect_power_transition_on_duration_callback(const struct lgtd_effect *effect)
++{
++    assert(effect);
++
++    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
++    lgtd_info(
++        "now = %ju, end_time=%ju", lgtd_time_monotonic_msecs(), ctx->end_time
++    );
++    lgtd_effect_power_transition_clear_target_list(&ctx->targets);
++    free(ctx);
 +}
 +
 +static void
@@ -1078,49 +1261,58 @@ new file mode 100644
 +    assert(effect);
 +
 +    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
++    uint32_t transition = LGTD_MIN(
++        UINT32_MAX, ctx->end_time - lgtd_time_monotonic_msecs()
++    );
 +
++    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++    lgtd_time_mono_t next_tick = (
++         now + LGTD_EFFECT_POWER_TRANSITION_TIMER_MS
++    );
++    lgtd_info("now = %ju, next_tick = %ju, end_time=%ju", now, next_tick, ctx->end_time);
 +    struct lgtd_effect_power_transition_target *target;
 +    SLIST_FOREACH(target, &ctx->targets, link) {
-+        struct lgtd_lifx_bulb *bulb = lgtd_lifx_bulb_get(target->device_id);
-+        assert(bulb);
-+
-+        if (bulb->state.power) {
-+            continue; // skip the bulb since it's already on
++        struct lgtd_lifx_bulb *bulb;
++        uint8_t *device_id = target->device_id;
++        bulb = lgtd_effect_power_transition_off_possibly_get_bulb(device_id);
++        if (!bulb) {
++            continue;
 +        }
 +
-+        struct lgtd_lifx_packet_light_color pkt_set_brightness_to_zero = {
-+            .hue = bulb->state.hue,
-+            .saturation = bulb->state.saturation,
-+            .brightness = 0,
-+            .kelvin = bulb->state.kelvin
-+        };
-+        lgtd_lifx_wire_encode_light_color(&pkt_set_brightness_to_zero);
-+        lgtd_router_send_to_device(
-+            bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt_set_brightness_to_zero
-+        );
++        if (!bulb->expected_power_on) {
++            // only set the brightness to 0 if the bulbs is off at the
++            // beginning of the transition, otherwise it's gonna flicker:
++            struct lgtd_lifx_packet_light_color pkt_set_brightness_to_zero = {
++                .hue = bulb->state.hue,
++                .saturation = bulb->state.saturation,
++                .brightness = 0,
++                .kelvin = bulb->state.kelvin
++            };
++            lgtd_lifx_wire_encode_light_color(&pkt_set_brightness_to_zero);
++            lgtd_router_send_to_device(
++                bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt_set_brightness_to_zero
++            );
 +
-+        struct lgtd_lifx_packet_power pkt_power_on = {
-+            .power = LGTD_LIFX_POWER_ON
-+        };
-+        lgtd_router_send_to_device(
-+            bulb, LGTD_LIFX_SET_POWER_STATE, &pkt_power_on
-+        );
++            struct lgtd_lifx_packet_power pkt_power_on = {
++                .power = LGTD_LIFX_POWER_ON
++            };
++            lgtd_router_send_to_device(
++                bulb, LGTD_LIFX_SET_POWER_STATE, &pkt_power_on
++            );
++        }
 +
 +        struct lgtd_lifx_packet_light_color pkt_fade_out = {
 +            .hue = bulb->state.hue,
 +            .saturation = bulb->state.saturation,
 +            .brightness = target->initial_brightness,
 +            .kelvin = bulb->state.kelvin,
-+            .transition = ctx->duration
++            .transition = transition,
 +        };
 +        lgtd_lifx_wire_encode_light_color(&pkt_fade_out);
 +        lgtd_router_send_to_device(
 +            bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt_fade_out
 +        );
 +    }
-+
-+    lgtd_effect_power_transition_clear_target_list(&ctx->targets);
-+    free(ctx);
 +}
 +
 +const struct lgtd_effect *
@@ -1131,20 +1323,17 @@ new file mode 100644
 +    assert(targets);
 +    assert(duration >= 0);
 +
++    // prepare the list of targets and store it into the effect context:
 +    struct lgtd_effect_power_transition_ctx *ctx = NULL;
 +    struct lgtd_router_device_list *devices = NULL;
-+
-+    devices = lgtd_router_targets_to_devices(targets);
-+    if (!devices) {
-+        goto error;
-+    }
-+
 +    ctx = calloc(1, sizeof(*ctx));
 +    if (!ctx) {
 +        goto error;
 +    }
-+    ctx->duration = duration;
-+
++    devices = lgtd_router_targets_to_devices(targets);
++    if (!devices) {
++        goto error;
++    }
 +    while (!SLIST_EMPTY(devices)) {
 +        struct lgtd_router_device *device = SLIST_FIRST(devices);
 +        struct lgtd_lifx_bulb *bulb = device->device;
@@ -1162,28 +1351,36 @@ new file mode 100644
 +        free(device);
 +    }
 +    free(devices);
++    devices = NULL; // let's not free that again if effect_start returns NULL
 +
++    // setup the effect:
 +    const char *name = NULL;
 +    void (*duration_cb)(const struct lgtd_effect *) = NULL;
-+    int timer_flags = 0, timer_ms = 0;
 +    void (*apply_cb)(const struct lgtd_effect *) = NULL;
++    lgtd_time_mono_t end_time = duration;
 +    if (state == LGTD_EFFECT_POWER_TRANSITION_OFF) {
 +        name = "power_transition[off]";
 +        apply_cb = lgtd_effect_power_transition_off_apply_callback;
-+        timer_flags = LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT;
-+        timer_ms = duration;
 +        duration +=
 +            LGTD_EFFECT_POWER_TRANSITION_OFF_RESTORE_LIGHT_COLOR_DELAY_MSECS;
 +        duration_cb = lgtd_effect_power_transition_off_duration_callback;
 +    } else {
 +        name = "power_transition[on]";
 +        apply_cb = lgtd_effect_power_transition_on_apply_callback;
++        duration_cb = lgtd_effect_power_transition_on_duration_callback;
 +    }
 +    union lgtd_effect_ctx effect_ctx = { .as_ptr = ctx };
 +    const struct lgtd_effect *effect = lgtd_effect_start(
-+        name, duration, duration_cb, timer_flags, timer_ms, apply_cb, effect_ctx
++        name,
++        duration,
++        duration_cb,
++        LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT,
++        LGTD_EFFECT_POWER_TRANSITION_TIMER_MS,
++        apply_cb,
++        effect_ctx
 +    );
 +    if (effect) {
++        ctx->end_time = effect->created_at + end_time;
 +        return effect;
 +    }
 +
@@ -1204,7 +1401,7 @@ diff --git a/effects/power_transition.h b/effects/power_transition.h
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,53 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -1232,8 +1429,11 @@ new file mode 100644
 +// if you power off a bulb and set its color right away you'll see the bulb
 +// flicker, so let's delay the restore for a bit once the transition is done:
 +enum {
++    // the feels: http://diablo2.judgehype.com/screenshots/presentation/Erreursvf/baguette-magiques-en-os.jpg
 +    LGTD_EFFECT_POWER_TRANSITION_OFF_RESTORE_LIGHT_COLOR_DELAY_MSECS = 250
 +};
++
++enum { LGTD_EFFECT_POWER_TRANSITION_TIMER_MS = 250 };
 +
 +struct lgtd_effect_power_transition_target {
 +    SLIST_ENTRY(lgtd_effect_power_transition_target)    link;
@@ -1247,10 +1447,9 @@ new file mode 100644
 +
 +struct lgtd_effect_power_transition_ctx {
 +    struct lgtd_effect_power_transition_target_list targets;
-+    // For power off transitions the effect duration might be a bit longer than
-+    // the actual transition duration (see RESTORE_LIGHT_COLOR_DELAY_MSECS)
-+    // hence why the context also contains the duration:
-+    int                                             duration;
++    // This doesn't include the delay to restore the light color after a
++    // power off:
++    lgtd_time_mono_t                                end_time;
 +};
 +
 +const struct lgtd_effect *lgtd_effect_power_transition(const struct lgtd_proto_target_list *,
