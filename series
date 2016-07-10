@@ -1,3 +1,4 @@
+ask_for_remote_dest_before_running_hg_out.patch
 docker_images.patch
 add_power_transition.patch
 open_gateway_on_any_bulb_response.patch #+future
