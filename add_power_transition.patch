@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  37eb064ab54b68f370e4a251a7f93d514f4fe4fe
+# Parent  3fbc455d2615aa665acd9e8a693b4ffe4a5814d4
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -217,7 +217,7 @@ new file mode 100644
 +
 +    // Reschedule the timer if it fired off too early:
 +    int error_margin = LGTD_EFFECT_TIMER_RESCHEDULE_THRESHOLD_MS;
-+    if (lgtd_time_mono_cmp(now, ends_at, error_margin) > 0) {
++    if (lgtd_time_mono_cmp(ends_at, now, error_margin) > 0) {
 +        lgtd_time_mono_t timeout = ends_at - now;
 +        lgtd_info(
 +            "re-scheduling duration callback for effect %s, id=%p in %jums "
@@ -385,8 +385,8 @@ new file mode 100644
 +        if (duration && (timer_flags & LGTD_TIMER_PERSISTENT)) {
 +            effect->apply_left = duration / timer_ms;
 +        }
-+        if (timer_flags & LGTD_TIMER_ACTIVATE_NOW) {
-+            effect->apply_left++;
++        if (!(timer_flags & LGTD_TIMER_ACTIVATE_NOW)) {
++            effect->apply_left--;
 +        }
 +        timer_cb = lgtd_effect_timer_callback;
 +        if (duration) {
@@ -459,7 +459,7 @@ diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,64 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -490,6 +490,7 @@ new file mode 100644
 +    lgtd_time_mono_t                created_at;
 +    lgtd_time_mono_t                ends_at;
 +    struct lgtd_timer               *timer;
++    int                             timer_ms;
 +    void                            (*duration_cb)(const struct lgtd_effect *);
 +    void                            (*apply_cb)(const struct lgtd_effect *);
 +    // how many times apply_cb will be called again or 0 if your effect
