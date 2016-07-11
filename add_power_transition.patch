@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  a3f7765c23828e1238a17d89252445769fb928db
+# Parent  37eb064ab54b68f370e4a251a7f93d514f4fe4fe
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -25,6 +25,101 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ADD_SUBDIRECTORY(lifx)
  
  # 2.8.11 is the first version with TARGET_INCLUDE_DIRECTORIES:
+diff --git a/compat/Darwin/time_monotonic.c b/compat/Darwin/time_monotonic.c
+--- a/compat/Darwin/time_monotonic.c
++++ b/compat/Darwin/time_monotonic.c
+@@ -22,6 +22,7 @@
+ #include <mach/mach_time.h>
+ #include <sys/time.h>
+ #include <assert.h>
++#include <limits.h>
+ #include <stdint.h>
+ 
+ #include "time_monotonic.h"
+@@ -40,3 +41,21 @@
+ 
+     return time * timebase.numer / timebase.denom / MSECS_IN_NSEC;
+ }
++
++int
++lgtd_time_mono_cmp(lgtd_time_mono_t t1, lgtd_time_mono_t t2, int error_margin)
++{
++    assert(error_margin >= 0);
++
++    int cmp;
++    lgtd_time_mono_t diff;
++    if (t1 > t2) {
++        diff = t1 - t2;
++        cmp = 1;
++    } else {
++        diff = t2 - t1;
++        cmp = -1;
++    }
++
++    return diff <= INT_MAX && (int)diff <= error_margin ? 0 : cmp;
++}
+diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
+--- a/compat/Darwin/time_monotonic.h
++++ b/compat/Darwin/time_monotonic.h
+@@ -20,3 +20,10 @@
+ typedef uint64_t lgtd_time_mono_t;
+ 
+ lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
++
++// Returns:
++//
++// - 0 if abs(t1 - t2) <= error_margin;
++// - -1 if t2 > t1;
++// - 1 if t1 > t2.
++int lgtd_time_mono_cmp(lgtd_time_mono_t, lgtd_time_mono_t, int);
+diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
+--- a/compat/generic/time_monotonic.c
++++ b/compat/generic/time_monotonic.c
+@@ -15,6 +15,8 @@
+ // You should have received a copy of the GNU General Public License
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
++#include <assert.h>
++#include <limits.h>
+ #include <stdint.h>
+ #include <time.h>
+ 
+@@ -27,3 +29,21 @@
+     clock_gettime(CLOCK_MONOTONIC, &tp);
+     return tp.tv_sec * 1000 + tp.tv_nsec / 1000000;
+ }
++
++int
++lgtd_time_mono_cmp(lgtd_time_mono_t t1, lgtd_time_mono_t t2, int error_margin)
++{
++    assert(error_margin >= 0);
++
++    int cmp;
++    lgtd_time_mono_t diff;
++    if (t1 > t2) {
++        diff = t1 - t2;
++        cmp = 1;
++    } else {
++        diff = t2 - t1;
++        cmp = -1;
++    }
++
++    return diff <= INT_MAX && (int)diff <= error_margin ? 0 : cmp;
++}
+diff --git a/compat/generic/time_monotonic.h b/compat/generic/time_monotonic.h
+--- a/compat/generic/time_monotonic.h
++++ b/compat/generic/time_monotonic.h
+@@ -20,3 +20,10 @@
+ typedef uint64_t lgtd_time_mono_t;
+ 
+ lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
++
++// Returns:
++//
++// - 0 if abs(t1 - t2) <= error_margin;
++// - -1 if t2 > t1;
++// - 1 if t1 > t2.
++int lgtd_time_mono_cmp(lgtd_time_mono_t, lgtd_time_mono_t, int);
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
@@ -59,7 +154,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,300 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -104,13 +199,61 @@ new file mode 100644
 +
 +    lgtd_info("ending effect %s, id=%p", effect->name, effect);
 +    LIST_REMOVE(effect, link);
-+    if (effect->duration_timer) {
-+        lgtd_timer_stop(effect->duration_timer);
-+    }
 +    if (effect->timer) {
 +        lgtd_timer_stop(effect->timer);
 +    }
 +    free(effect);
++}
++
++static void
++lgtd_effect_duration_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
++{
++    (void)timer;
++
++    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
++
++    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++    lgtd_time_mono_t ends_at = effect->ends_at;
++
++    // Reschedule the timer if it fired off too early:
++    int error_margin = LGTD_EFFECT_TIMER_RESCHEDULE_THRESHOLD_MS;
++    if (lgtd_time_mono_cmp(now, ends_at, error_margin) > 0) {
++        lgtd_time_mono_t timeout = ends_at - now;
++        lgtd_info(
++            "re-scheduling duration callback for effect %s, id=%p in %jums "
++            "(now=%ju, ends_at=%ju)",
++            effect->name, effect, (uintmax_t)timeout,
++            (uintmax_t)now, (uintmax_t)ends_at
++        );
++        struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
++        if (!lgtd_timer_reschedule(timer, &tv)) {
++            lgtd_warn(
++                "can't re-schedule the duration callback for effect %s, id=%p",
++                effect->name, effect
++            );
++            lgtd_effect_stop(effect);
++        }
++        return;
++    }
++
++    if (effect->duration_cb) {
++        int error_margin = LGTD_EFFECT_STALE_THRESHOLD_MS;
++        if (!lgtd_time_mono_cmp(ends_at, now, error_margin)) {
++            lgtd_info(
++                "calling duration callback for effect %s, id=%p",
++                effect->name, effect
++            );
++            effect->duration_cb(effect);
++        } else {
++            lgtd_warnx(
++                "not calling duration callback for stale effect %s created "
++                "%jums ago, id=%p, duration=%jums",
++                effect->name, (uintmax_t)(now - effect->created_at), effect,
++                (uintmax_t)(effect->ends_at - effect->created_at)
++            );
++        }
++    }
++    lgtd_effect_stop(effect);
 +}
 +
 +static void
@@ -120,19 +263,23 @@ new file mode 100644
 +
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +
-+    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
-+
 +    if (effect->apply_left < 0) {
-+        lgtd_info(
-+            "ignoring extraneous timer callback for effect %s, id=%p, "
-+            "now=%ju, apply_left=%d",
-+            effect->name, effect, (uintmax_t)now, effect->apply_left
++        lgtd_warnx(
++            "stopping runaway effect %s, id=%p, apply_left=%d",
++            effect->name, effect, effect->apply_left
 +        );
++        lgtd_effect_stop(effect);
++#ifndef NDEBUG
++        abort();
++#endif
 +        return;
 +    }
 +
-+    if (effect->ends_at && now > effect->ends_at
-+        && now - effect->ends_at > LGTD_EFFECT_STALE_THRESHOLD_MS) {
++    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++    lgtd_time_mono_t ends_at = effect->ends_at;
++
++    int error_margin = LGTD_EFFECT_STALE_THRESHOLD_MS;
++    if (ends_at && lgtd_time_mono_cmp(now, ends_at, error_margin) > 0) {
 +        // check if the effect is stale (e.g: the computer went to sleep)
 +        // and stop it if it is the case:
 +        lgtd_warnx(
@@ -152,62 +299,41 @@ new file mode 100644
 +    assert(effect->apply_cb);
 +    effect->apply_cb(effect);
 +    effect->apply_cnt++;
-+    if (effect->apply_left == 0) {
-+        lgtd_timer_stop(effect->timer);
-+        effect->timer = NULL;
-+    }
-+    effect->apply_left--;
-+}
-+
-+static void
-+lgtd_effect_duration_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
-+{
-+    (void)timer;
-+
-+    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
-+
-+    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
-+
-+    if (now < effect->ends_at
-+        && effect->ends_at - now >= LGTD_EFFECT_TIMER_RESCHEDULE_THRESHOLD_MS) {
-+        lgtd_time_mono_t timeout = effect->ends_at - now;
-+        lgtd_info(
-+            "re-scheduling duration callback for effect %s, id=%p in %jums "
-+            "(now=%ju, ends_at=%ju)",
-+            effect->name, effect, (uintmax_t)timeout,
-+            (uintmax_t)now, (uintmax_t)effect->ends_at
-+        );
-+        struct timeval tv = LGTD_MSECS_TO_TIMEVAL(timeout);
-+        lgtd_timer_reschedule(timer, &tv);
-+        if (effect->timer && effect->apply_left >= 0) {
-+            lgtd_info(
-+                "force-calling timer callback after rescheduling the duration "
-+                "callback for effect %s, id=%p",
-+                effect->name, effect
-+            );
-+            lgtd_effect_timer_callback(effect->timer, ctx);
-+        }
-+        return;
-+    }
-+
-+    if (effect->duration_cb) {
-+        if (effect->ends_at < now || // let's not go negative with unsigned ints
-+            effect->ends_at - now < LGTD_EFFECT_STALE_THRESHOLD_MS) {
++    if (ends_at && effect->apply_left-- == 0) {
++        error_margin = LGTD_EFFECT_TIMER_RESCHEDULE_THRESHOLD_MS;
++        if (lgtd_time_mono_cmp(now, ends_at, error_margin) <= 0) {
++            // now <= ends_at and we aren't stale, call the duration callback rn
 +            lgtd_info(
 +                "calling duration callback for effect %s, id=%p",
 +                effect->name, effect
 +            );
 +            effect->duration_cb(effect);
-+        } else {
-+            lgtd_warnx(
-+                "not calling duration callback for stale effect %s created "
-+                "%jums ago, id=%p, duration=%jums",
-+                effect->name, (uintmax_t)(now - effect->created_at), effect,
-+                (uintmax_t)(effect->ends_at - effect->created_at)
-+            );
++            lgtd_effect_stop(effect);
++            return;
 +        }
++
++        // now > ends_at, schedule the duration callback
++        lgtd_timer_stop(timer);
++        lgtd_time_mono_t wait = now - ends_at;
++        effect->timer = lgtd_timer_start(
++            LGTD_TIMER_DEFAULT_FLAGS,
++            wait,
++            lgtd_effect_duration_callback,
++            ctx
++        );
++        if (!effect->timer) {
++            lgtd_warn(
++                "can't schedule the duration callback for effect %s, id=%p",
++                effect->name, effect
++            );
++            lgtd_effect_stop(effect);
++            return;
++        }
++        lgtd_info(
++            "scheduled duration callback for effect %s, id=%p, in %jums",
++            effect->name, effect, (uintmax_t)wait
++        );
 +    }
-+    lgtd_effect_stop(effect);
 +}
 +
 +struct lgtd_effect *
@@ -239,20 +365,7 @@ new file mode 100644
 +    effect->ctx = ctx;
 +    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
 +
-+    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
-+
-+    if (duration) {
-+        effect->duration_timer = lgtd_timer_start(
-+            LGTD_TIMER_DEFAULT_FLAGS,
-+            duration,
-+            lgtd_effect_duration_callback,
-+            timer_ctx
-+        );
-+        if (!effect->duration_timer) {
-+            goto err;
-+        }
-+    }
-+
++    void (*timer_cb)(struct lgtd_timer *, union lgtd_timer_ctx) = NULL;
 +    if (timer_ms) { // periodic or delayed effect
 +        assert(apply_cb);
 +        if (!apply_cb) {
@@ -271,16 +384,11 @@ new file mode 100644
 +        }
 +        if (duration && (timer_flags & LGTD_TIMER_PERSISTENT)) {
 +            effect->apply_left = duration / timer_ms;
-+        } else if (!(timer_flags & LGTD_TIMER_PERSISTENT)) {
-+            effect->apply_left = 1;
 +        }
-+        timer_flags |= LGTD_TIMER_EVENT_PRIORITY_HIGHEST;
-+        effect->timer = lgtd_timer_start(
-+            timer_flags, timer_ms, lgtd_effect_timer_callback, timer_ctx
-+        );
-+        if (!effect->timer) {
-+            goto err;
++        if (timer_flags & LGTD_TIMER_ACTIVATE_NOW) {
++            effect->apply_left++;
 +        }
++        timer_cb = lgtd_effect_timer_callback;
 +        if (duration) {
 +            lgtd_info(
 +                "starting effect %s, id=%p, created_at=%jums, "
@@ -318,14 +426,20 @@ new file mode 100644
 +            lgtd_effect_stop(effect);
 +            return NULL;
 +        }
++        timer_ms = duration;
++        timer_flags = LGTD_TIMER_DEFAULT_FLAGS;
++        timer_cb = lgtd_effect_duration_callback;
 +    }
 +
-+    return effect;
++    union lgtd_timer_ctx timer_ctx = { .as_ptr = effect };
++    effect->timer = lgtd_timer_start(
++        timer_flags, timer_ms, timer_cb, timer_ctx
++    );
++    if (effect->timer) {
++        return effect;
++    }
 +
 +err:
-+    if (effect->duration_timer) {
-+        lgtd_timer_stop(effect->duration_timer);
-+    }
 +    if (effect->timer) {
 +        lgtd_timer_stop(effect->timer);
 +    }
@@ -345,7 +459,7 @@ diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,63 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -375,9 +489,8 @@ new file mode 100644
 +    const char                      *name;
 +    lgtd_time_mono_t                created_at;
 +    lgtd_time_mono_t                ends_at;
-+    struct lgtd_timer               *duration_timer;
-+    void                            (*duration_cb)(const struct lgtd_effect *);
 +    struct lgtd_timer               *timer;
++    void                            (*duration_cb)(const struct lgtd_effect *);
 +    void                            (*apply_cb)(const struct lgtd_effect *);
 +    // how many times apply_cb will be called again or 0 if your effect
 +    // is infinite (duration == 0 and timer_ms > 0) or doesn't use a
