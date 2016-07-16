@@ -154,7 +154,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,300 @@
+@@ -0,0 +1,345 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -199,6 +199,9 @@ new file mode 100644
 +
 +    lgtd_info("ending effect %s, id=%p", effect->name, effect);
 +    LIST_REMOVE(effect, link);
++    if (effect->stop_cb) {
++        effect->stop_cb(effect);
++    }
 +    if (effect->timer) {
 +        lgtd_timer_stop(effect->timer);
 +    }
@@ -259,81 +262,113 @@ new file mode 100644
 +static void
 +lgtd_effect_timer_callback(struct lgtd_timer *timer, union lgtd_timer_ctx ctx)
 +{
-+    (void)timer;
-+
 +    struct lgtd_effect *effect = (struct lgtd_effect *)ctx.as_ptr;
 +
-+    if (effect->apply_left < 0) {
-+        lgtd_warnx(
-+            "stopping runaway effect %s, id=%p, apply_left=%d",
++    int recursions = 0;
++    do {
++        if (effect->apply_left < 0) {
++            lgtd_warnx(
++                "stopping runaway effect %s, id=%p, apply_left=%d",
++                effect->name, effect, effect->apply_left
++            );
++            lgtd_effect_stop(effect);
++            return;
++        }
++
++        lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
++        lgtd_time_mono_t callback_started_at = now;
++        lgtd_time_mono_t ends_at = effect->ends_at;
++
++        int error_margin = LGTD_EFFECT_STALE_THRESHOLD_MS;
++        if (ends_at && lgtd_time_mono_cmp(now, ends_at, error_margin) > 0) {
++            // check if the effect is stale (e.g: the computer went to sleep)
++            // and stop it if it is the case:
++            lgtd_warnx(
++                "stopping stale periodic effect %s created %jums ago, "
++                "id=%p, duration=%jums",
++                effect->name, (uintmax_t)(now - effect->created_at), effect,
++                (uintmax_t)(effect->ends_at - effect->created_at)
++            );
++            lgtd_effect_stop(effect);
++            return;
++        }
++
++        lgtd_info(
++            "calling apply callback for effect %s, id=%p, apply_left=%d",
 +            effect->name, effect, effect->apply_left
 +        );
-+        lgtd_effect_stop(effect);
-+#ifndef NDEBUG
-+        abort();
-+#endif
-+        return;
-+    }
++        assert(effect->apply_cb);
++        enum lgtd_effect_flags rv = effect->apply_cb(effect);
++        effect->apply_cnt++;
 +
-+    lgtd_time_mono_t now = lgtd_time_monotonic_msecs();
-+    lgtd_time_mono_t ends_at = effect->ends_at;
-+
-+    int error_margin = LGTD_EFFECT_STALE_THRESHOLD_MS;
-+    if (ends_at && lgtd_time_mono_cmp(now, ends_at, error_margin) > 0) {
-+        // check if the effect is stale (e.g: the computer went to sleep)
-+        // and stop it if it is the case:
-+        lgtd_warnx(
-+            "stopping stale periodic effect %s created %jums ago, "
-+            "id=%p, duration=%jums",
-+            effect->name, (uintmax_t)(now - effect->created_at), effect,
-+            (uintmax_t)(effect->ends_at - effect->created_at)
-+        );
-+        lgtd_effect_stop(effect);
-+        return;
-+    }
-+
-+    lgtd_info(
-+        "calling apply callback for effect %s, id=%p, apply_left=%d",
-+        effect->name, effect, effect->apply_left
-+    );
-+    assert(effect->apply_cb);
-+    effect->apply_cb(effect);
-+    effect->apply_cnt++;
-+    if (ends_at && effect->apply_left-- == 0) {
 +        error_margin = LGTD_EFFECT_TIMER_RESCHEDULE_THRESHOLD_MS;
-+        if (lgtd_time_mono_cmp(now, ends_at, error_margin) <= 0) {
-+            // now <= ends_at and we aren't stale, call the duration callback rn
-+            lgtd_info(
-+                "calling duration callback for effect %s, id=%p",
-+                effect->name, effect
++        if (ends_at && effect->apply_left-- == 0) {
++            if (lgtd_time_mono_cmp(now, ends_at, error_margin) <= 0) {
++                // now <= ends_at and we aren't stale, call the duration
++                // callback now and/or stop the effect.
++                if (effect->duration_cb) {
++                    lgtd_info(
++                        "calling duration callback for effect %s, id=%p",
++                        effect->name, effect
++                    );
++                    effect->duration_cb(effect);
++                }
++                lgtd_effect_stop(effect);
++                return;
++            }
++
++            if (!effect->duration_cb) {
++                lgtd_effect_stop(effect);
++                return;
++            }
++
++            // now > ends_at, schedule the duration callback
++            lgtd_timer_stop(timer);
++            now = lgtd_time_monotonic_msecs(); // refresh
++            lgtd_time_mono_t wait = now - ends_at;
++            effect->timer = lgtd_timer_start(
++                LGTD_TIMER_DEFAULT_FLAGS,
++                wait,
++                lgtd_effect_duration_callback,
++                ctx
 +            );
-+            effect->duration_cb(effect);
++            if (!effect->timer) {
++                lgtd_warn(
++                    "can't schedule the duration callback for effect %s, id=%p",
++                    effect->name, effect
++                );
++                lgtd_effect_stop(effect);
++                return;
++            }
++            lgtd_info(
++                "scheduled duration callback for effect %s, id=%p, in %jums",
++                effect->name, effect, (uintmax_t)wait
++            );
++            return;
++        }
++
++        if (rv == LGTD_EFFECT_STOP) {
 +            lgtd_effect_stop(effect);
 +            return;
 +        }
 +
-+        // now > ends_at, schedule the duration callback
-+        lgtd_timer_stop(timer);
-+        lgtd_time_mono_t wait = now - ends_at;
-+        effect->timer = lgtd_timer_start(
-+            LGTD_TIMER_DEFAULT_FLAGS,
-+            wait,
-+            lgtd_effect_duration_callback,
-+            ctx
-+        );
-+        if (!effect->timer) {
-+            lgtd_warn(
-+                "can't schedule the duration callback for effect %s, id=%p",
-+                effect->name, effect
++        // schedule the next call or recurse if we actually spent enough time
++        // here to reach next_tick_at:
++        lgtd_time_mono_t next_tick_at = callback_started_at + effect->timer_ms;
++        now = lgtd_time_monotonic_msecs(); // refresh
++        if (lgtd_time_mono_cmp(next_tick_at, now, error_margin) > 0) {
++            struct timeval tv = LGTD_MSECS_TO_TIMEVAL(next_tick_at - now);
++            lgtd_timer_reschedule(timer, &tv);
++            return;
++        } else if (++recursions == LGTD_EFFECT_MAX_APPLY_RECURSIONS) {
++            lgtd_warnx(
++                "stopping runaway effect after %d recursive calls %s, id=%p",
++                recursions, effect->name, effect
 +            );
 +            lgtd_effect_stop(effect);
 +            return;
 +        }
-+        lgtd_info(
-+            "scheduled duration callback for effect %s, id=%p, in %jums",
-+            effect->name, effect, (uintmax_t)wait
-+        );
-+    }
++    } while (1);
 +}
 +
 +struct lgtd_effect *
@@ -342,7 +377,9 @@ new file mode 100644
 +                  void (*duration_cb)(const struct lgtd_effect *),
 +                  int timer_flags,
 +                  int timer_ms,
-+                  void (*apply_cb)(const struct lgtd_effect *),
++                  enum lgtd_effect_flags (*apply_cb)(
++                      const struct lgtd_effect *),
++                  void (*stop_cb)(const struct lgtd_effect *),
 +                  union lgtd_effect_ctx ctx)
 +{
 +    assert(name);
@@ -361,7 +398,9 @@ new file mode 100644
 +    effect->created_at = lgtd_time_monotonic_msecs();
 +    effect->ends_at = effect->created_at + duration;
 +    effect->duration_cb = duration_cb;
++    effect->timer_ms = timer_ms;
 +    effect->apply_cb = apply_cb;
++    effect->stop_cb = stop_cb;
 +    effect->ctx = ctx;
 +    LIST_INSERT_HEAD(&lgtd_effects, effect, link);
 +
@@ -370,23 +409,29 @@ new file mode 100644
 +        assert(apply_cb);
 +        if (!apply_cb) {
 +            lgtd_warnx(
-+                "cannot create periodic effect %s without a callback", name
++                "cannot create periodic or delayed effect %s without a "
++                "callback", name
 +            );
 +            goto err;
 +        }
 +        assert(duration || (timer_flags & LGTD_TIMER_PERSISTENT));
-+        if (!duration && !(timer_flags & LGTD_TIMER_PERSISTENT)) {
++        if (timer_flags & LGTD_TIMER_PERSISTENT) { // finite or infinite periodic effect
++            // disable that and re-schedule the timer at every call to
++            // get execution time into account and therefore slightly
++            // more accurate timings:
++            timer_flags &= ~LGTD_TIMER_PERSISTENT;
++            if (duration) { // finite periodic effect
++                effect->apply_left = duration / timer_ms;
++                if (!(timer_flags & LGTD_TIMER_ACTIVATE_NOW)) {
++                    effect->apply_left--;
++                }
++            }
++        } else if (!duration) {
 +            lgtd_warnx(
 +                "cannot create infinite effect %s without a persistent timer",
 +                name
 +            );
 +            goto err;
-+        }
-+        if (duration && (timer_flags & LGTD_TIMER_PERSISTENT)) {
-+            effect->apply_left = duration / timer_ms;
-+        }
-+        if (!(timer_flags & LGTD_TIMER_ACTIVATE_NOW)) {
-+            effect->apply_left--;
 +        }
 +        timer_cb = lgtd_effect_timer_callback;
 +        if (duration) {
@@ -459,7 +504,7 @@ diff --git a/core/effect.h b/core/effect.h
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,76 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -484,15 +529,23 @@ new file mode 100644
 +    void        *as_ptr;
 +};
 +
++enum lgtd_effect_flags {
++    LGTD_EFFECT_CONTINUE = 0,
++    LGTD_EFFECT_STOP = 1
++};
++
++#pragma GCC diagnostic push
++#pragma GCC diagnostic warning "-Wpadded"
 +struct lgtd_effect {
 +    LIST_ENTRY(lgtd_effect)         link;
-+    const char                      *name;
 +    lgtd_time_mono_t                created_at;
 +    lgtd_time_mono_t                ends_at;
++    const char                      *name;
 +    struct lgtd_timer               *timer;
-+    int                             timer_ms;
 +    void                            (*duration_cb)(const struct lgtd_effect *);
-+    void                            (*apply_cb)(const struct lgtd_effect *);
++    enum lgtd_effect_flags          (*apply_cb)(const struct lgtd_effect *);
++    void                            (*stop_cb)(const struct lgtd_effect *);
++    int                             timer_ms;
 +    // how many times apply_cb will be called again or 0 if your effect
 +    // is infinite (duration == 0 and timer_ms > 0) or doesn't use a
 +    // timer (timer_ms == 0):
@@ -500,7 +553,10 @@ new file mode 100644
 +    int                             apply_cnt;
 +    union lgtd_effect_ctx           ctx;
 +};
++#pragma GCC diagnostic pop
 +LIST_HEAD(lgtd_effect_list, lgtd_effect);
++
++enum { LGTD_EFFECT_MAX_APPLY_RECURSIONS = 5 };
 +
 +enum { LGTD_EFFECT_STALE_THRESHOLD_MS = 2000 };
 +enum { LGTD_EFFECT_TIMER_RESCHEDULE_THRESHOLD_MS = 30 };
@@ -520,7 +576,8 @@ new file mode 100644
 +                                      void (*)(const struct lgtd_effect *), // duration cb
 +                                      int, // timer flags
 +                                      int, // timer ms
-+                                      void (*)(const struct lgtd_effect *), // apply cb
++                                      enum lgtd_effect_flags (*)(const struct lgtd_effect *), // apply cb
++                                      void (*)(const struct lgtd_effect *), // stop cb
 +                                      union lgtd_effect_ctx);
 +void lgtd_effect_stop(struct lgtd_effect *);
 +void lgtd_effect_stop_all(void);
@@ -1212,7 +1269,7 @@ diff --git a/effects/power_transition.c b/effects/power_transition.c
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.c
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,343 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -1269,6 +1326,17 @@ new file mode 100644
 +    }
 +}
 +
++static void
++lgtd_effect_power_transition_stop_callback(const struct lgtd_effect *effect)
++{
++    assert(effect);
++
++    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
++    lgtd_effect_power_transition_clear_target_list(&ctx->targets);
++    free(ctx);
++}
++
++
 +static struct lgtd_lifx_bulb *
 +lgtd_effect_power_transition_possibly_get_bulb(uint8_t *device_id)
 +{
@@ -1316,9 +1384,6 @@ new file mode 100644
 +            );
 +        }
 +    }
-+
-+    lgtd_effect_power_transition_clear_target_list(&ctx->targets);
-+    free(ctx);
 +}
 +
 +static void
@@ -1371,7 +1436,7 @@ new file mode 100644
 +    }
 +}
 +
-+static void
++static enum lgtd_effect_flags
 +lgtd_effect_power_transition_off_apply_callback(const struct lgtd_effect *effect)
 +{
 +    assert(effect);
@@ -1387,29 +1452,16 @@ new file mode 100644
 +
 +    if (effect->apply_cnt >= ctx->periods) {
 +        lgtd_effect_power_transition_off_power_off(&ctx->targets);
-+        return;
++    } else {
++        lgtd_effect_power_transition_off_set_brightness_to_zero(
++            &ctx->targets, ctx->ends_at - lgtd_time_monotonic_msecs()
++        );
 +    }
-+    lgtd_effect_power_transition_off_set_brightness_to_zero(
-+        &ctx->targets, ctx->ends_at - lgtd_time_monotonic_msecs()
-+    );
++
++    return LGTD_EFFECT_CONTINUE;
 +}
 +
-+static void
-+lgtd_effect_power_transition_on_duration_callback(const struct lgtd_effect *effect)
-+{
-+    assert(effect);
-+
-+    lgtd_info(
-+        "now = %ju, effect->ends_at=%ju",
-+        (uintmax_t)lgtd_time_monotonic_msecs(), (uintmax_t)effect->ends_at
-+    );
-+
-+    struct lgtd_effect_power_transition_ctx *ctx = effect->ctx.as_ptr;
-+    lgtd_effect_power_transition_clear_target_list(&ctx->targets);
-+    free(ctx);
-+}
-+
-+static void
++static enum lgtd_effect_flags
 +lgtd_effect_power_transition_on_apply_callback(const struct lgtd_effect *effect)
 +{
 +    assert(effect);
@@ -1470,6 +1522,8 @@ new file mode 100644
 +            bulb, LGTD_LIFX_SET_LIGHT_COLOR, &pkt_fade_out
 +        );
 +    }
++
++    return LGTD_EFFECT_CONTINUE;
 +}
 +
 +const struct lgtd_effect *
@@ -1513,7 +1567,7 @@ new file mode 100644
 +    // setup the effect:
 +    const char *name = NULL;
 +    void (*duration_cb)(const struct lgtd_effect *) = NULL;
-+    void (*apply_cb)(const struct lgtd_effect *) = NULL;
++    enum lgtd_effect_flags (*apply_cb)(const struct lgtd_effect *) = NULL;
 +    int timer_ms = LGTD_EFFECT_POWER_TRANSITION_TIMER_MS;
 +    ctx->periods = duration / timer_ms;
 +    // align the timer with the duration:
@@ -1529,7 +1583,6 @@ new file mode 100644
 +    } else {
 +        name = "power_transition[on]";
 +        apply_cb = lgtd_effect_power_transition_on_apply_callback;
-+        duration_cb = lgtd_effect_power_transition_on_duration_callback;
 +    }
 +    union lgtd_effect_ctx effect_ctx = { .as_ptr = ctx };
 +    const struct lgtd_effect *effect = lgtd_effect_start(
@@ -1539,6 +1592,7 @@ new file mode 100644
 +        LGTD_TIMER_ACTIVATE_NOW|LGTD_TIMER_PERSISTENT,
 +        timer_ms,
 +        apply_cb,
++        lgtd_effect_power_transition_stop_callback,
 +        effect_ctx
 +    );
 +    if (effect) {
@@ -1563,7 +1617,7 @@ diff --git a/effects/power_transition.h b/effects/power_transition.h
 new file mode 100644
 --- /dev/null
 +++ b/effects/power_transition.h
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,58 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -1607,14 +1661,17 @@ new file mode 100644
 +    lgtd_effect_power_transition_target
 +);
 +
++#pragma GCC diagnostic push
++#pragma GCC diagnostic warning "-Wpadded"
 +struct lgtd_effect_power_transition_ctx {
 +    struct lgtd_effect_power_transition_target_list targets;
-+    // how many times the apply_cb will be called
-+    int                                             periods;
 +    // This doesn't include the delay to restore the light color after a
 +    // power off:
 +    lgtd_time_mono_t                                ends_at;
++    // how many times the apply_cb will be called
++    int                                             periods;
 +};
++#pragma GCC diagnostic pop
 +
 +const struct lgtd_effect *lgtd_effect_power_transition(const struct lgtd_proto_target_list *,
 +                                                       enum lgtd_effect_power_transition_type,
