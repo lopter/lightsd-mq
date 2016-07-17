@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  3fbc455d2615aa665acd9e8a693b4ffe4a5814d4
+# Parent  360a2a58c0124bf0144ee6c351bf8a67dfec951a
 Add a transition argument to the power functions
 
 Unlike LIFX's implementation, lightsd will properly get the bulbs to
@@ -154,7 +154,7 @@ diff --git a/core/effect.c b/core/effect.c
 new file mode 100644
 --- /dev/null
 +++ b/core/effect.c
-@@ -0,0 +1,345 @@
+@@ -0,0 +1,349 @@
 +// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
 +//
 +// This file is part of lighstd.
@@ -426,12 +426,16 @@ new file mode 100644
 +                    effect->apply_left--;
 +                }
 +            }
-+        } else if (!duration) {
-+            lgtd_warnx(
-+                "cannot create infinite effect %s without a persistent timer",
-+                name
-+            );
-+            goto err;
++        } else { // delayed effect
++            if (!duration) {
++                lgtd_warnx(
++                    "cannot create delayed effect %s without a duration", name
++                );
++                goto err;
++            }
++            if (timer_flags & LGTD_TIMER_ACTIVATE_NOW) {
++                effect->apply_left++; // will be applied now and after timer_ms
++            }
 +        }
 +        timer_cb = lgtd_effect_timer_callback;
 +        if (duration) {
