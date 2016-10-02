@@ -1,4 +1,5 @@
 ask_for_remote_dest_before_running_hg_out.patch
+fix_xcode_8_build.patch
 add_monolight.patch
 docker_images.patch
 add_power_transition.patch
