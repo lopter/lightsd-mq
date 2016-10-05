@@ -18,7 +18,7 @@ diff --git a/monolight/monolight/cli.py b/monolight/monolight/cli.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/monolight/cli.py
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,79 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -38,6 +38,7 @@ new file mode 100644
 +
 +import asyncio
 +import click
++import functools
 +import locale
 +import logging
 +import monome
@@ -83,7 +84,9 @@ new file mode 100644
 +
 +    # TODO: add signal and EOF handling and shutdown tasks gracefully
 +
-+    serialosc = loop.create_task(monome.create_serialosc_connection(osc.Monome))
++    serialosc = loop.create_task(monome.create_serialosc_connection(
++        functools.partial(osc.MonomeApplication, ui.submit_keypress)
++    ))
 +    lightsd = loop.create_task(lightsc.create_lightsd_connection(lightsd_url))
 +
 +    loop.run_until_complete(lightsd)
@@ -99,7 +102,7 @@ diff --git a/monolight/monolight/lightsc.py b/monolight/monolight/lightsc.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/monolight/lightsc.py
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,173 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -181,8 +184,6 @@ new file mode 100644
 +        except Exception:
 +            logger.error("Couldn't open {}".format(self.url))
 +            raise
-+
-+        return self
 +
 +    async def _reconnect(self):
 +        # TODO: properly close everything
@@ -273,12 +274,13 @@ new file mode 100644
 +        loop = asyncio.get_event_loop()
 +
 +    c = LightsClient(url, loop=loop)
-+    return await c.connect()
++    await c.connect()
++    return c
 diff --git a/monolight/monolight/osc.py b/monolight/monolight/osc.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/monolight/osc.py
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,45 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -298,8 +300,6 @@ new file mode 100644
 +
 +import monome
 +
-+from . import ui
-+
 +MONOME_KEYPRESS_DOWN = 1
 +MONOME_KEYPRESS_UP = 0
 +MONOME_KEYPRESS_STATES = frozenset({
@@ -308,37 +308,31 @@ new file mode 100644
 +})
 +
 +
-+class Monome(monome.Monome):
++class MonomeApplication(monome.Monome):
 +
-+    def __init__(self):
++    def __init__(self, keypress_callback):
++        self._keypress_callback = keypress_callback
 +        monome.Monome.__init__(self, "/monolight")
 +
 +    def ready(self):
 +        self.led_all(0)
 +
 +    def grid_key(self, x, y, s):
-+        ui.grid_key(x, y, s)
++        self._keypress_callback(x, y, s)
 +
 +
 +def monome_apply(serialosc, method, *args, **kwargs):
 +    for device in serialosc.app_instances.values():
 +        for app in device:
-+            if isinstance(app, Monome):
++            if isinstance(app, MonomeApplication):
 +                method(app, *args, **kwargs)
-+
-+
-+def monome_apply_led_buffer(serialosc, buf):
-+    for device in serialosc.app_instances.values():
-+        for app in device:
-+            if isinstance(app, Monome):
-+                buf.render(app)
 diff --git a/monolight/monolight/ui.py b/monolight/monolight/ui.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/monolight/ui.py
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,83 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
++
 +# This file is part of lightsd.
 +#
 +# lightsd is free software: you can redistribute it and/or modify
@@ -356,9 +350,13 @@ new file mode 100644
 +
 +import asyncio
 +import collections
++import monome
 +import logging
 +
-+from . import osc
++from .osc import (
++    MONOME_KEYPRESS_DOWN,
++    monome_apply,
++)
 +
 +logger = logging.getLogger("monolight.ui")
 +
@@ -368,15 +366,15 @@ new file mode 100644
 +
 +
 +def draw(serialosc):
-+    buf = osc.monome.LedBuffer(8, 8)
++    buf = monome.LedBuffer(8, 8)
 +    buf.led_set(0, 0, 1)
 +    for x in range(0, 4):
 +        buf.led_set(x, 7, 1)
-+    osc.monome_apply_led_buffer(serialosc, buf)
++    monome_apply(serialosc, buf.render)
 +
 +
 +def hide(serialosc):
-+    osc.monome_apply(serialosc, osc.Monome.led_all, 0)
++    monome_apply(serialosc, monome.Monome.led_all, 0)
 +
 +
 +async def start(loop, lightsd, serialosc):
@@ -390,7 +388,7 @@ new file mode 100644
 +
 +        logger.info("keypress: x={}, y={}, state={}".format(*keypress))
 +
-+        if keypress.state != osc.MONOME_KEYPRESS_DOWN:
++        if keypress.state != MONOME_KEYPRESS_DOWN:
 +            continue
 +        if keypress.y != 7 and keypress.y != 0:
 +            continue
@@ -414,7 +412,7 @@ new file mode 100644
 +            await lightsd.power_toggle(["fugu"])
 +
 +
-+def grid_key(x, y, state):
++def submit_keypress(x, y, state):
 +    _event_queue.put_nowait(_KeyPress(x, y, state))
 diff --git a/monolight/setup.py b/monolight/setup.py
 new file mode 100644
