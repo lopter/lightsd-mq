@@ -1,6 +1,8 @@
 # HG changeset patch
-# Parent  4734caf1ac9fbbb1cad0363e207b9b065db1fb57
-Start a script to control bulbs through a Monome
+# Parent  355e10e803403054d9d8a453a072fdaa311ec115
+Start an experimental GUI for a Monome 128 Varibright
+
+Written in Python >= 3.5.
 
 diff --git a/.hgignore b/.hgignore
 --- a/.hgignore
@@ -16,63 +18,41 @@ diff --git a/monolight/monolight/cli.py b/monolight/monolight/cli.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/monolight/cli.py
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,76 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
 +import asyncio
 +import click
 +import locale
++import logging
 +import monome
 +import os
 +import subprocess
-+import random
++
++from . import lightsc
++from . import osc
++from . import ui
 +
 +ENCODING = locale.getpreferredencoding()
 +
-+
 +FADERS_MAX_VALUE = 100
 +
-+
-+class Faders(monome.Monome):
-+    def __init__(self):
-+        super().__init__('/faders')
-+
-+    def ready(self):
-+        self.led_all(0)
-+        self.led_row(0, self.height - 1, [1] * self.width)
-+
-+        self.row_values = []
-+        row_value = 0
-+        for i in range(self.height):
-+            self.row_values.append(int(round(row_value)))
-+            row_value += FADERS_MAX_VALUE / (self.height - 1)
-+
-+        self.values = [random.randint(0, FADERS_MAX_VALUE) for f in range(self.width)]
-+        self.faders = [asyncio.async(self.fade_to(f, 0)) for f in range(self.width)]
-+
-+    def grid_key(self, x, y, s):
-+        if s == 1:
-+            self.faders[x].cancel()
-+            self.faders[x] = asyncio.async(self.fade_to(x, self.row_to_value(y)))
-+
-+    def value_to_row(self, value):
-+        return sorted([
-+            i for i in range(self.height)],
-+            key=lambda i: abs(self.row_values[i] - value)
-+        )[0]
-+
-+    def row_to_value(self, row):
-+        return self.row_values[self.height - 1 - row]
-+
-+    @asyncio.coroutine
-+    def fade_to(self, x, new_value):
-+        while self.values[x] != new_value:
-+            if self.values[x] < new_value:
-+                self.values[x] += 1
-+            else:
-+                self.values[x] -= 1
-+            col = [0 if c > self.value_to_row(self.values[x]) else 1 for c in range(self.height)]
-+            col.reverse()
-+            self.led_col(x, 0, col)
-+            yield from asyncio.sleep(1/100)
++logging.basicConfig(level=logging.INFO)
 +
 +
 +def get_lightsd_rundir():
@@ -100,34 +80,347 @@ new file mode 100644
 +@click.option("--lightsd-url", default=LIGHTSD_SOCKET)
 +def main(serialoscd_host, serialoscd_port, lightsd_url):
 +    loop = asyncio.get_event_loop()
-+    asyncio.async(monome.create_serialosc_connection(Faders), loop=loop)
++
++    # TODO: add signal and EOF handling and shutdown tasks gracefully
++
++    serialosc = loop.create_task(monome.create_serialosc_connection(osc.Monome))
++    lightsd = loop.create_task(lightsc.create_lightsd_connection(lightsd_url))
++
++    loop.run_until_complete(lightsd)
++    loop.run_until_complete(serialosc)
++
++    # TODO: make which monome instance to use something configurable
++    ui_task = loop.create_task(ui.start(  # noqa
++        loop, lightsd.result(), serialosc.result()
++    ))
++
 +    loop.run_forever()
 diff --git a/monolight/monolight/lightsc.py b/monolight/monolight/lightsc.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/monolight/lightsc.py
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,174 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
-+# This file is part of lighstd.
++# This file is part of lightsd.
 +#
-+# lighstd is free software: you can redistribute it and/or modify
++# lightsd is free software: you can redistribute it and/or modify
 +# it under the terms of the GNU General Public License as published by
 +# the Free Software Foundation, either version 3 of the License, or
 +# (at your option) any later version.
 +#
-+# lighstd is distributed in the hope that it will be useful,
++# lightsd is distributed in the hope that it will be useful,
 +# but WITHOUT ANY WARRANTY; without even the implied warranty of
 +# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 +# GNU General Public License for more details.
 +#
 +# You should have received a copy of the GNU General Public License
-+# along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import asyncio
++import collections
++import functools
++import json
++import logging
++import os
++import urllib
++import uuid
++
++logger = logging.getLogger("monolight.lightsc")
++
++PendingRequestEntry = collections.namedtuple(
++    "PendingRequestEntry", ("handler_cb", "timeout_handle")
++)
++
++
++class LightsClient:
++
++    READ_SIZE = 8192
++    REFRESH_INTERVAL = 250 / 1000  # seconds
++    TIMEOUT = 2  # seconds
++    ENCODING = "utf-8"
++
++    def __init__(self,
++                 url,
++                 encoding=ENCODING,
++                 timeout=TIMEOUT,
++                 read_size=READ_SIZE,
++                 refresh_interval=REFRESH_INTERVAL,
++                 loop=None):
++        self.url = url
++        self.encoding = encoding
++        self.timeout = timeout
++        self.read_size = read_size
++        self.refresh_interval = refresh_interval
++        self._pending_requests = {}
++        self._reader = self._writer = None
++        self._loop = loop or asyncio.get_event_loop()
++
++    async def connect(self):
++        parts = urllib.parse.urlparse(self.url)
++        if parts.scheme == "unix":
++            path = os.path.join(parts.netloc, parts.path).rstrip(os.path.sep)
++            open_connection = functools.partial(
++                asyncio.open_unix_connection, path
++            )
++        elif parts.scheme == "tcp":
++            open_connection = functools.partial(
++                asyncio.open_connection, parts.hostname, parts.port
++            )
++        else:
++            raise ValueError("Unsupported url {}".format(self.url))
++
++        try:
++            self._reader, self._writer = await asyncio.wait_for(
++                open_connection(limit=self.read_size, loop=self._loop),
++                self.timeout,
++                loop=self._loop,
++            )
++            self._listen_task = self._loop.create_task(self.listen())
++            self._poll_task = self._loop.create_task(self.poll())
++        except Exception:
++            logger.error("Couldn't open {}".format(self.url))
++            raise
++
++        return self
++
++    async def _reconnect(self):
++        # TODO: properly close everything
++        await self.connect()
++
++    def _handle_response(self, id, response):
++        handler_cb, timeout_handle = self._pending_requests.pop(id)
++        timeout_handle.cancel()
++
++        if response is None:
++            logger.info("Timeout on request {}".format(id))
++            return
++
++        logger.info("Response {}".format(id))
++        if handler_cb is not None:
++            handler_cb(response)
++
++    async def listen(self):
++        buf = bytearray()
++        while True:
++            logger.info("Reading...")
++            chunk = await self._reader.read(self.READ_SIZE)
++            buf += chunk
++            if not len(chunk):  # EOF, reconnect
++                await self._reconnect()
++                return
++
++            try:
++                json.loads(buf.decode(self.encoding, "ignore"))
++            except Exception:
++                # Decoding or parsing failed, data must be missing, try again:
++                continue
++
++            # Decoding and JSON parsing were successful, we have received
++            # a full response:
++            response = json.loads(buf.decode(self.encoding, "surrogateescape"))
++            buf = bytearray()
++
++            self._handle_response(response["id"], response["result"])
++
++    async def _jsonrpc_call(self, method, params, response_handler=None):
++        id = str(uuid.uuid4())
++        payload = {
++            "method": method,
++            "params": params,
++            "jsonrpc": "2.0",
++            "id": id,
++        }
++        payload = json.dumps(payload)
++        payload = payload.encode(self.encoding, "surrogateescape")
++        self._writer.write(payload)
++
++        logger.info("Request {}: {}({})".format(id, method, params))
++
++        await self._writer.drain()
++
++        timeout_cb = functools.partial(self._handle_response, id, response=None)
++        self._pending_requests[id] = PendingRequestEntry(
++            handler_cb=response_handler,
++            timeout_handle=self._loop.call_later(self.TIMEOUT, timeout_cb)
++        )
++
++    async def get_light_state(self, targets):
++        await self._jsonrpc_call(
++            "get_light_state", targets, self._handle_light_state
++        )
++
++    async def power_off(self, targets):
++        await self._jsonrpc_call("power_off", targets)
++
++    async def power_on(self, targets):
++        await self._jsonrpc_call("power_on", targets)
++
++    async def power_toggle(self, targets):
++        await self._jsonrpc_call("power_toggle", targets)
++
++    def _handle_light_state(self, response):
++        self._bulbs = {b["label"]: b for b in response}
++
++    async def poll(self):
++        while True:
++            await self.get_light_state(["*"])
++            await asyncio.sleep(self.refresh_interval)
++
++
++async def create_lightsd_connection(url, loop=None):
++    if loop is None:
++        loop = asyncio.get_event_loop()
++
++    c = LightsClient(url, loop=loop)
++    return await c.connect()
+diff --git a/monolight/monolight/osc.py b/monolight/monolight/osc.py
+new file mode 100644
+--- /dev/null
++++ b/monolight/monolight/osc.py
+@@ -0,0 +1,53 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import monome
++
++from . import ui
++
++MONOME_KEYPRESS_DOWN = 1
++MONOME_KEYPRESS_UP = 0
++MONOME_KEYPRESS_STATES = frozenset({
++    MONOME_KEYPRESS_DOWN,
++    MONOME_KEYPRESS_UP,
++})
++
++
++class Monome(monome.Monome):
++
++    def __init__(self):
++        monome.Monome.__init__(self, "/monolight")
++
++    def ready(self):
++        self.led_all(0)
++
++    def grid_key(self, x, y, s):
++        ui.grid_key(x, y, s)
++
++
++def monome_apply(serialosc, method, *args, **kwargs):
++    for device in serialosc.app_instances.values():
++        for app in device:
++            if isinstance(app, Monome):
++                method(app, *args, **kwargs)
++
++
++def monome_apply_led_buffer(serialosc, buf):
++    for device in serialosc.app_instances.values():
++        for app in device:
++            if isinstance(app, Monome):
++                buf.render(app)
+diff --git a/monolight/monolight/ui.py b/monolight/monolight/ui.py
+new file mode 100644
+--- /dev/null
++++ b/monolight/monolight/ui.py
+@@ -0,0 +1,79 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import asyncio
++import collections
++import logging
++
++from . import osc
++
++logger = logging.getLogger("monolight.ui")
++
++_event_queue = asyncio.Queue()
++
++_KeyPress = collections.namedtuple("_KeyPress", ("x", "y", "state"))
++
++
++def draw(serialosc):
++    buf = osc.monome.LedBuffer(8, 8)
++    buf.led_set(0, 0, 1)
++    for x in range(0, 4):
++        buf.led_set(x, 7, 1)
++    osc.monome_apply_led_buffer(serialosc, buf)
++
++
++def hide(serialosc):
++    osc.monome_apply(serialosc, osc.Monome.led_all, 0)
++
++
++async def start(loop, lightsd, serialosc):
++    hidden = True
++
++    while True:
++        keypress = await _event_queue.get()
++
++        if not hidden:
++            draw(serialosc)
++
++        logger.info("keypress: x={}, y={}, state={}".format(*keypress))
++
++        if keypress.state != osc.MONOME_KEYPRESS_DOWN:
++            continue
++        if keypress.y != 7 and keypress.y != 0:
++            continue
++        if keypress.x == 0:
++            if keypress.y == 0:
++                hidden = not hidden
++                if hidden:
++                    hide(serialosc)
++                continue
++            await lightsd.power_off(["*"])
++        if keypress.y != 7:
++            continue
++        if keypress.x == 1:
++            await lightsd.power_on(["*"])
++        elif keypress.x == 2:
++            await lightsd.power_toggle(["neko"])
++        elif keypress.x == 3:
++            await lightsd.power_toggle(["fugu"])
++        elif keypress.x == 4:
++            # TODO pipeline to impl orange
++            await lightsd.power_toggle(["fugu"])
++
++
++def grid_key(x, y, state):
++    _event_queue.put_nowait(_KeyPress(x, y, state))
 diff --git a/monolight/setup.py b/monolight/setup.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/setup.py
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,52 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lighstd.
@@ -174,6 +467,7 @@ new file mode 100644
 +    extras_require={
 +        "dev": [
 +            "flake8",
++            "ipython",
 +            "pdbpp",
 +            "pep8",
 +        ],
