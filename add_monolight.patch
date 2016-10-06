@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  355e10e803403054d9d8a453a072fdaa311ec115
+# Parent  c38eb50fef4516266f1231b1278af61bb43b64b8
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -102,7 +102,7 @@ diff --git a/monolight/monolight/lightsc.py b/monolight/monolight/lightsc.py
 new file mode 100644
 --- /dev/null
 +++ b/monolight/monolight/lightsc.py
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,212 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -122,6 +122,7 @@ new file mode 100644
 +
 +import asyncio
 +import collections
++import contextlib
 +import functools
 +import json
 +import logging
@@ -134,6 +135,38 @@ new file mode 100644
 +PendingRequestEntry = collections.namedtuple(
 +    "PendingRequestEntry", ("handler_cb", "timeout_handle")
 +)
++
++
++class _JSONRPCCall:
++
++    def __init__(self, method, params, response_handler):
++        self.request = {
++            "id": str(uuid.uuid4()),
++            "jsonrpc": "2.0",
++            "method": method,
++            "params": params,
++        }
++        self.response_handler = response_handler
++
++
++class _LightsClientBatchProxy:
++
++    def __init__(self, client):
++        self._client = client
++        self._batch = []
++
++        def batch_jsonrpc_call(method):
++            @functools.wraps(method)
++            async def wrapper(client, method, params, response_handler=None):
++                self._batch.append(
++                    _JSONRPCCall(method, params, response_handler),
++                )
++            return wrapper
++
++        self._jsonrpc_call = batch_jsonrpc_call(client._jsonrpc_call)
++
++    def __getattr__(self, name):
++        return self._client.__getattribute__(name)
 +
 +
 +class LightsClient:
@@ -224,27 +257,38 @@ new file mode 100644
 +
 +            self._handle_response(response["id"], response["result"])
 +
-+    async def _jsonrpc_call(self, method, params, response_handler=None):
-+        id = str(uuid.uuid4())
-+        payload = {
-+            "method": method,
-+            "params": params,
-+            "jsonrpc": "2.0",
-+            "id": id,
-+        }
-+        payload = json.dumps(payload)
++    async def _jsonrpc_execute(self, pipeline):
++        calls = [call.request for call in pipeline]
++        payload = json.dumps(calls[0] if len(calls) == 1 else calls)
 +        payload = payload.encode(self.encoding, "surrogateescape")
++
 +        self._writer.write(payload)
 +
-+        logger.info("Request {}: {}({})".format(id, method, params))
++        for call in calls:
++            logger.info("Request {id}: {method}({params})".format(**call))
 +
 +        await self._writer.drain()
 +
-+        timeout_cb = functools.partial(self._handle_response, id, response=None)
-+        self._pending_requests[id] = PendingRequestEntry(
-+            handler_cb=response_handler,
-+            timeout_handle=self._loop.call_later(self.TIMEOUT, timeout_cb)
-+        )
++        for call in pipeline:
++            id = call.request["id"]
++            timeout_cb = functools.partial(
++                self._handle_response, id, response=None
++            )
++            self._pending_requests[id] = PendingRequestEntry(
++                handler_cb=call.response_handler,
++                timeout_handle=self._loop.call_later(self.TIMEOUT, timeout_cb)
++            )
++
++    async def _jsonrpc_call(self, method, params, response_handler=None):
++        await self._jsonrpc_execute([
++            _JSONRPCCall(method, params, response_handler),
++        ])
++
++    @contextlib.contextmanager
++    def batch(self):
++        proxy = _LightsClientBatchProxy(self)
++        yield proxy
++        self.loop.ensure_future(self._jsonrpc_execute(proxy._batch))
 +
 +    async def get_light_state(self, targets):
 +        await self._jsonrpc_call(
@@ -262,11 +306,6 @@ new file mode 100644
 +
 +    def _handle_light_state(self, response):
 +        self._bulbs = {b["label"]: b for b in response}
-+
-+    async def poll(self):
-+        while True:
-+            await self.get_light_state(["*"])
-+            await asyncio.sleep(self.refresh_interval)
 +
 +
 +async def create_lightsd_connection(url, loop=None):
