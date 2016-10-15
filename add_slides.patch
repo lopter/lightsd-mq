@@ -1692,7 +1692,7 @@ diff --git a/slides/33c3/33c3.tex b/slides/33c3/33c3.tex
 new file mode 100644
 --- /dev/null
 +++ b/slides/33c3/33c3.tex
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,28 @@
 +\documentclass[xcolor={usenames,svgnames}]{beamer}
 +
 +\usepackage[american]{babel}
@@ -1706,6 +1706,19 @@ new file mode 100644
 +\begin{document}
 +
 +\begin{frame}\titlepage\end{frame}
++
++%%% Supporting more bulbs products %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
++
++% I think this is a pretty obvious idea, avoid getting locked with one
++% manufacturer or product.
++
++% lightsd has been architectured around a minimal set of bulb commands, meaning
++% that while abstractions/integrations are missing to make lightsd work with
++% other bulbs, it at least relies on a very limited set of commands (get/set
++% the state of the bulb and that's about it). For example lightsd can totally
++% implement transitions internally.
++
++% Modules that would need heavy changes to support other bulb models:
 +
 +\end{document}
 diff --git a/slides/33c3/CMakeLists.txt b/slides/33c3/CMakeLists.txt

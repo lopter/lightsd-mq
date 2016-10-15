@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  045e51ef0bec937287f1e5b88bb87d8218a488a9
+# Parent  703102c9539ab4968c7cde3313c2f33ce0070a8a
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -12,12 +12,12 @@ diff --git a/.hgignore b/.hgignore
  ^build
  ^pcaps
 +.*\.egg-info$
-diff --git a/monolight/monolight/__init__.py b/monolight/monolight/__init__.py
+diff --git a/apps/monolight/monolight/__init__.py b/apps/monolight/monolight/__init__.py
 new file mode 100644
-diff --git a/monolight/monolight/cli.py b/monolight/monolight/cli.py
+diff --git a/apps/monolight/monolight/cli.py b/apps/monolight/monolight/cli.py
 new file mode 100644
 --- /dev/null
-+++ b/monolight/monolight/cli.py
++++ b/apps/monolight/monolight/cli.py
 @@ -0,0 +1,101 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
@@ -120,10 +120,271 @@ new file mode 100644
 +
 +        serialosc.disconnect()
 +        loop.run_until_complete(lightsd.close())
-diff --git a/monolight/monolight/lightsc/__init__.py b/monolight/monolight/lightsc/__init__.py
+diff --git a/apps/monolight/monolight/osc.py b/apps/monolight/monolight/osc.py
 new file mode 100644
 --- /dev/null
-+++ b/monolight/monolight/lightsc/__init__.py
++++ b/apps/monolight/monolight/osc.py
+@@ -0,0 +1,45 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import monome
++
++MONOME_KEYPRESS_DOWN = 1
++MONOME_KEYPRESS_UP = 0
++MONOME_KEYPRESS_STATES = frozenset({
++    MONOME_KEYPRESS_DOWN,
++    MONOME_KEYPRESS_UP,
++})
++
++
++class MonomeApplication(monome.Monome):
++
++    def __init__(self, keypress_callback):
++        self._keypress_callback = keypress_callback
++        monome.Monome.__init__(self, "/monolight")
++
++    def ready(self):
++        self.led_all(0)
++
++    def grid_key(self, x, y, s):
++        self._keypress_callback(x, y, s)
++
++
++def monome_apply(serialosc, method, *args, **kwargs):
++    for device in serialosc.app_instances.values():
++        for app in device:
++            if isinstance(app, MonomeApplication):
++                method(app, *args, **kwargs)
+diff --git a/apps/monolight/monolight/ui.py b/apps/monolight/monolight/ui.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/ui.py
+@@ -0,0 +1,114 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import asyncio
++import collections
++import monome
++import logging
++
++from .osc import (
++    MONOME_KEYPRESS_DOWN,
++    monome_apply,
++)
++from .lightsc.commands import (
++    SetLightFromHSBK,
++    PowerOff,
++    PowerOn,
++    PowerToggle,
++)
++
++logger = logging.getLogger("monolight.ui")
++
++_event_queue = None
++
++_KeyPress = collections.namedtuple("_KeyPress", ("x", "y", "state"))
++
++_STOP_SENTINEL = object()
++
++
++def draw(serialosc):
++    buf = monome.LedBuffer(8, 8)
++    buf.led_set(0, 0, 1)
++    for x in range(0, 5):
++        buf.led_set(x, 7, 1)
++    monome_apply(serialosc, buf.render)
++
++
++def hide(serialosc):
++    monome_apply(serialosc, monome.Monome.led_all, 0)
++
++
++async def start(loop, lightsd, serialosc):
++    global _event_queue
++
++    _event_queue = asyncio.Queue()
++
++    hidden = True
++
++    while True:
++        keypress = await _event_queue.get()
++        if keypress is _STOP_SENTINEL:
++            hide(serialosc)
++            _event_queue = None
++            return
++
++        if not hidden:
++            draw(serialosc)
++
++        logger.info("keypress: x={}, y={}, state={}".format(*keypress))
++
++        if keypress.state != MONOME_KEYPRESS_DOWN:
++            continue
++        if keypress.y != 7 and keypress.y != 0:
++            continue
++        if keypress.x == 0:
++            if keypress.y == 0:
++                hidden = not hidden
++                if hidden:
++                    hide(serialosc)
++                continue
++            await lightsd.apply(PowerOff(["*"]))
++        if keypress.y != 7:
++            continue
++        if keypress.x == 1:
++            await lightsd.apply(PowerOn(["*"]))
++        elif keypress.x == 2:
++            await lightsd.apply(PowerToggle(["neko"]))
++        elif keypress.x == 3:
++            await lightsd.apply(PowerToggle(["fugu"]))
++        elif keypress.x == 4:
++            async with lightsd.batch() as batch:
++                batch.apply(SetLightFromHSBK(
++                    ["#tower"], 37.469443, 1.0, 0.25, 3500, 600
++                ))
++                batch.apply(SetLightFromHSBK(
++                    ["fugu", "buzz"], 47.469443, 0.2, 0.2, 3500, 600
++                ))
++                batch.apply(SetLightFromHSBK(
++                    ["candle"], 47.469443, 0.2, 0.15, 3500, 600
++                ))
++                batch.apply(PowerOn(["#br"]))
++
++
++def stop():
++    if _event_queue is not None:
++        _event_queue.put_nowait(_STOP_SENTINEL)
++
++
++def submit_keypress(x, y, state):
++    if _event_queue is not None:
++        _event_queue.put_nowait(_KeyPress(x, y, state))
+diff --git a/apps/monolight/setup.py b/apps/monolight/setup.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/setup.py
+@@ -0,0 +1,52 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lighstd.
++#
++# lighstd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lighstd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++import setuptools
++
++version = "0.0.1.dev0"
++
++setuptools.setup(
++    name="monolight",
++    version=version,
++    description="A Monome UI to control smart bulbs using lightsd",
++    author="Louis Opter",
++    author_email="louis@opter.org",
++    packages=setuptools.find_packages(exclude=['tests', 'tests.*']),
++    include_package_data=True,
++    entry_points={
++        "console_scripts": [
++            "monolight = monolight.cli:main",
++        ],
++    },
++    install_requires=[
++        "click~=6.6",
++        "pymonome~=0.8.2",
++    ],
++    tests_require=[
++        "doubles~=1.1.3",
++        "freezegun~=0.3.5",
++        "pytest~=3.0",
++    ],
++    extras_require={
++        "dev": [
++            "flake8",
++            "ipython",
++            "pdbpp",
++            "pep8",
++        ],
++    },
++)
+diff --git a/clients/lightsd-python/README.rst b/clients/lightsd-python/README.rst
+new file mode 100644
+--- /dev/null
++++ b/clients/lightsd-python/README.rst
+@@ -0,0 +1,30 @@
++A Python client to control your smart bulbs through lightsd
++===========================================================
++
++lightsd_ is a daemon (background service) to control your LIFX_ WiFi "smart"
++bulbs. This package allows you to make RPC calls to lightsd to control your
++light bulbs from Python. It is built on top of the ``asyncio`` module and
++requires Python ≥ 3.5:
++
++.. code-block:: python
++
++   import asyncio
++
++   from lightsd import create_lightsd_connection
++   from lightsd.commands import PowerOff, PowerOn, SetLightFromHSBK
++
++   async def example():
++       client = await create_lightsd_connection("unix:///run/lightsd/socket")
++       async with client.batch() as batch:
++           batch.apply(PowerOn(targets=["*"]))
++           batch.apply(SetLightFromHSBK(["*"], 0., 1., 1., 3500, transition=600))
++       client.apply(PowerOff(["*"]))
++       await client.close()
++
++   loop = asyncio.get_event_loop()
++   loop.run_until_complete(loop.create_task(example()))
++
++.. _lightsd: https://www.lightsd.io/
++.. _LIFX: http://lifx.co/
++
++.. vim: set tw=80 spelllang=en spell:
+diff --git a/clients/lightsd-python/lightsd/__init__.py b/clients/lightsd-python/lightsd/__init__.py
+new file mode 100644
+--- /dev/null
++++ b/clients/lightsd-python/lightsd/__init__.py
 @@ -0,0 +1,21 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
@@ -142,83 +403,14 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+from .lightsc import (  # noqa
++from .client import (  # noqa
 +    LightsClient,
 +    create_lightsd_connection,
 +)
-diff --git a/monolight/monolight/lightsc/commands.py b/monolight/monolight/lightsc/commands.py
+diff --git a/clients/lightsd-python/lightsd/client.py b/clients/lightsd-python/lightsd/client.py
 new file mode 100644
 --- /dev/null
-+++ b/monolight/monolight/lightsc/commands.py
-@@ -0,0 +1,64 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
-+
-+
-+class Command:
-+
-+    METHOD = None
-+
-+    def __init__(self, *args):
-+        self.params = args
-+
-+
-+class SetLightFromHSBK(Command):
-+
-+    METHOD = "set_light_from_hsbk"
-+
-+    def __init__(self, targets, h, s, b, k, transition):
-+        Command.__init__(self, targets, h, s, b, k, transition)
-+
-+
-+class GetLightState(Command):
-+
-+    METHOD = "get_light_state"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-+
-+
-+class PowerOff(Command):
-+
-+    METHOD = "power_off"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-+
-+
-+class PowerOn(Command):
-+
-+    METHOD = "power_on"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-+
-+
-+class PowerToggle(Command):
-+
-+    METHOD = "power_toggle"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-diff --git a/monolight/monolight/lightsc/lightsc.py b/monolight/monolight/lightsc/lightsc.py
-new file mode 100644
---- /dev/null
-+++ b/monolight/monolight/lightsc/lightsc.py
++++ b/clients/lightsd-python/lightsd/client.py
 @@ -0,0 +1,248 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
@@ -468,11 +660,11 @@ new file mode 100644
 +    c = LightsClient(url, loop=loop)
 +    await c.connect()
 +    return c
-diff --git a/monolight/monolight/osc.py b/monolight/monolight/osc.py
+diff --git a/clients/lightsd-python/lightsd/commands.py b/clients/lightsd-python/lightsd/commands.py
 new file mode 100644
 --- /dev/null
-+++ b/monolight/monolight/osc.py
-@@ -0,0 +1,45 @@
++++ b/clients/lightsd-python/lightsd/commands.py
+@@ -0,0 +1,64 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -490,158 +682,58 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+import monome
 +
-+MONOME_KEYPRESS_DOWN = 1
-+MONOME_KEYPRESS_UP = 0
-+MONOME_KEYPRESS_STATES = frozenset({
-+    MONOME_KEYPRESS_DOWN,
-+    MONOME_KEYPRESS_UP,
-+})
++class Command:
 +
++    METHOD = None
 +
-+class MonomeApplication(monome.Monome):
-+
-+    def __init__(self, keypress_callback):
-+        self._keypress_callback = keypress_callback
-+        monome.Monome.__init__(self, "/monolight")
-+
-+    def ready(self):
-+        self.led_all(0)
-+
-+    def grid_key(self, x, y, s):
-+        self._keypress_callback(x, y, s)
++    def __init__(self, *args):
++        self.params = args
 +
 +
-+def monome_apply(serialosc, method, *args, **kwargs):
-+    for device in serialosc.app_instances.values():
-+        for app in device:
-+            if isinstance(app, MonomeApplication):
-+                method(app, *args, **kwargs)
-diff --git a/monolight/monolight/ui.py b/monolight/monolight/ui.py
++class SetLightFromHSBK(Command):
++
++    METHOD = "set_light_from_hsbk"
++
++    def __init__(self, targets, h, s, b, k, transition):
++        Command.__init__(self, targets, h, s, b, k, transition)
++
++
++class GetLightState(Command):
++
++    METHOD = "get_light_state"
++
++    def __init__(self, targets):
++        Command.__init__(self, targets)
++
++
++class PowerOff(Command):
++
++    METHOD = "power_off"
++
++    def __init__(self, targets):
++        Command.__init__(self, targets)
++
++
++class PowerOn(Command):
++
++    METHOD = "power_on"
++
++    def __init__(self, targets):
++        Command.__init__(self, targets)
++
++
++class PowerToggle(Command):
++
++    METHOD = "power_toggle"
++
++    def __init__(self, targets):
++        Command.__init__(self, targets)
+diff --git a/clients/lightsd-python/setup.py b/clients/lightsd-python/setup.py
 new file mode 100644
 --- /dev/null
-+++ b/monolight/monolight/ui.py
-@@ -0,0 +1,114 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
-+
-+import asyncio
-+import collections
-+import monome
-+import logging
-+
-+from .osc import (
-+    MONOME_KEYPRESS_DOWN,
-+    monome_apply,
-+)
-+from .lightsc.commands import (
-+    SetLightFromHSBK,
-+    PowerOff,
-+    PowerOn,
-+    PowerToggle,
-+)
-+
-+logger = logging.getLogger("monolight.ui")
-+
-+_event_queue = None
-+
-+_KeyPress = collections.namedtuple("_KeyPress", ("x", "y", "state"))
-+
-+_STOP_SENTINEL = object()
-+
-+
-+def draw(serialosc):
-+    buf = monome.LedBuffer(8, 8)
-+    buf.led_set(0, 0, 1)
-+    for x in range(0, 5):
-+        buf.led_set(x, 7, 1)
-+    monome_apply(serialosc, buf.render)
-+
-+
-+def hide(serialosc):
-+    monome_apply(serialosc, monome.Monome.led_all, 0)
-+
-+
-+async def start(loop, lightsd, serialosc):
-+    global _event_queue
-+
-+    _event_queue = asyncio.Queue()
-+
-+    hidden = True
-+
-+    while True:
-+        keypress = await _event_queue.get()
-+        if keypress is _STOP_SENTINEL:
-+            hide(serialosc)
-+            _event_queue = None
-+            return
-+
-+        if not hidden:
-+            draw(serialosc)
-+
-+        logger.info("keypress: x={}, y={}, state={}".format(*keypress))
-+
-+        if keypress.state != MONOME_KEYPRESS_DOWN:
-+            continue
-+        if keypress.y != 7 and keypress.y != 0:
-+            continue
-+        if keypress.x == 0:
-+            if keypress.y == 0:
-+                hidden = not hidden
-+                if hidden:
-+                    hide(serialosc)
-+                continue
-+            await lightsd.apply(PowerOff(["*"]))
-+        if keypress.y != 7:
-+            continue
-+        if keypress.x == 1:
-+            await lightsd.apply(PowerOn(["*"]))
-+        elif keypress.x == 2:
-+            await lightsd.apply(PowerToggle(["neko"]))
-+        elif keypress.x == 3:
-+            await lightsd.apply(PowerToggle(["fugu"]))
-+        elif keypress.x == 4:
-+            async with lightsd.batch() as batch:
-+                batch.apply(SetLightFromHSBK(
-+                    ["#tower"], 37.469443, 1.0, 0.25, 3500, 600
-+                ))
-+                batch.apply(SetLightFromHSBK(
-+                    ["fugu", "buzz"], 47.469443, 0.2, 0.2, 3500, 600
-+                ))
-+                batch.apply(SetLightFromHSBK(
-+                    ["candle"], 47.469443, 0.2, 0.15, 3500, 600
-+                ))
-+                batch.apply(PowerOn(["#br"]))
-+
-+
-+def stop():
-+    if _event_queue is not None:
-+        _event_queue.put_nowait(_STOP_SENTINEL)
-+
-+
-+def submit_keypress(x, y, state):
-+    if _event_queue is not None:
-+        _event_queue.put_nowait(_KeyPress(x, y, state))
-diff --git a/monolight/setup.py b/monolight/setup.py
-new file mode 100644
---- /dev/null
-+++ b/monolight/setup.py
-@@ -0,0 +1,52 @@
++++ b/clients/lightsd-python/setup.py
+@@ -0,0 +1,56 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lighstd.
@@ -663,10 +755,14 @@ new file mode 100644
 +
 +version = "0.0.1.dev0"
 +
++with open("README.rst", "r") as fp:
++    long_description = fp.read()
++
 +setuptools.setup(
-+    name="monolight",
++    name="lightsd",
 +    version=version,
-+    description="A Monome UI to control smart bulbs using lightsd",
++    description="A client to interact with lighsd ",
++    long_description=long_description,
 +    author="Louis Opter",
 +    author_email="louis@opter.org",
 +    packages=setuptools.find_packages(exclude=['tests', 'tests.*']),
