@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  31f8c4917304aea7d17e8c79a2a985082b3f9831
+# Parent  37f2e84f1c449f77606c68f2a74452dfc883fa5e
 Start to setup some slides for 33C3
 
 Hopefully my talk proposal will be selected!
@@ -20,7 +20,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  FIND_PACKAGE(Virtualenv)
  FIND_PACKAGE(Xz)
  
-+IF (BUILD_SLIDES)
++IF (WITH_SLIDES)
 +    FIND_PACKAGE(LATEX REQUIRED)
 +    INCLUDE(UseLATEX)
 +ENDIF ()
@@ -32,9 +32,9 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
      )
  ENDIF ()
  
-+IF (BUILD_SLIDES)
++IF (WITH_SLIDES)
 +    ADD_SUBDIRECTORY(slides)
-+ENDIF (BUILD_SLIDES)
++ENDIF (WITH_SLIDES)
 +
 +### Install rules ##############################################################
 +
@@ -1692,12 +1692,16 @@ diff --git a/slides/33c3/33c3.tex b/slides/33c3/33c3.tex
 new file mode 100644
 --- /dev/null
 +++ b/slides/33c3/33c3.tex
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,54 @@
 +\documentclass[xcolor={usenames,svgnames}]{beamer}
 +
 +\usepackage[american]{babel}
++\usepackage{pdfcomment}
 +\usepackage{tikz}
++
 +\usetikzlibrary{shapes,fit}
++
++\newcommand{\pdfnote}[1]{\marginnote{\pdfcomment[icon=note]{#1}}}
 +
 +\title{Making-of lightsd: a daemon to control your (LIFX) smart-bulbs.}
 +\date{33C3 --- December 2016}
@@ -1707,18 +1711,40 @@ new file mode 100644
 +
 +\begin{frame}\titlepage\end{frame}
 +
-+%%% Supporting more bulbs products %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
++\section[design]{Design choices}
 +
-+% I think this is a pretty obvious idea, avoid getting locked with one
-+% manufacturer or product.
++\begin{frame}{Being a daemon}
++\pdfnote{%
++Pros:\
++\
++- Instant devices ``discovery'';\
++- Conflict resolution;\
++- Good network location;\
++\
++Cons:\
++\
++- Applications aren't self-contained: side-car process though, or even tighter\
++  if you're GPLv3;\
++- Discovery: avahi? dns?\
++}
++\end{frame}
 +
-+% lightsd has been architectured around a minimal set of bulb commands, meaning
-+% that while abstractions/integrations are missing to make lightsd work with
-+% other bulbs, it at least relies on a very limited set of commands (get/set
-+% the state of the bulb and that's about it). For example lightsd can totally
-+% implement transitions internally.
++\section[tbd]{TBD}
 +
-+% Modules that would need heavy changes to support other bulb models:
++\begin{frame}{Device suppport}
++\pdfnote{%
++I think this is a pretty obvious idea, avoid getting locked with one\
++manufacturer or product.\
++\
++lightsd has been architectured around a minimal set of bulb commands, meaning\
++that while abstractions/integrations are missing to make lightsd work with\
++other bulbs, it at least relies on a very limited set of commands (get/set\
++the state of the bulb and that's about it). For example lightsd can totally\
++implement transitions internally.\
++\
++Modules that would need heavy changes to support other bulb models:\
++}
++\end{frame}
 +
 +\end{document}
 diff --git a/slides/33c3/CMakeLists.txt b/slides/33c3/CMakeLists.txt

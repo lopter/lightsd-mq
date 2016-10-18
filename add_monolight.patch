@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  703102c9539ab4968c7cde3313c2f33ce0070a8a
+# Parent  7e908ae2e0c7088791fb4a442d86d7687a52b956
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -18,7 +18,7 @@ diff --git a/apps/monolight/monolight/cli.py b/apps/monolight/monolight/cli.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/cli.py
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,65 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -38,16 +38,13 @@ new file mode 100644
 +
 +import asyncio
 +import click
-+import contextlib
 +import functools
++import lightsc
 +import locale
 +import logging
 +import monome
-+import os
 +import signal
-+import subprocess
 +
-+from . import lightsc
 +from . import osc
 +from . import ui
 +
@@ -58,53 +55,15 @@ new file mode 100644
 +logging.basicConfig(level=logging.INFO)
 +
 +
-+def get_lightsd_rundir():
-+    try:
-+        lightsdrundir = subprocess.check_output(["lightsd", "--rundir"])
-+    except Exception as ex:
-+        click.echo(
-+            "Couldn't infer lightsd's runtime directory, is lightsd installed? "
-+            "({})\nTrying build/socket…".format(ex),
-+            err=True
-+        )
-+        lightscdir = os.path.realpath(__file__).split(os.path.sep)[:-2]
-+        lightsdrundir = os.path.join(*[os.path.sep] + lightscdir + ["build"])
-+    else:
-+        lightsdrundir = lightsdrundir.decode(ENCODING).strip()
-+
-+    return lightsdrundir
-+
-+LIGHTSD_SOCKET = "unix://" + os.path.join(get_lightsd_rundir(), "socket")
-+
-+
-+@contextlib.contextmanager
-+def handle_unix_signals(loop):
-+    SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT)
-+    if hasattr(loop, "add_signal_handler"):
-+        for signum in SIGNALS:
-+            loop.add_signal_handler(signum, ui.stop)
-+    yield
-+    # Workaround dumb bug in Python:
-+    # Traceback (most recent call last):
-+    #   File "/usr/lib64/python3.5/asyncio/base_events.py", line 431, in __del__
-+    #   File "/usr/lib64/python3.5/asyncio/unix_events.py", line 58, in close
-+    #   File "/usr/lib64/python3.5/asyncio/unix_events.py", line 139, in remove_signal_handler  # noqa
-+    #   File "/usr/lib64/python3.5/signal.py", line 47, in signal
-+    # TypeError: signal handler must be signal.SIG_IGN, signal.SIG_DFL, or a callable object  # noqa
-+    if hasattr(loop, "remove_signal_handler"):
-+        for signum in SIGNALS:
-+            loop.remove_signal_handler(signum)
-+
-+
 +@click.command()
 +@click.option("--serialoscd-host", default="127.0.0.1")
 +@click.option("--serialoscd-port", type=click.IntRange(0, 2**16 - 1))
-+@click.option("--lightsd-url", default=LIGHTSD_SOCKET)
-+def main(serialoscd_host, serialoscd_port, lightsd_url):
++@click.option("--lightsd-url")
++def main(serialoscd_host: str, serialoscd_port: int, lightsd_url: str):
 +    loop = asyncio.get_event_loop()
 +
 +    tasks = asyncio.gather(
-+        loop.create_task(lightsc.create_lightsd_connection(lightsd_url)),
++        loop.create_task(lightsc.create_async_lightsd_connection(lightsd_url)),
 +        loop.create_task(monome.create_serialosc_connection(
 +            functools.partial(osc.MonomeApplication, ui.submit_keypress)
 +        ))
@@ -112,14 +71,19 @@ new file mode 100644
 +    loop.run_until_complete(tasks)
 +    lightsd, serialosc = tasks.result()
 +
-+    with handle_unix_signals(loop):
-+        # TODO: make which monome instance to use something configurable
-+        ui_task = loop.create_task(ui.start(loop, lightsd, serialosc))
++    if hasattr(loop, "add_signal_handler"):
++        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
++            loop.add_signal_handler(signum, ui.stop)
 +
-+        loop.run_until_complete(ui_task)
++    # TODO: make which monome instance to use something configurable
++    ui_task = loop.create_task(ui.start(loop, lightsd, serialosc))
 +
-+        serialosc.disconnect()
-+        loop.run_until_complete(lightsd.close())
++    loop.run_until_complete(ui_task)
++
++    serialosc.disconnect()
++    loop.run_until_complete(lightsd.close())
++
++    loop.close()
 diff --git a/apps/monolight/monolight/osc.py b/apps/monolight/monolight/osc.py
 new file mode 100644
 --- /dev/null
@@ -197,17 +161,17 @@ new file mode 100644
 +import monome
 +import logging
 +
-+from .osc import (
-+    MONOME_KEYPRESS_DOWN,
-+    monome_apply,
-+)
-+from .lightsc.commands import (
++from lightsc.requests import (
 +    SetLightFromHSBK,
 +    PowerOff,
 +    PowerOn,
 +    PowerToggle,
 +)
 +
++from .osc import (
++    MONOME_KEYPRESS_DOWN,
++    monome_apply,
++)
 +logger = logging.getLogger("monolight.ui")
 +
 +_event_queue = None
@@ -346,11 +310,11 @@ new file mode 100644
 +        ],
 +    },
 +)
-diff --git a/clients/lightsd-python/README.rst b/clients/lightsd-python/README.rst
+diff --git a/clients/python/lightsc/README.rst b/clients/python/lightsc/README.rst
 new file mode 100644
 --- /dev/null
-+++ b/clients/lightsd-python/README.rst
-@@ -0,0 +1,30 @@
++++ b/clients/python/lightsc/README.rst
+@@ -0,0 +1,63 @@
 +A Python client to control your smart bulbs through lightsd
 +===========================================================
 +
@@ -362,30 +326,63 @@ new file mode 100644
 +.. code-block:: python
 +
 +   import asyncio
++   import click
 +
-+   from lightsd import create_lightsd_connection
-+   from lightsd.commands import PowerOff, PowerOn, SetLightFromHSBK
++   from lightsc import LightsView, create_async_lightsd_connection
++   from lightsc.requests import (
++       GetLightState,
++       PowerOff,
++       PowerOn,
++       SetLightFromHSBK,
++    )
 +
-+   async def example():
-+       client = await create_lightsd_connection("unix:///run/lightsd/socket")
-+       async with client.batch() as batch:
-+           batch.apply(PowerOn(targets=["*"]))
-+           batch.apply(SetLightFromHSBK(["*"], 0., 1., 1., 3500, transition=600))
-+       client.apply(PowerOff(["*"]))
-+       await client.close()
++   async def example(url, targets):
++       async with create_async_lightsd_connection(url) as client:
++           click.echo("Connected to lightsd running at {}".format(client.url))
 +
-+   loop = asyncio.get_event_loop()
-+   loop.run_until_complete(loop.create_task(example()))
++           view = LightsView()
++           view.update(await client.apply(GetLightState(targets))
++           click.echo("Discovered bulbs: {}".format(view))
++
++           transition_ms = 600
++           red_hsbk = (0., 1., 1., 3500)
++           click.echo("Turning all bulbs to red in {}ms...".format(transition_ms))
++           async with client.batch() as batch:
++               batch.apply(PowerOn(targets))
++               batch.apply(SetLightFromHSBK(targets, *red_hsbk, transition_ms=transition_ms))
++
++           click.echo("Restoring original state")
++           async with client.batch() as batch:
++               for b in view.bulbs:
++                   PowerState = PowerOn if b.power else PowerOff
++                   hsbk = (b.h, b.s, b.b, b.k)
++
++                   batch.apply(PowerState([b.label]))
++                   batch.apply(SetLightFromHSBK([b.label], *hsbk, transition_ms=transition_ms))
++
++   @click.command()
++   @click.option("--lightsd-url", help="supported schemes: tcp+jsonrpc://, unix+jsonrpc://")
++   @click.argument("bulb_targets", nargs=-1, required=True)
++   def main(lightsd_url, bulb_targets)
++       """This example will turn all your bulbs to red before restoring their
++       original state.
++
++       If an URL is not provided this script will attempt to connect to
++       lightsd's UNIX socket.
++       """
++
++       evl = asyncio.get_event_loop()
++       evl.run_until_complete(evl.create_task(example(lightsd_url, bulb_targets)))
 +
 +.. _lightsd: https://www.lightsd.io/
 +.. _LIFX: http://lifx.co/
 +
 +.. vim: set tw=80 spelllang=en spell:
-diff --git a/clients/lightsd-python/lightsd/__init__.py b/clients/lightsd-python/lightsd/__init__.py
+diff --git a/clients/python/lightsc/lightsc/__init__.py b/clients/python/lightsc/lightsc/__init__.py
 new file mode 100644
 --- /dev/null
-+++ b/clients/lightsd-python/lightsd/__init__.py
-@@ -0,0 +1,21 @@
++++ b/clients/python/lightsc/lightsc/__init__.py
+@@ -0,0 +1,24 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -404,14 +401,17 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +from .client import (  # noqa
-+    LightsClient,
 +    create_lightsd_connection,
++    create_async_lightsd_connection,
 +)
-diff --git a/clients/lightsd-python/lightsd/client.py b/clients/lightsd-python/lightsd/client.py
++from .view import (  # noqa
++    LightsView,
++)
+diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/lightsc/client.py
 new file mode 100644
 --- /dev/null
-+++ b/clients/lightsd-python/lightsd/client.py
-@@ -0,0 +1,248 @@
++++ b/clients/python/lightsc/lightsc/client.py
+@@ -0,0 +1,321 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -430,134 +430,154 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +import asyncio
-+import collections
 +import functools
 +import json
++import locale
 +import logging
 +import os
 +import urllib
 +import uuid
 +
-+from . import commands
-+
-+logger = logging.getLogger("monolight.lightsc")
-+
-+PendingRequestEntry = collections.namedtuple(
-+    "PendingRequestEntry", ("handler_cb", "timeout_handle")
++from typing import (
++    Any,
++    Callable,
++    Dict,
++    List,
++    NamedTuple,
++    Sequence,
 +)
++from typing import (  # noqa
++    Tuple,
++    Type,
++)
++
++from . import (
++    exceptions,
++    requests,
++    responses,
++    structs,
++)
++
++logger = logging.getLogger("lightsd.client")
++
++
++_JSONRPCMethod = NamedTuple("_JSONRPCMethod", [
++    ("name", str),
++    ("map_result", Callable[[Any], responses.Response]),
++])
++_JSONRPC_API = {
++    requests.GetLightState: _JSONRPCMethod(
++        name="get_light_state",
++        map_result=lambda result: responses.LightsState([
++            structs.LightBulb(
++                b["label"], b["power"], *b["hsbk"], tags=b["tags"]
++            ) for b in result
++        ])
++    ),
++    requests.SetLightFromHSBK: _JSONRPCMethod(
++        name="set_light_from_hsbk",
++        map_result=lambda result: responses.Bool(result)
++    ),
++    requests.PowerOn: _JSONRPCMethod(
++        name="power_on",
++        map_result=lambda result: responses.Bool(result)
++    ),
++    requests.PowerOff: _JSONRPCMethod(
++        name="power_off",
++        map_result=lambda result: responses.Bool(result)
++    ),
++    requests.PowerToggle: _JSONRPCMethod(
++        name="power_toggle",
++        map_result=lambda result: responses.Bool(result)
++    ),
++}  # type: Dict[Type[requests.RequestClass], _JSONRPCMethod]
 +
 +
 +class _JSONRPCCall:
 +
-+    def __init__(self, method, params, response_handler):
++    def __init__(
++        self, method: str, params: Sequence[Any], timeout: int = None
++    ) -> None:
++        self.id = str(uuid.uuid4())
++        self.method = method
++        self.params = params
++        self.timeout = timeout
++        self.timeout_handle = None  # type: asyncio.Handle
 +        self.request = {
-+            "id": str(uuid.uuid4()),
++            "id": self.id,
 +            "jsonrpc": "2.0",
 +            "method": method,
 +            "params": params,
 +        }
-+        self.response_handler = response_handler
++        self.response = asyncio.Future()  # type: asyncio.futures.Future
 +
 +
-+class _JSONRPCBatch:
-+
-+    def __init__(self, client):
-+        self._client = client
-+        self._batch = []
-+
-+    async def __aenter__(self):
-+        return self
-+
-+    async def __aexit__(self, exc_type, exc_val, exc_tb):
-+        if exc_type is None:
-+            await self._client._jsonrpc_execute(self._batch)
-+
-+    def apply(self, command):
-+        self._batch.append(_JSONRPCCall(
-+            command.METHOD,
-+            command.params,
-+            response_handler=self._client._HANDLERS.get(command.__class__)
-+        ))
-+
-+
-+class LightsClient:
++class AsyncJSONRPCLightsClient:
 +
 +    READ_SIZE = 8192
-+    REFRESH_INTERVAL = 250 / 1000  # seconds
 +    TIMEOUT = 2  # seconds
 +    ENCODING = "utf-8"
 +
-+    def __init__(self,
-+                 url,
-+                 encoding=ENCODING,
-+                 timeout=TIMEOUT,
-+                 read_size=READ_SIZE,
-+                 refresh_interval=REFRESH_INTERVAL,
-+                 loop=None):
++    def __init__(
++        self,
++        url: str,
++        encoding: str = ENCODING,
++        timeout: int = TIMEOUT,
++        read_size: int = READ_SIZE,
++        loop: asyncio.AbstractEventLoop = None
++    ) -> None:
 +        self.url = url
 +        self.encoding = encoding
 +        self.timeout = timeout
 +        self.read_size = read_size
-+        self.refresh_interval = refresh_interval
-+        self._pending_requests = {}
-+        self._reader = self._writer = None
-+        self._listen_task = self._poll_task = None
++        self._listen_task = None  # type: asyncio.Task
++        self._pending_calls = {}  # type: Dict[str, _JSONRPCCall]
++        self._reader = None  # type: asyncio.StreamReader
++        self._writer = None  # type: asyncio.StreamWriter
 +        self._loop = loop or asyncio.get_event_loop()
 +
-+    def _handle_light_state(self, response):
-+        logger.info("Updating bulbs state")
-+        self._bulbs = {b["label"]: b for b in response}
-+
-+    _HANDLERS = {
-+        commands.GetLightState: _handle_light_state
-+    }
-+
-+    def _handle_response(self, id, response):
-+        handler_cb, timeout_handle = self._pending_requests.pop(id)
-+        timeout_handle.cancel()
-+
-+        if response is None:
-+            logger.info("Timeout on request {}".format(id))
++    def _handle_response(
++        self, id: str, response: Any, timeout: bool = False
++    ) -> None:
++        call = self._pending_calls.pop(id)
++        if timeout is True:
++            call.response.set_exception(exceptions.LightsClientTimeoutError())
 +            return
++        call.timeout_handle.cancel()
++        call.response.set_result(response)
 +
-+        if handler_cb is not None:
-+            handler_cb(self, response)
-+            return
++    async def _jsonrpc_execute(
++        self, pipeline: List[_JSONRPCCall]
++    ) -> Dict[str, Any]:
++        if not pipeline:
++            return {}
 +
-+        logger.info("No handler for response {}: {}".format(id, response))
++        requests = [call.request for call in pipeline]
++        for req in requests:
++            logger.info("Request {id}: {method}({params})".format(**req))
 +
-+    async def _jsonrpc_execute(self, pipeline):
-+        calls = [call.request for call in pipeline]
-+        payload = json.dumps(calls[0] if len(calls) == 1 else calls)
-+        payload = payload.encode(self.encoding, "surrogateescape")
-+
-+        self._writer.write(payload)
-+
-+        for call in calls:
-+            logger.info("Request {id}: {method}({params})".format(**call))
++        payload = json.dumps(requests[0] if len(requests) == 1 else requests)
++        self._writer.write(payload.encode(self.encoding, "surrogateescape"))
 +
 +        await self._writer.drain()
 +
 +        for call in pipeline:
-+            id = call.request["id"]
-+            timeout_cb = functools.partial(
-+                self._handle_response, id, response=None
++            call.timeout_handle = self._loop.call_later(
++                call.timeout,
++                functools.partial(
++                    self._handle_response, call.id, response=None, timeout=True
++                )
 +            )
-+            self._pending_requests[id] = PendingRequestEntry(
-+                handler_cb=call.response_handler,
-+                timeout_handle=self._loop.call_later(self.TIMEOUT, timeout_cb)
-+            )
++            self._pending_calls[call.id] = call
 +
-+    async def close(self):
-+        futures = []
-+        if self._poll_task is not None:
-+            self._poll_task.cancel()
-+            futures.append(self._poll_task)
++        futures = [call.response for call in pipeline]
++        await asyncio.wait(futures, loop=self._loop)
++        return {call.id: call.response.result() for call in pipeline}
++
++    async def close(self) -> None:
 +        if self._listen_task is not None:
 +            self._listen_task.cancel()
-+            futures.append(self._listen_task)
-+        await asyncio.wait(futures, loop=self._loop)
-+        self._poll_task = self._listen_task = None
++            self._listen_task = None
 +
 +        if self._writer is not None:
 +            if self._writer.can_write_eof():
@@ -569,25 +589,26 @@ new file mode 100644
 +                await self._reader.read()
 +        self._reader = self._writer = None
 +
-+    async def _reconnect(self):
++        self._pending_calls = {}
++
++    async def _reconnect(self) -> None:
 +        await self.close()
 +        await self.connect()
 +
-+    async def apply(self, command):
-+        await self._jsonrpc_execute([_JSONRPCCall(
-+            command.METHOD,
-+            command.params,
-+            response_handler=self._HANDLERS.get(command.__class__),
-+        )])
++    async def apply(self, req: requests.Request, timeout: int = TIMEOUT):
++        method = _JSONRPC_API[req.__class__]
++        call = _JSONRPCCall(method.name, req.params, timeout=timeout)
++        reps_by_id = await self._jsonrpc_execute([call])
++        return method.map_result(reps_by_id[call.id])
 +
-+    async def connect(self):
++    async def connect(self) -> None:
 +        parts = urllib.parse.urlparse(self.url)
-+        if parts.scheme == "unix":
++        if parts.scheme == "unix+jsonrpc":
 +            path = os.path.join(parts.netloc, parts.path).rstrip(os.path.sep)
 +            open_connection = functools.partial(
 +                asyncio.open_unix_connection, path
 +            )
-+        elif parts.scheme == "tcp":
++        elif parts.scheme == "tcp+jsonrpc":
 +            open_connection = functools.partial(
 +                asyncio.open_connection, parts.hostname, parts.port
 +            )
@@ -600,18 +621,12 @@ new file mode 100644
 +                self.timeout,
 +                loop=self._loop,
 +            )
-+            self._listen_task = self._loop.create_task(self.listen())
-+            self._poll_task = self._loop.create_task(self.poll())
++            self._listen_task = self._loop.create_task(self._listen())
 +        except Exception:
 +            logger.error("Couldn't open {}".format(self.url))
 +            raise
 +
-+    async def poll(self):
-+        while True:
-+            await self.apply(commands.GetLightState(["*"]))
-+            await asyncio.sleep(self.refresh_interval)
-+
-+    async def listen(self):
++    async def _listen(self) -> None:
 +        buf = bytearray()
 +
 +        while True:
@@ -625,46 +640,104 @@ new file mode 100644
 +            try:
 +                json.loads(buf.decode(self.encoding, "ignore"))
 +            except Exception:
-+                # Decoding or parsing failed, data must be missing, try again:
 +                continue
-+
-+            # Decoding and JSON parsing were successful, we have received
-+            # a full response:
 +            response = json.loads(buf.decode(self.encoding, "surrogateescape"))
 +            buf = bytearray()
 +
-+            # Convert the response to a batch response if needed so we
-+            # can always loop over it:
 +            batch = response if isinstance(response, list) else [response]
-+
 +            for response in batch:
++                id = response["id"]
++
 +                error = response.get("error")
 +                if error is not None:
-+                    id = response["id"]
-+                    del self._pending_requests[id]
-+                    logger.warning("Error {}: {code} - {message}".format(
-+                        id, **error
-+                    ))
++                    code = error.get("code")
++                    msg = error.get("msg")
++                    logger.warning("Error {}: {} - {}".format(id, code, msg))
++                    call = self._pending_calls.pop(id)
++                    ex = exceptions.LightsClientError(msg)
++                    call.response.set_exception(ex)
++                    call.timeout_handle.cancel()
 +                    continue
 +
-+                self._handle_response(response["id"], response["result"])
++                logger.info("Response {}: {}".format(id, response["result"]))
++                self._handle_response(id, response["result"])
 +
-+    def batch(self):
-+        return _JSONRPCBatch(self)
++    def batch(self) -> "_AsyncJSONRPCBatch":
++        return _AsyncJSONRPCBatch(self)
 +
 +
-+async def create_lightsd_connection(url, loop=None):
++class _AsyncJSONRPCBatch:
++
++    def __init__(self, client: AsyncJSONRPCLightsClient) -> None:
++        self.responses = None  # type: Tuple[responses.Response, ...]
++        self._client = client
++        self._batch = []  # type: List[_JSONRPCCall]
++
++    async def __aenter__(self) -> "_AsyncJSONRPCBatch":
++        return self
++
++    async def __aexit__(self, exc_type, exc_val, exc_tb):
++        if exc_type is None:
++            reps_by_id = await self._client._jsonrpc_execute(self._batch)
++            self.responses = (
++                _JSONRPC_API[req.__class__].map_result(reps_by_id[req.id])
++                for req in self._batch
++            )
++
++    def apply(
++        self,
++        req: requests.Request,
++        timeout: int = AsyncJSONRPCLightsClient.TIMEOUT
++    ) -> None:
++        method = _JSONRPC_API[req.__class__]
++        call = _JSONRPCCall(method.name, req.params, timeout=timeout)
++        self._batch.append(call)
++
++
++async def get_lightsd_unix_socket_async(
++    loop: asyncio.AbstractEventLoop = None,
++) -> str:
++    process = await asyncio.create_subprocess_exec(
++        "lightsd", "--rundir",
++        stdout=asyncio.subprocess.PIPE,
++        stderr=asyncio.subprocess.DEVNULL,
++        loop=loop,
++    )
++    stdout, stderr = await process.communicate()
++    stdout = stdout.decode(locale.getpreferredencoding()).strip()
++    if process.returncode == 0 and stdout:
++        lightsdrundir = stdout
++    else:
++        lightsdrundir = "build"
++        logger.warning(
++            "Couldn't infer lightsd's runtime directory, is "
++            "lightsd installed? Trying {}…".format(lightsdrundir)
++        )
++
++    return "unix+jsonrpc://" + os.path.join(lightsdrundir, "socket")
++
++
++async def create_async_lightsd_connection(
++    url: str = None,
++    loop: asyncio.AbstractEventLoop = None
++) -> AsyncJSONRPCLightsClient:
 +    if loop is None:
 +        loop = asyncio.get_event_loop()
++    if url is None:
++        url = await get_lightsd_unix_socket_async(loop)
 +
-+    c = LightsClient(url, loop=loop)
++    c = AsyncJSONRPCLightsClient(url, loop=loop)
 +    await c.connect()
 +    return c
-diff --git a/clients/lightsd-python/lightsd/commands.py b/clients/lightsd-python/lightsd/commands.py
++
++
++def create_lightsd_connection(url: str = None) -> None:
++    raise NotImplementedError("Sorry, no synchronous client available yet")
+diff --git a/clients/python/lightsc/lightsc/exceptions.py b/clients/python/lightsc/lightsc/exceptions.py
 new file mode 100644
 --- /dev/null
-+++ b/clients/lightsd-python/lightsd/commands.py
-@@ -0,0 +1,64 @@
++++ b/clients/python/lightsc/lightsc/exceptions.py
+@@ -0,0 +1,28 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -683,57 +756,221 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +
-+class Command:
-+
-+    METHOD = None
-+
-+    def __init__(self, *args):
-+        self.params = args
++class LightsError(Exception):
++    pass
 +
 +
-+class SetLightFromHSBK(Command):
-+
-+    METHOD = "set_light_from_hsbk"
-+
-+    def __init__(self, targets, h, s, b, k, transition):
-+        Command.__init__(self, targets, h, s, b, k, transition)
++class LightsClientError(LightsError):
++    pass
 +
 +
-+class GetLightState(Command):
-+
-+    METHOD = "get_light_state"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-+
-+
-+class PowerOff(Command):
-+
-+    METHOD = "power_off"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-+
-+
-+class PowerOn(Command):
-+
-+    METHOD = "power_on"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-+
-+
-+class PowerToggle(Command):
-+
-+    METHOD = "power_toggle"
-+
-+    def __init__(self, targets):
-+        Command.__init__(self, targets)
-diff --git a/clients/lightsd-python/setup.py b/clients/lightsd-python/setup.py
++class LightsClientTimeoutError(LightsClientError):
++    pass
+diff --git a/clients/python/lightsc/lightsc/requests.py b/clients/python/lightsc/lightsc/requests.py
 new file mode 100644
 --- /dev/null
-+++ b/clients/lightsd-python/setup.py
-@@ -0,0 +1,56 @@
++++ b/clients/python/lightsc/lightsc/requests.py
+@@ -0,0 +1,65 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from typing import (
++    Any,
++    List,
++    TypeVar,
++)
++
++
++class Request:
++
++    def __init__(self, *args: Any) -> None:
++        self.params = args
++
++RequestClass = TypeVar("RequestClass", bound=Request)
++
++
++class SetLightFromHSBK(Request):
++
++    def __init__(
++        self,
++        targets: List[str],
++        h: float, s: float, b: float, k: int,
++        transition_ms: int
++    ) -> None:
++        Request.__init__(self, targets, h, s, b, k, transition_ms)
++
++
++class GetLightState(Request):
++
++    def __init__(self, targets: List[str]) -> None:
++        Request.__init__(self, targets)
++
++
++class PowerOff(Request):
++
++    def __init__(self, targets: List[str]) -> None:
++        Request.__init__(self, targets)
++
++
++class PowerOn(Request):
++
++    def __init__(self, targets: List[str]) -> None:
++        Request.__init__(self, targets)
++
++
++class PowerToggle(Request):
++
++    def __init__(self, targets: List[str]) -> None:
++        Request.__init__(self, targets)
+diff --git a/clients/python/lightsc/lightsc/responses.py b/clients/python/lightsc/lightsc/responses.py
+new file mode 100644
+--- /dev/null
++++ b/clients/python/lightsc/lightsc/responses.py
+@@ -0,0 +1,41 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from typing import (
++    List,
++    TypeVar,
++)
++
++from . import structs
++
++
++class Response:
++    pass
++
++ResponseClass = TypeVar("ResponseClass", bound=Response)
++
++
++class Bool(Response):
++
++    def __init__(self, bool: bool) -> None:
++        self.value = bool
++
++
++class LightsState(Response):
++
++    def __init__(self, bulbs: List[structs.LightBulb]) -> None:
++        self.bulbs = bulbs
+diff --git a/clients/python/lightsc/lightsc/structs.py b/clients/python/lightsc/lightsc/structs.py
+new file mode 100644
+--- /dev/null
++++ b/clients/python/lightsc/lightsc/structs.py
+@@ -0,0 +1,42 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from typing import (
++    List,
++)
++
++
++class Struct:
++    pass
++
++
++class LightBulb(Struct):
++
++    def __init__(
++        self,
++        label: str,
++        power: bool,
++        h: float, s: float, b: float, k: int,
++        tags: List[str]
++    ) -> None:
++        self.label = label
++        self.power = power
++        self.h = h
++        self.s = s
++        self.b = b
++        self.k = k
++        self.tags = tags
+diff --git a/clients/python/lightsc/lightsc/view.py b/clients/python/lightsc/lightsc/view.py
+new file mode 100644
+--- /dev/null
++++ b/clients/python/lightsc/lightsc/view.py
+@@ -0,0 +1,32 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import pprint
++
++
++class LightsView:
++
++    def __init__(self):
++        self.bulbs = []
++        self.bulbs_by_label = {}
++
++    def __str__(self):
++        return pprint.pformat(self.bulbs_by_label)
++
++    def update(self, lights_state):
++        self.bulbs = lights_state.bulbs
++        self.bulbs_by_label = {b.label for b in lights_state.bulbs.items()}
+diff --git a/clients/python/lightsc/setup.py b/clients/python/lightsc/setup.py
+new file mode 100644
+--- /dev/null
++++ b/clients/python/lightsc/setup.py
+@@ -0,0 +1,53 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lighstd.
@@ -759,23 +996,18 @@ new file mode 100644
 +    long_description = fp.read()
 +
 +setuptools.setup(
-+    name="lightsd",
++    name="lightsc",
 +    version=version,
-+    description="A client to interact with lighsd ",
++    description="A client to interact with lightsd",
 +    long_description=long_description,
 +    author="Louis Opter",
 +    author_email="louis@opter.org",
 +    packages=setuptools.find_packages(exclude=['tests', 'tests.*']),
 +    include_package_data=True,
 +    entry_points={
-+        "console_scripts": [
-+            "monolight = monolight.cli:main",
-+        ],
++        "console_scripts": [],
 +    },
-+    install_requires=[
-+        "click~=6.6",
-+        "pymonome~=0.8.2",
-+    ],
++    install_requires=[],
 +    tests_require=[
 +        "doubles~=1.1.3",
 +        "freezegun~=0.3.5",
@@ -784,9 +1016,11 @@ new file mode 100644
 +    extras_require={
 +        "dev": [
 +            "flake8",
++            "mypy-lang",
 +            "ipython",
 +            "pdbpp",
 +            "pep8",
++            "typed-ast",
 +        ],
 +    },
 +)
