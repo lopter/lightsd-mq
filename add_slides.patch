@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  37f2e84f1c449f77606c68f2a74452dfc883fa5e
+# Parent  3539266939bc4808efd5c32db5e1627b2948210f
 Start to setup some slides for 33C3
 
 Hopefully my talk proposal will be selected!
@@ -1692,7 +1692,7 @@ diff --git a/slides/33c3/33c3.tex b/slides/33c3/33c3.tex
 new file mode 100644
 --- /dev/null
 +++ b/slides/33c3/33c3.tex
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,86 @@
 +\documentclass[xcolor={usenames,svgnames}]{beamer}
 +
 +\usepackage[american]{babel}
@@ -1713,13 +1713,29 @@ new file mode 100644
 +
 +\section[design]{Design choices}
 +
++% TODO: strip les notes lorsque tu es en release via cmake. (voir faire
++% carrément des targets différentes pour être sûr de pas te tromper).
++
++\pdfnote{% Notes:
++- Monolithic approach to solve the problem,\
++- Est-ce que l'argument de l'isolation fonctionne ou IoTivity le résoud aussi?\
++- Je ressens pas le besoin d'investir dans plus de domotique donc que lightsd\
++soit restreint ne me dérange pas, puis la stabilitité m'arrange.\
++- Ce qui peut faire la différence avec IoTivity c'est la documentation, en
++bonus un plan pour vraiment extend.\
++- Interfaces are bad because they encourage inheritance, I believe composition\
++is a better design pattern. (Though you can't really say the \"mixin\" approach\
++is composition, it really is inheritance, like interfaces, in the sense that it\
++delegates all attributes of the composite object).\
++}
++
 +\begin{frame}{Being a daemon}
 +\pdfnote{%
 +Pros:\
 +\
 +- Instant devices ``discovery'';\
 +- Conflict resolution;\
-+- Good network location;\
++- Good network location.\
 +\
 +Cons:\
 +\
@@ -1745,6 +1761,22 @@ new file mode 100644
 +Modules that would need heavy changes to support other bulb models:\
 +}
 +\end{frame}
++
++\section[related]{Related efforts}
++
++\begin{frame}{Related efforts}
++\pdfnote{%
++- AllJoyn (churned by IoTivity): https://allseenalliance.org/;\
++- IoTivity: https://wiki.iotivity.org/architecture;\
++- IBM Node-RED: http://nodered.org/;\
++- Homekit: ;\
++- openHAB: http://www.openhab.org/.\
++}
++\end{frame}
++
++\pdfnote{% Side-project ideas:
++- ARP ping implementation for latency measurement + better debug;\
++}
 +
 +\end{document}
 diff --git a/slides/33c3/CMakeLists.txt b/slides/33c3/CMakeLists.txt

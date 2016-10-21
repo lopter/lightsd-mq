@@ -84,11 +84,292 @@ new file mode 100644
 +    loop.run_until_complete(lightsd.close())
 +
 +    loop.close()
+diff --git a/apps/monolight/monolight/components/__init__.py b/apps/monolight/monolight/components/__init__.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/components/__init__.py
+@@ -0,0 +1,20 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from .base import MonomeGrid  # noqa
++from .layers import Layer  # noqa
++from .button import button  # noqa
+diff --git a/apps/monolight/monolight/components/base.py b/apps/monolight/monolight/components/base.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/components/base.py
+@@ -0,0 +1,139 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from typing import (
++    NamedTuple,
++)
++
++from ..osc import (
++    MONOME_LED_OFF,
++    MonomeLedLevel,
++)
++
++_Dimensions = NamedTuple("Dimensions", [("height", int), ("width", int)])
++_Position = NamedTuple("Position", [("x", int), ("y", int)])
++
++
++class Dimensions(_Dimensions):
++
++    def __repr__(self) -> str:
++        return "height={}, width={}".format(*self)
++
++
++class Position(_Position):
++
++    def __repr__(self) -> str:
++        return "{}, {}".format(*self)
++
++
++class MonomeGrid:
++
++    def __init__(self, size: Dimensions) -> None:
++        from .layers import Layer  # noqa; break import loop
++        self.size = size
++        self.layers = []  # z-order, type: List[Layer]
++
++
++class LedSprite:
++
++    def __init__(
++        self,
++        size: Dimensions,
++        level: MonomeLedLevel = MONOME_LED_OFF
++    ) -> None:
++        self.size = size
++        self._levels = [level] * size.width * size.height
++
++    def _index(self, offset: Position):
++        return self.size.height * offset.y + self.size.width * offset.x
++
++    def set(self, offset: Position, level: MonomeLedLevel):
++        self._levels[self._index(offset)] = level
++
++    def get(self, offset: Position):
++        return self._levels[self._index(offset)]
++
++    def __iter__(self):
++        for off_x in range(self.size.width):
++            for off_y in range(self.size.height):
++                yield off_x, off_y, self.get(Position(x=off_x, y=off_y))
++
++
++class UIComponentInsertionError(Exception):
++    pass
++
++
++class UIComponentBase:
++
++    def __init__(self, name: str, size: Dimensions, offset: Position) -> None:
++        self.name = name
++        self.size = size
++        self.offset = offset
++        self._nw_corner = offset
++        self._se_corner = Position(
++            x=self.offset.x + self.size.width,
++            y=self.offset.y + self.size.height
++        )
++        self.children = set()
++
++    def __repr__(self):
++        return "<{}({}, size=({!r}), offset=({!r})>".format(
++            self.__class__.__name__, self.name, self.size, self.offset
++        )
++
++    def insert(self, new: "UIComponentBase") -> None:
++        if new in self.children:
++            raise UIComponentInsertionError(
++                "{!r} is already part of {!r}".format(new, self)
++            )
++        if not new.within(self):
++            raise UIComponentInsertionError(
++                "{!r} doesn't fit into {!r}".format(new, self)
++            )
++        for child in self.children:
++            if child.collides(new):
++                raise UIComponentInsertionError(
++                    "{!r} conflicts with {!r}".format(new, child)
++                )
++        self.children.add(new)
++
++    def collides(self, other: "UIComponentBase") -> bool:
++        """Return True if ``self`` and ``other`` overlap in any way."""
++
++        return all(
++            self._nw_corner.x <= other._se_corner.x,
++            self._se_corner.x >= other._nw_corner.x,
++            self._nw_corner.y <= other._se_corner.y,
++            self._se_corner.y >= other._nw_corner.y,
++        )
++
++    def within(self, other: "UIComponentBase") -> bool:
++        """Return True if ``self`` fits within ``other``."""
++
++        return all(
++            other._nw_corner.x >= self._nw_corner.x,
++            other._nw_corner.y >= self._nw_corner.y,
++            other._se_corner.x <= self._se_corner.x,
++            other._se_corner.y <= self._se_corner.y
++        )
++
++    def to_sprite(self) -> LedSprite:
++        return LedSprite(self.size)
++
++    # maybe that bool return type could become an enum or a composite:
++    def submit_input(self, offset: Position) -> bool:
++        return False
+diff --git a/apps/monolight/monolight/components/button.py b/apps/monolight/monolight/components/button.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/components/button.py
+@@ -0,0 +1,57 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from .base import (
++    Dimensions,
++    Position,
++    LedSprite,
++    UIComponentBase,
++)
++
++from ..osc import (
++    MONOME_LED_OFF,
++    MONOME_LED_ON,
++)
++
++
++class Button(UIComponentBase):
++
++    OFF = 0
++    ON = 1
++
++    # make the size configurable too?
++    def __init__(self, offset: Position, state: int) -> None:
++        self.offset = offset
++        self.state = Button.ON
++        self.children = None
++
++    def toggle(self) -> bool:  # previous state
++        rv = self.state
++        self.state = not self.state
++        return bool(rv)
++
++    def to_sprite(self):
++        return LedSprite(
++            Dimensions(1, 1),
++            MONOME_LED_ON if self.state is Button.ON else MONOME_LED_OFF,
++        )
++
++    def submit_input(self, offset: Position) -> bool:
++        if self.offset == offset:
++            self.toggle()
++            return True
++        return False
+diff --git a/apps/monolight/monolight/components/layers.py b/apps/monolight/monolight/components/layers.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/components/layers.py
+@@ -0,0 +1,45 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import monome
++
++from .base import (
++    Dimensions,
++    UIComponentBase,
++)
++from ..osc import MONOME_LED_OFF
++from ..types import TimeMonotonic
++
++
++class Layer(UIComponentBase):
++
++    def __init_(self, size: Dimensions):
++        self.size = size
++        self.led_buffer = monome.LedBuffer(
++            width=size.width, height=size.height
++        )
++
++    def _blit(self, component: UIComponentBase):
++        for off_x, off_y, level in component.to_sprite():
++            self.led_buffer.led_set(
++                component.offset.x + off_x, component.offset.y + off_y, level
++            )
++
++    def render(self, frame_ts: TimeMonotonic) -> None:
++        self.led_buffer.led_level_all(MONOME_LED_OFF)
++        for component in self.children:
++            self._blit(component)
 diff --git a/apps/monolight/monolight/osc.py b/apps/monolight/monolight/osc.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/osc.py
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,82 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -115,6 +396,43 @@ new file mode 100644
 +    MONOME_KEYPRESS_UP,
 +})
 +
++MONOME_LED_OFF = 0
++MONOME_LED_VERY_LOW_1 = 1
++MONOME_LED_VERY_LOW_2 = 2
++MONOME_LED_VERY_LOW_3 = 3
++MONOME_LED_LOW = MONOME_LED_LOW_1 = 4
++MONOME_LED_LOW_2 = 5
++MONOME_LED_LOW_3 = 6
++MONOME_LED_LOW_4 = 7
++MONOME_LED_MEDIUM = MONOME_LED_MEDIUM_1 = 8
++MONOME_LED_MEDIUM_2 = 9
++MONOME_LED_MEDIUM_3 = 10
++MONOME_LED_MEDIUM_4 = 11
++MONOME_LED_HIGH = MONOME_LED_HIGH_1 = 12
++MONOME_LED_HIGH_2 = 13
++MONOME_LED_HIGH_3 = 14
++MONOME_LED_HIGH_4 = MONOME_LED_ON = 15
++MONOME_VARIBRIGHT_LEVELS = (
++    MONOME_LED_OFF,
++    MONOME_LED_VERY_LOW_1,
++    MONOME_LED_VERY_LOW_2,
++    MONOME_LED_VERY_LOW_3,
++    MONOME_LED_LOW,
++    MONOME_LED_LOW_2,
++    MONOME_LED_LOW_3,
++    MONOME_LED_LOW_4,
++    MONOME_LED_MEDIUM,
++    MONOME_LED_MEDIUM_2,
++    MONOME_LED_MEDIUM_3,
++    MONOME_LED_MEDIUM_4,
++    MONOME_LED_HIGH,
++    MONOME_LED_HIGH_2,
++    MONOME_LED_HIGH_3,
++    MONOME_LED_HIGH_4,
++)
++
++MonomeLedLevel = int
++
 +
 +class MonomeApplication(monome.Monome):
 +
@@ -134,11 +452,34 @@ new file mode 100644
 +        for app in device:
 +            if isinstance(app, MonomeApplication):
 +                method(app, *args, **kwargs)
+diff --git a/apps/monolight/monolight/types.py b/apps/monolight/monolight/types.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/types.py
+@@ -0,0 +1,18 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++TimeMonotonic = float
 diff --git a/apps/monolight/monolight/ui.py b/apps/monolight/monolight/ui.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui.py
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,124 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -157,43 +498,51 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +import asyncio
-+import collections
 +import monome
 +import logging
 +
++from typing import (
++    NamedTuple,
++)
++
++from lightsc import LightsClient
 +from lightsc.requests import (
 +    SetLightFromHSBK,
 +    PowerOff,
 +    PowerOn,
 +    PowerToggle,
 +)
-+
 +from .osc import (
 +    MONOME_KEYPRESS_DOWN,
 +    monome_apply,
 +)
++
 +logger = logging.getLogger("monolight.ui")
 +
 +_event_queue = None
 +
-+_KeyPress = collections.namedtuple("_KeyPress", ("x", "y", "state"))
++_KeyPress = NamedTuple("_KeyPress", [("x", int), ("y", int), ("state", int)])
 +
 +_STOP_SENTINEL = object()
 +
 +
-+def draw(serialosc):
++def draw(serialosc: monome.SerialOsc):
 +    buf = monome.LedBuffer(8, 8)
 +    buf.led_set(0, 0, 1)
-+    for x in range(0, 5):
++    for x in range(0, 6):
 +        buf.led_set(x, 7, 1)
 +    monome_apply(serialosc, buf.render)
 +
 +
-+def hide(serialosc):
++def hide(serialosc: monome.SerialOsc):
 +    monome_apply(serialosc, monome.Monome.led_all, 0)
 +
 +
-+async def start(loop, lightsd, serialosc):
++async def start(
++    loop: asyncio.AbstractEventLoop,
++    lightsd: LightsClient,
++    serialosc: monome.SerialOsc,
++):
 +    global _event_queue
 +
 +    _event_queue = asyncio.Queue()
@@ -243,6 +592,8 @@ new file mode 100644
 +                    ["candle"], 47.469443, 0.2, 0.15, 3500, 600
 +                ))
 +                batch.apply(PowerOn(["#br"]))
++        elif keypress.x == 5:
++            pass
 +
 +
 +def stop():
@@ -250,7 +601,7 @@ new file mode 100644
 +        _event_queue.put_nowait(_STOP_SENTINEL)
 +
 +
-+def submit_keypress(x, y, state):
++def submit_keypress(x: int, y: int, state: int):
 +    if _event_queue is not None:
 +        _event_queue.put_nowait(_KeyPress(x, y, state))
 diff --git a/apps/monolight/setup.py b/apps/monolight/setup.py
@@ -382,7 +733,7 @@ diff --git a/clients/python/lightsc/lightsc/__init__.py b/clients/python/lightsc
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/__init__.py
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,25 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -401,6 +752,7 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +from .client import (  # noqa
++    LightsClient,
 +    create_lightsd_connection,
 +    create_async_lightsd_connection,
 +)
@@ -411,7 +763,7 @@ diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/l
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/client.py
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,326 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -664,6 +1016,11 @@ new file mode 100644
 +
 +    def batch(self) -> "_AsyncJSONRPCBatch":
 +        return _AsyncJSONRPCBatch(self)
++
++
++# LightsClient could eventually point to a different but api-compatible class
++# someday:
++LightsClient = AsyncJSONRPCLightsClient
 +
 +
 +class _AsyncJSONRPCBatch:
