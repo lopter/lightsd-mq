@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  3539266939bc4808efd5c32db5e1627b2948210f
+# Parent  1bc74610c471047ba4ac28e55c77c44db07b1142
 Start to setup some slides for 33C3
 
 Hopefully my talk proposal will be selected!
@@ -1692,7 +1692,7 @@ diff --git a/slides/33c3/33c3.tex b/slides/33c3/33c3.tex
 new file mode 100644
 --- /dev/null
 +++ b/slides/33c3/33c3.tex
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,89 @@
 +\documentclass[xcolor={usenames,svgnames}]{beamer}
 +
 +\usepackage[american]{babel}
@@ -1717,16 +1717,19 @@ new file mode 100644
 +% carrément des targets différentes pour être sûr de pas te tromper).
 +
 +\pdfnote{% Notes:
-+- Monolithic approach to solve the problem,\
++- Monolithic approach to solve the problem;\
 +- Est-ce que l'argument de l'isolation fonctionne ou IoTivity le résoud aussi?\
 +- Je ressens pas le besoin d'investir dans plus de domotique donc que lightsd\
-+soit restreint ne me dérange pas, puis la stabilitité m'arrange.\
++  soit restreint ne me dérange pas, puis la stabilitité m'arrange;\
 +- Ce qui peut faire la différence avec IoTivity c'est la documentation, en
-+bonus un plan pour vraiment extend.\
++  bonus un plan pour vraiment extend;\
++- Tu peux aussi dire: « voilà, moi j'ai fais ça, je sais pas trop comment\
++  fonctionne IoTivity et les autres projets, mais si vous avez été déçu, venez\
++  jeter un coup d'œil. »\
 +- Interfaces are bad because they encourage inheritance, I believe composition\
-+is a better design pattern. (Though you can't really say the \"mixin\" approach\
-+is composition, it really is inheritance, like interfaces, in the sense that it\
-+delegates all attributes of the composite object).\
++  is a better design pattern. (Though you can't really say the \"mixin\"\
++  approach is composition, it really is inheritance, like interfaces, in the \
++  sense that it delegates all attributes of the composite object).\
 +}
 +
 +\begin{frame}{Being a daemon}
