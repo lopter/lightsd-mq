@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  7e908ae2e0c7088791fb4a442d86d7687a52b956
+# Parent  b6aea48f2f5da909251852b9864d616b3e2fe7de
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -18,7 +18,7 @@ diff --git a/apps/monolight/monolight/cli.py b/apps/monolight/monolight/cli.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/cli.py
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,82 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -50,49 +50,62 @@ new file mode 100644
 +
 +ENCODING = locale.getpreferredencoding()
 +
-+logging.basicConfig(level=logging.INFO)
-+
 +
 +@click.command()
 +@click.option("--serialoscd-host", default="127.0.0.1")
 +@click.option("--serialoscd-port", type=click.IntRange(0, 2**16 - 1))
-+@click.option("--lightsd-url")
-+def main(serialoscd_host: str, serialoscd_port: int, lightsd_url: str):
++@click.option("--monome-id", default="*", help="The id of the monome to use")
++@click.option(
++    "--lightsd-url", help="tcp+jsonrpc://host:port or unix+jsonrpc:///a/path"
++)
++def main(
++    serialoscd_host: str,
++    serialoscd_port: int,
++    monome_id: str,
++    lightsd_url: str,
++) -> None:
++    logging.basicConfig(level=logging.INFO)
++
++    # NOTE: this isn't good enough on Windows unless you pass --lightsd-url:
++    # discovering lightsd's socket involves using asyncio.subprocess which
++    # requires an IOCP event loop, which doesn't support UDP connections.
 +    loop = asyncio.get_event_loop()
 +
-+    monome_future = asyncio.Future()
++    # Connect to lightsd, serialoscd and wait for everything to come online:
 +    grid = ui.MonomeGrid()
-+
++    monome_ready = asyncio.Future()
++    App = functools.partial(
++        osc.MonomeApplication, monome_ready, grid.submit_input
++    )
 +    tasks = asyncio.gather(
 +        loop.create_task(lightsc.create_async_lightsd_connection(lightsd_url)),
-+        loop.create_task(monome.create_serialosc_connection(functools.partial(
-+            osc.MonomeApplication, monome_future, grid.submit_input
-+        ))),
-+        asyncio.ensure_future(monome_future)
++        loop.create_task(monome.create_serialosc_connection({monome_id: App})),
++        asyncio.ensure_future(monome_ready)
 +    )
 +    loop.run_until_complete(tasks)
-+    lightsd, serialosc, monome_app = tasks.result()
 +
-+    grid.set_monome(monome_app)
++    lightsd, serialosc, monome_app = tasks.result()
++    # We don't need this anymore, MonomeGrid.monome maintains its own (UDP)
++    # connection once the Monome has been discovered:
++    serialosc.disconnect()
++    grid.connect_monome(monome_app, loop)
++
++    ui_task = ui.start(loop, lightsd, grid)
 +
 +    if hasattr(loop, "add_signal_handler"):
 +        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
-+            loop.add_signal_handler(signum, ui.stop)
-+
-+    # TODO: make which monome instance to use something configurable
-+    ui_task = loop.create_task(ui.start(loop, lightsd, grid))
++            loop.add_signal_handler(signum, ui_task.cancel)
 +
 +    loop.run_until_complete(ui_task)
 +
-+    serialosc.disconnect()
++    grid.disconnect_monome()
 +    loop.run_until_complete(lightsd.close())
-+
 +    loop.close()
 diff --git a/apps/monolight/monolight/osc.py b/apps/monolight/monolight/osc.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/osc.py
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,80 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -111,10 +124,13 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +import asyncio
++import logging
 +import monome
 +
 +from enum import IntEnum
 +from typing import Callable
++
++logger = logging.getLogger("monolight.osc")
 +
 +
 +class MonomeKeyState(IntEnum):
@@ -147,18 +163,29 @@ new file mode 100644
 +
 +    def __init__(
 +        self,
-+        future: asyncio.Future,
++        ready_future: asyncio.Future,
 +        keypress_callback: Callable[[int, int, int], None]
 +    ) -> None:
 +        monome.Monome.__init__(self, "/monolight")
-+        future.set_result(self)
-+        self._keypress_callback = keypress_callback
++        self._ready = False
++        self._ready_future = ready_future
++        self._keypress_cb = keypress_callback
 +
 +    def ready(self) -> None:
++        if self._ready_future.done():
++            logger.warning(
++                "More than one monome was discovered, monolight will use the "
++                "first one found, please pass --monome-id."
++            )
++            return
++
 +        self.led_all(MonomeLedLevel.OFF)
++        self._ready = True
++        self._ready_future.set_result(self)
 +
 +    def grid_key(self, x: int, y: int, s: int):
-+        self._keypress_callback(x, y, s)
++        if self._ready is True:
++            self._keypress_cb(x, y, s)
 diff --git a/apps/monolight/monolight/types.py b/apps/monolight/monolight/types.py
 new file mode 100644
 --- /dev/null
@@ -450,7 +477,7 @@ diff --git a/apps/monolight/monolight/ui/grid.py b/apps/monolight/monolight/ui/g
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/grid.py
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,49 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -468,6 +495,8 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
++import asyncio
++
 +from .. import osc
 +from .components.layer import Layer
 +from .types import Dimensions, Keypress, Position
@@ -479,15 +508,25 @@ new file mode 100644
 +        self.size = None  # type: Dimensions
 +        self.layers = None  # z-order, type: List[Layer]
 +        self.monome = None  # type: osc.MonomeApplication
++        self.input_queue = None  # type: asyncio.Queue
 +
-+    def set_monome(self, grid: osc.MonomeApplication) -> None:
-+        self.size = Dimensions(height=grid.height, width=grid.width)
++    def connect_monome(
++        self,
++        monome: osc.MonomeApplication,
++        loop: asyncio.AbstractEventLoop = None
++    ) -> None:
++        self.monome = monome
++        self.size = Dimensions(height=monome.height, width=monome.width)
 +        self.layers = [Layer(self.size)]
-+        self.grid = grid
++        self.input_queue = asyncio.Queue(loop=loop)
++
++    def disconnect_monome(self) -> None:
++        self.monome.disconnect()
++        self.size = self.layers = self.momome = None
 +
 +    def submit_input(self, x: int, y: int, s: int) -> None:
-+        if self.layers:
-+            self.layers[-1].submit_input(Keypress(Position(x, y), s))
++        if self.input_queue is not None:
++            self.put_nowait(self.input_queue, Keypress(Position(x, y), s))
 diff --git a/apps/monolight/monolight/ui/types.py b/apps/monolight/monolight/ui/types.py
 new file mode 100644
 --- /dev/null
@@ -554,7 +593,7 @@ diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,46 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -573,112 +612,34 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +import asyncio
-+import monome
 +import logging
 +
-+from typing import (
-+    NamedTuple,
-+)
-+
 +from lightsc import LightsClient
-+from lightsc.requests import (
-+    SetLightFromHSBK,
-+    PowerOff,
-+    PowerOn,
-+    PowerToggle,
-+)
-+from ..osc import (
-+    MONOME_KEYPRESS_DOWN,
-+    monome_apply,
-+)
++
++from .grid import MonomeGrid
 +
 +logger = logging.getLogger("monolight.ui")
 +
-+_event_queue = None
 +
-+_KeyPress = NamedTuple("_KeyPress", [("x", int), ("y", int), ("state", int)])
-+
-+_STOP_SENTINEL = object()
-+
-+
-+def draw(serialosc: monome.SerialOsc):
-+    buf = monome.LedBuffer(8, 8)
-+    buf.led_set(0, 0, 1)
-+    for x in range(0, 6):
-+        buf.led_set(x, 7, 1)
-+    monome_apply(serialosc, buf.render)
++async def _refresh(
++    loop: asyncio.AbstractEventLoop, lightsd: LightsClient, grid: MonomeGrid,
++) -> None:
++    pass
 +
 +
-+def hide(serialosc: monome.SerialOsc):
-+    monome_apply(serialosc, monome.Monome.led_all, 0)
++async def _process_inputs(
++    loop: asyncio.AbstractEventLoop, lightsd: LightsClient, grid: MonomeGrid,
++) -> None:
++    pass
 +
 +
-+async def start(
-+    loop: asyncio.AbstractEventLoop,
-+    lightsd: LightsClient,
-+    serialosc: monome.SerialOsc,
-+):
-+    global _event_queue
-+
-+    _event_queue = asyncio.Queue()
-+
-+    hidden = True
-+
-+    while True:
-+        keypress = await _event_queue.get()
-+        if keypress is _STOP_SENTINEL:
-+            hide(serialosc)
-+            _event_queue = None
-+            return
-+
-+        if not hidden:
-+            draw(serialosc)
-+
-+        logger.info("keypress: x={}, y={}, state={}".format(*keypress))
-+
-+        if keypress.state != MONOME_KEYPRESS_DOWN:
-+            continue
-+        if keypress.y != 7 and keypress.y != 0:
-+            continue
-+        if keypress.x == 0:
-+            if keypress.y == 0:
-+                hidden = not hidden
-+                if hidden:
-+                    hide(serialosc)
-+                continue
-+            await lightsd.apply(PowerOff(["*"]))
-+        if keypress.y != 7:
-+            continue
-+        if keypress.x == 1:
-+            await lightsd.apply(PowerOn(["*"]))
-+        elif keypress.x == 2:
-+            await lightsd.apply(PowerToggle(["neko"]))
-+        elif keypress.x == 3:
-+            await lightsd.apply(PowerToggle(["fugu"]))
-+        elif keypress.x == 4:
-+            async with lightsd.batch() as batch:
-+                batch.apply(SetLightFromHSBK(
-+                    ["#tower"], 37.469443, 1.0, 0.25, 3500, 600
-+                ))
-+                batch.apply(SetLightFromHSBK(
-+                    ["fugu", "buzz"], 47.469443, 0.2, 0.2, 3500, 600
-+                ))
-+                batch.apply(SetLightFromHSBK(
-+                    ["candle"], 47.469443, 0.2, 0.15, 3500, 600
-+                ))
-+                batch.apply(PowerOn(["#br"]))
-+        elif keypress.x == 5:
-+            pass
-+
-+
-+def stop():
-+    if _event_queue is not None:
-+        _event_queue.put_nowait(_STOP_SENTINEL)
-+
-+
-+def submit_keypress(x: int, y: int, state: int):
-+    if _event_queue is not None:
-+        _event_queue.put_nowait(_KeyPress(x, y, state))
++def start(
++    loop: asyncio.AbstractEventLoop, lightsd: LightsClient, grid: MonomeGrid,
++) -> None:
++    return asyncio.gather(
++        loop.create_task(_refresh(loop, lightsd, grid)),
++        loop.create_task(_process_inputs(loop, lightsd, grid))
++    )
 diff --git a/apps/monolight/setup.py b/apps/monolight/setup.py
 new file mode 100644
 --- /dev/null
