@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  b6aea48f2f5da909251852b9864d616b3e2fe7de
+# Parent  088c8c3fe99979f2fe7792adfdd719b03f5deef7
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -14,11 +14,195 @@ diff --git a/.hgignore b/.hgignore
 +.*\.egg-info$
 diff --git a/apps/monolight/monolight/__init__.py b/apps/monolight/monolight/__init__.py
 new file mode 100644
-diff --git a/apps/monolight/monolight/cli.py b/apps/monolight/monolight/cli.py
+diff --git a/apps/monolight/monolight/bulbs.py b/apps/monolight/monolight/bulbs.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/cli.py
-@@ -0,0 +1,82 @@
++++ b/apps/monolight/monolight/bulbs.py
+@@ -0,0 +1,71 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import asyncio
++import collections
++
++from lightsc.requests import GetLightState
++
++from . import grids
++
++DEFAULT_REFRESH_DELAY = 0.1
++KEEPALIVE_DELAY = 60
++
++lightsd = None
++
++bulbs_by_label = {}
++bulbs_by_group = collections.defaultdict(set)
++
++_refresh_task = None
++
++
++async def _poll(
++    loop: asyncio.AbstractEventLoop,
++    refresh_delay_s: float
++) -> None:
++    while True:
++        bulbs = await lightsd.apply(GetLightState(["*"]))
++
++        bulbs_by_label = {}
++        bulbs_by_group = collections.defaultdict(set)
++        for b in bulbs:
++            bulbs_by_label[b.label] = b
++            for t in b.tags:
++                bulbs_by_group[t].add(b)
++
++        delay = refresh_delay_s if grids.running else KEEPALIVE_DELAY
++        asyncio.sleep(delay, loop=loop)
++
++
++async def start_lightsd_connection(
++    loop: asyncio.AbstractEventLoop,
++    lightsd_url: str,
++    refresh_delay_s: float = DEFAULT_REFRESH_DELAY,
++) -> None:
++    global _refresh_task, lightsd
++
++    lightsd = await lightsd.create_async_lightsd_connection(lightsd_url)
++    _refresh_task = loop.create_task(_poll(loop, refresh_delay_s))
++
++
++async def stop_all() -> None:
++    global _refresh_task, lightsd
++
++    _refresh_task.cancel()
++    await asyncio.wait_for(_refresh_task)
++    await lightsd.close()
++    lightsd = _refresh_task = None
+diff --git a/apps/monolight/monolight/grids.py b/apps/monolight/monolight/grids.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/grids.py
+@@ -0,0 +1,103 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# # This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++import asyncio
++import functools
++import logging
++import monome
++
++from enum import IntEnum
++
++from .ui.layer import Layer
++from .types import Dimensions, Position
++
++
++logger = logging.getLogger("monolight.grids")
++
++running = set()
++
++
++class KeyState(IntEnum):
++
++    DOWN = 1
++    UP = 0
++
++
++class LedLevel(IntEnum):
++
++    OFF = 0
++    VERY_LOW_1 = 1
++    VERY_LOW_2 = 2
++    VERY_LOW_3 = 3
++    LOW = LOW_1 = 4
++    LOW_2 = 5
++    LOW_3 = 6
++    LOW_4 = 7
++    MEDIUM = MEDIUM_1 = 8
++    MEDIUM_2 = 9
++    MEDIUM_3 = 10
++    MEDIUM_4 = 11
++    HIGH = HIGH_1 = 12
++    HIGH_2 = 13
++    HIGH_3 = 14
++    HIGH_4 = ON = 15
++
++
++class AIOSCMonolightApp(monome.Monome):
++
++    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
++        monome.Monome.__init__(self, "/monolight")
++        self._grid = None  # type: MonomeGrid
++
++    def ready(self) -> None:
++        self._grid = MonomeGrid(self)
++        running.add(self)
++
++    def disconnect(self) -> None:
++        running.remove(self)
++        monome.Monome.disconnect(self)
++
++    def grid_key(self, x: int, y: int, s: int) -> None:
++        if self._grid is not None:
++            self._grid.input_queue.put_nowait(Position(x, y), s)
++
++
++class MonomeGrid:
++
++    def __init__(self, monome: AIOSCMonolightApp) -> None:
++        self.size = Dimensions(height=monome.height, width=monome.width)
++        self.layers = [Layer("root", self.size)]
++        self.input_queue = asyncio.Queue(loop=monome.loop)
++        self.monome = monome
++
++
++_serialosc = None
++
++async def start_serialosc_connection(
++    loop: asyncio.AbstractEventLoop,
++    monome_id: str = "*",
++) -> None:
++    global _serialosc
++
++    App = functools.partial(AIOSCMonolightApp, loop)
++    _serialosc = await monome.create_serialosc_connection({monome_id: App})
++
++
++async def stop_all() -> None:
++    if _serialosc is not None:
++        _serialosc.disconnect()
++    for grid in running:
++        grid.disconnect()
+diff --git a/apps/monolight/monolight/monolight.py b/apps/monolight/monolight/monolight.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/monolight.py
+@@ -0,0 +1,75 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -38,17 +222,10 @@ new file mode 100644
 +
 +import asyncio
 +import click
-+import functools
-+import lightsc
-+import locale
 +import logging
-+import monome
 +import signal
 +
-+from . import osc
-+from . import ui
-+
-+ENCODING = locale.getpreferredencoding()
++from . import bulbs, grids, ui
 +
 +
 +@click.command()
@@ -71,26 +248,21 @@ new file mode 100644
 +    # requires an IOCP event loop, which doesn't support UDP connections.
 +    loop = asyncio.get_event_loop()
 +
-+    # Connect to lightsd, serialoscd and wait for everything to come online:
-+    grid = ui.MonomeGrid()
-+    monome_ready = asyncio.Future()
-+    App = functools.partial(
-+        osc.MonomeApplication, monome_ready, grid.submit_input
-+    )
-+    tasks = asyncio.gather(
-+        loop.create_task(lightsc.create_async_lightsd_connection(lightsd_url)),
-+        loop.create_task(monome.create_serialosc_connection({monome_id: App})),
-+        asyncio.ensure_future(monome_ready)
-+    )
-+    loop.run_until_complete(tasks)
++    click.echo("Connecting to serialoscd and lightsd...")
 +
-+    lightsd, serialosc, monome_app = tasks.result()
-+    # We don't need this anymore, MonomeGrid.monome maintains its own (UDP)
-+    # connection once the Monome has been discovered:
-+    serialosc.disconnect()
-+    grid.connect_monome(monome_app, loop)
++    # Connect to lightsd and serialoscd then wait for everything to come online:
++    loop.run_until_complete(asyncio.gather(
++        loop.create_task(bulbs.start_lightsd_connection(loop, lightsd_url)),
++        loop.create_task(grids.start_serialosc_connection(loop, monome_id)),
++    ))
 +
-+    ui_task = ui.start(loop, lightsd, grid)
++    click.echo("serialoscd running at {}:{}".format(
++        serialoscd_host, serialoscd_port
++    ))
++    click.echo("lightsd running at {}".format(lightsd_url))
++
++    click.echo("Starting ui...")
++    ui_task = ui.start(loop)
 +
 +    if hasattr(loop, "add_signal_handler"):
 +        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
@@ -98,14 +270,19 @@ new file mode 100644
 +
 +    loop.run_until_complete(ui_task)
 +
-+    grid.disconnect_monome()
-+    loop.run_until_complete(lightsd.close())
++    click.echo("ui stopped, disconnecting from serialoscd and lightsd...")
++
++    loop.run_until_complete(asyncio.gather(
++        loop.create_task(grids.stop_all()),
++        loop.create_task(bulbs.stop_all())
++    ))
++
 +    loop.close()
-diff --git a/apps/monolight/monolight/osc.py b/apps/monolight/monolight/osc.py
+diff --git a/apps/monolight/monolight/types.py b/apps/monolight/monolight/types.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/osc.py
-@@ -0,0 +1,80 @@
++++ b/apps/monolight/monolight/types.py
+@@ -0,0 +1,36 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -123,73 +300,29 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+import asyncio
-+import logging
-+import monome
++from typing import NamedTuple
 +
-+from enum import IntEnum
-+from typing import Callable
-+
-+logger = logging.getLogger("monolight.osc")
++_Dimensions = NamedTuple("Dimensions", [("height", int), ("width", int)])
++_Position = NamedTuple("Position", [("x", int), ("y", int)])
 +
 +
-+class MonomeKeyState(IntEnum):
++class Dimensions(_Dimensions):
 +
-+    DOWN = 1
-+    UP = 0
-+
-+
-+class MonomeLedLevel(IntEnum):
-+
-+    OFF = 0
-+    VERY_LOW_1 = 1
-+    VERY_LOW_2 = 2
-+    VERY_LOW_3 = 3
-+    LOW = LOW_1 = 4
-+    LOW_2 = 5
-+    LOW_3 = 6
-+    LOW_4 = 7
-+    MEDIUM = MEDIUM_1 = 8
-+    MEDIUM_2 = 9
-+    MEDIUM_3 = 10
-+    MEDIUM_4 = 11
-+    HIGH = HIGH_1 = 12
-+    HIGH_2 = 13
-+    HIGH_3 = 14
-+    HIGH_4 = ON = 15
++    def __repr__(self) -> str:
++        return "height={}, width={}".format(*self)
 +
 +
-+class MonomeApplication(monome.Monome):
++class Position(_Position):
 +
-+    def __init__(
-+        self,
-+        ready_future: asyncio.Future,
-+        keypress_callback: Callable[[int, int, int], None]
-+    ) -> None:
-+        monome.Monome.__init__(self, "/monolight")
-+        self._ready = False
-+        self._ready_future = ready_future
-+        self._keypress_cb = keypress_callback
++    def __repr__(self) -> str:
++        return "{}, {}".format(*self)
 +
-+    def ready(self) -> None:
-+        if self._ready_future.done():
-+            logger.warning(
-+                "More than one monome was discovered, monolight will use the "
-+                "first one found, please pass --monome-id."
-+            )
-+            return
 +
-+        self.led_all(MonomeLedLevel.OFF)
-+        self._ready = True
-+        self._ready_future.set_result(self)
-+
-+    def grid_key(self, x: int, y: int, s: int):
-+        if self._ready is True:
-+            self._keypress_cb(x, y, s)
-diff --git a/apps/monolight/monolight/types.py b/apps/monolight/monolight/types.py
++TimeMonotonic = float
+diff --git a/apps/monolight/monolight/ui/__init__.py b/apps/monolight/monolight/ui/__init__.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/types.py
++++ b/apps/monolight/monolight/ui/__init__.py
 @@ -0,0 +1,18 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
@@ -208,12 +341,12 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+TimeMonotonic = float
-diff --git a/apps/monolight/monolight/ui/__init__.py b/apps/monolight/monolight/ui/__init__.py
++from .ui import start  # noqa
+diff --git a/apps/monolight/monolight/ui/base.py b/apps/monolight/monolight/ui/base.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/ui/__init__.py
-@@ -0,0 +1,19 @@
++++ b/apps/monolight/monolight/ui/base.py
+@@ -0,0 +1,122 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -231,56 +364,9 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+from .grid import MonomeGrid  # noqa
-+from .ui import start, stop, submit_keypress  # noqa
-diff --git a/apps/monolight/monolight/ui/components/__init__.py b/apps/monolight/monolight/ui/components/__init__.py
-new file mode 100644
---- /dev/null
-+++ b/apps/monolight/monolight/ui/components/__init__.py
-@@ -0,0 +1,20 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++from typing import Iterator, Tuple
 +
-+from .base import MonomeGrid  # noqa
-+from .layers import Layer  # noqa
-+from .button import button  # noqa
-diff --git a/apps/monolight/monolight/ui/components/base.py b/apps/monolight/monolight/ui/components/base.py
-new file mode 100644
---- /dev/null
-+++ b/apps/monolight/monolight/ui/components/base.py
-@@ -0,0 +1,110 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
-+
-+from ...osc import MonomeLedLevel
++from .. import grids
 +from ..types import Dimensions, Position
 +
 +
@@ -289,21 +375,21 @@ new file mode 100644
 +    def __init__(
 +        self,
 +        size: Dimensions,
-+        level: MonomeLedLevel = MonomeLedLevel.OFF
++        level: grids.LedLevel = grids.LedLevel.OFF
 +    ) -> None:
 +        self.size = size
 +        self._levels = [level] * size.width * size.height
 +
-+    def _index(self, offset: Position):
++    def _index(self, offset: Position) -> int:
 +        return self.size.height * offset.y + self.size.width * offset.x
 +
-+    def set(self, offset: Position, level: MonomeLedLevel):
++    def set(self, offset: Position, level: grids.LedLevel) -> None:
 +        self._levels[self._index(offset)] = level
 +
-+    def get(self, offset: Position):
++    def get(self, offset: Position) -> grids.LedLevel:
 +        return self._levels[self._index(offset)]
 +
-+    def __iter__(self):
++    def __iter__(self) -> Iterator[Tuple[int, int, grids.LedLevel]]:
 +        for off_x in range(self.size.width):
 +            for off_y in range(self.size.height):
 +                yield off_x, off_y, self.get(Position(x=off_x, y=off_y))
@@ -324,6 +410,7 @@ new file mode 100644
 +            x=self.offset.x + self.size.width,
 +            y=self.offset.y + self.size.height
 +        )
++        self.parent = None  # type: UIComponentBase
 +        self.children = set()
 +
 +    def __repr__(self):
@@ -345,6 +432,7 @@ new file mode 100644
 +                raise UIComponentInsertionError(
 +                    "{!r} conflicts with {!r}".format(new, child)
 +                )
++        new.parent = self
 +        self.children.add(new)
 +
 +    def collides(self, other: "UIComponentBase") -> bool:
@@ -370,14 +458,22 @@ new file mode 100644
 +    def to_sprite(self) -> LedSprite:
 +        return LedSprite(self.size)
 +
++    def _handle_input(self, offset: Position) -> None:
++        pass
++
 +    # maybe that bool return type could become an enum or a composite:
-+    def submit_input(self, offset: Position) -> bool:
-+        return False
-diff --git a/apps/monolight/monolight/ui/components/button.py b/apps/monolight/monolight/ui/components/button.py
++    def submit_input(
++        self, position: Position, key_state: grids.KeyState
++    ) -> bool:
++        if not self.collides(UIComponentBase(Dimensions(1, 1), position)):
++            return False
++        self._handle_input(position - self.offset, key_state)
++        return True
+diff --git a/apps/monolight/monolight/ui/button.py b/apps/monolight/monolight/ui/button.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/ui/components/button.py
-@@ -0,0 +1,49 @@
++++ b/apps/monolight/monolight/ui/button.py
+@@ -0,0 +1,67 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -395,43 +491,61 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
++from typing import Callable
++
++from .. import grids
 +from .base import LedSprite, UIComponentBase
-+from ...osc import MONOME_LED_OFF, MONOME_LED_ON
 +from ..types import Dimensions, Position
++
++OFF = 0
++ON = 1
 +
 +
 +class Button(UIComponentBase):
 +
-+    OFF = 0
-+    ON = 1
-+
 +    # make the size configurable too?
-+    def __init__(self, offset: Position, state: int) -> None:
-+        self.offset = offset
-+        self.state = Button.ON
-+        self.children = None
++    def __init__(
++        self,
++        name: str,
++        offset: Position,
++        state: int,
++        action: Callable[..., None]  # XXX
++    ) -> None:
++        UIComponentBase.__init__(self, name, Dimensions(1, 1), offset)
++        self.action = action
++        self.state = state
 +
-+    def toggle(self) -> bool:  # previous state
++    def _handle_input(
++        self, offset: Position, key_state: grids.KeyState
++    ) -> bool:
++        if key_state == grids.KeyState.DOWN:
++            self.action()
++
++
++class ToggleButton(Button):
++
++    def _handle_input(
++        self, offset: Position, key_state: grids.KeyState
++    ) -> bool:
++        if key_state == grids.KeyState.DOWN:
++            self.toggle()
++            self.action(self.state)
++
++    def toggle(self) -> bool:  # returns previous state
 +        rv = self.state
 +        self.state = not self.state
 +        return bool(rv)
 +
-+    def to_sprite(self):
++    def to_sprite(self) -> None:
 +        return LedSprite(
 +            Dimensions(1, 1),
-+            MONOME_LED_ON if self.state is Button.ON else MONOME_LED_OFF,
++            grids.LedLevel.ON if self.state is ON else grids.LedLevel.OFF,
 +        )
-+
-+    def submit_input(self, offset: Position) -> bool:
-+        if self.offset == offset:
-+            self.toggle()
-+            return True
-+        return False
-diff --git a/apps/monolight/monolight/ui/components/layer.py b/apps/monolight/monolight/ui/components/layer.py
+diff --git a/apps/monolight/monolight/ui/layer.py b/apps/monolight/monolight/ui/layer.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/ui/components/layer.py
-@@ -0,0 +1,41 @@
++++ b/apps/monolight/monolight/ui/layer.py
+@@ -0,0 +1,47 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -451,17 +565,23 @@ new file mode 100644
 +
 +import monome
 +
++from .. import grids
 +from .base import UIComponentBase
-+from ...osc import MONOME_LED_OFF
-+from ..types import Dimensions
-+from ...types import TimeMonotonic
++from ..types import Dimensions, Position, TimeMonotonic
 +
 +
 +class Layer(UIComponentBase):
 +
-+    def __init_(self, size: Dimensions):
-+        self.size = size
++    def __init_(self, name: str, size: Dimensions):
++        UIComponentBase.__init__(self, name, size, Position(0, 0))
 +        self.led_buffer = monome.LedBuffer(width=size.width, height=size.height)
++
++    def _handle_input(
++        self, position: Position, key_state: grids.KeyState
++    ) -> bool:
++        for component in self.children:
++            if component.submit_input(position, key_state):
++                break
 +
 +    def _blit(self, component: UIComponentBase):
 +        for off_x, off_y, level in component.to_sprite():
@@ -470,130 +590,14 @@ new file mode 100644
 +            )
 +
 +    def render(self, frame_ts: TimeMonotonic) -> None:
-+        self.led_buffer.led_level_all(MONOME_LED_OFF)
++        self.led_buffer.led_level_all(grids.LedLevel.OFF)
 +        for component in self.children:
 +            self._blit(component)
-diff --git a/apps/monolight/monolight/ui/grid.py b/apps/monolight/monolight/ui/grid.py
-new file mode 100644
---- /dev/null
-+++ b/apps/monolight/monolight/ui/grid.py
-@@ -0,0 +1,49 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
-+
-+import asyncio
-+
-+from .. import osc
-+from .components.layer import Layer
-+from .types import Dimensions, Keypress, Position
-+
-+
-+class MonomeGrid:
-+
-+    def __init__(self) -> None:
-+        self.size = None  # type: Dimensions
-+        self.layers = None  # z-order, type: List[Layer]
-+        self.monome = None  # type: osc.MonomeApplication
-+        self.input_queue = None  # type: asyncio.Queue
-+
-+    def connect_monome(
-+        self,
-+        monome: osc.MonomeApplication,
-+        loop: asyncio.AbstractEventLoop = None
-+    ) -> None:
-+        self.monome = monome
-+        self.size = Dimensions(height=monome.height, width=monome.width)
-+        self.layers = [Layer(self.size)]
-+        self.input_queue = asyncio.Queue(loop=loop)
-+
-+    def disconnect_monome(self) -> None:
-+        self.monome.disconnect()
-+        self.size = self.layers = self.momome = None
-+
-+    def submit_input(self, x: int, y: int, s: int) -> None:
-+        if self.input_queue is not None:
-+            self.put_nowait(self.input_queue, Keypress(Position(x, y), s))
-diff --git a/apps/monolight/monolight/ui/types.py b/apps/monolight/monolight/ui/types.py
-new file mode 100644
---- /dev/null
-+++ b/apps/monolight/monolight/ui/types.py
-@@ -0,0 +1,57 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
-+
-+from typing import NamedTuple
-+
-+from .. import osc
-+
-+_Dimensions = NamedTuple("Dimensions", [("height", int), ("width", int)])
-+_Position = NamedTuple("Position", [("x", int), ("y", int)])
-+
-+
-+class Dimensions(_Dimensions):
-+
-+    def __repr__(self) -> str:
-+        return "height={}, width={}".format(*self)
-+
-+
-+class Position(_Position):
-+
-+    def __repr__(self) -> str:
-+        return "{}, {}".format(*self)
-+
-+_Keypress = NamedTuple("KeyPress", [
-+    ("position", Position), ("state", osc.MonomeKeyState)
-+])
-+
-+
-+class Keypress(_Keypress):
-+
-+    @property
-+    def x(self):
-+        return self.position.x
-+
-+    @property
-+    def y(self):
-+        return self.position.y
-+
-+    @property
-+    def s(self):
-+        return self.state.value
-+
-+    def __repr__(self) -> str:
-+        return "{!r}, {}".format(self.position, self.state.name)
 diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,68 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -613,38 +617,60 @@ new file mode 100644
 +
 +import asyncio
 +import logging
++import time
 +
-+from lightsc import LightsClient
++from .. import grids
++from .button import Button
++from .layer import Layer
 +
-+from .grid import MonomeGrid
++DEFAULT_FRAMERATE = 60
 +
 +logger = logging.getLogger("monolight.ui")
 +
 +
-+async def _refresh(
-+    loop: asyncio.AbstractEventLoop, lightsd: LightsClient, grid: MonomeGrid,
-+) -> None:
-+    pass
++def _init_ui(layer: Layer) -> None:
++    layer.insert(
 +
 +
-+async def _process_inputs(
-+    loop: asyncio.AbstractEventLoop, lightsd: LightsClient, grid: MonomeGrid,
-+) -> None:
-+    pass
++async def _ui_refresh(loop: asyncio.AbstractEventLoop, framerate: int) -> None:
++    while True:
++        render_starts_at = time.monotonic()
++        for grid in grids.running:
++            foreground_layer = grid.layers[-1]
++            if not foreground_layer.children:
++                _init_ui(foreground_layer)
++            foreground_layer.render(frame_ts=time.monotonic())
++            foreground_layer.led_buffer.render(grid.momome)
++        render_latency = time.monotonic() - render_starts_at
++        await asyncio.sleep(1000 / framerate / 1000 - render_latency)
++
++
++async def _process_inputs(loop: asyncio.AbstractEventLoop) -> None:
++    while True:
++        if not grids.running:
++            pass  # do something else
++
++        inputs = await asyncio.wait(
++            (grid.input_queue.get for grid in grids.running),
++            return_when=asyncio.FIRST_COMPLETED,
++        )
++        for grid, input in zip(grids.running, inputs):
++            grid.layers[-1].submit_input(input)
 +
 +
 +def start(
-+    loop: asyncio.AbstractEventLoop, lightsd: LightsClient, grid: MonomeGrid,
++    loop: asyncio.AbstractEventLoop,
++    framerate: int = DEFAULT_FRAMERATE
 +) -> None:
 +    return asyncio.gather(
-+        loop.create_task(_refresh(loop, lightsd, grid)),
-+        loop.create_task(_process_inputs(loop, lightsd, grid))
++        loop.create_task(_ui_refresh(loop, framerate)),
++        loop.create_task(_process_inputs(loop))
 +    )
 diff --git a/apps/monolight/setup.py b/apps/monolight/setup.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/setup.py
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,54 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lighstd.
@@ -676,7 +702,7 @@ new file mode 100644
 +    include_package_data=True,
 +    entry_points={
 +        "console_scripts": [
-+            "monolight = monolight.cli:main",
++            "monolight = monolight.monolight:main",
 +        ],
 +    },
 +    install_requires=[
@@ -691,9 +717,11 @@ new file mode 100644
 +    extras_require={
 +        "dev": [
 +            "flake8",
++            "mypy-lang",
 +            "ipython",
 +            "pdbpp",
 +            "pep8",
++            "typed-ast",
 +        ],
 +    },
 +)
@@ -846,7 +874,7 @@ new file mode 100644
 +    structs,
 +)
 +
-+logger = logging.getLogger("lightsd.client")
++logger = logging.getLogger("lightsc.client")
 +
 +
 +_JSONRPCMethod = NamedTuple("_JSONRPCMethod", [
