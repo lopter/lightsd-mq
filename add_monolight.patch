@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  088c8c3fe99979f2fe7792adfdd719b03f5deef7
+# Parent  eaec2e58b1577590c008f40df1efd0cc5e1ab47c
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -94,7 +94,7 @@ diff --git a/apps/monolight/monolight/grids.py b/apps/monolight/monolight/grids.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/grids.py
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,128 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# # This file is part of lightsd.
 +#
@@ -117,6 +117,8 @@ new file mode 100644
 +import monome
 +
 +from enum import IntEnum
++from typing import Iterator, Tuple
++
 +
 +from .ui.layer import Layer
 +from .types import Dimensions, Position
@@ -151,6 +153,29 @@ new file mode 100644
 +    HIGH_2 = 13
 +    HIGH_3 = 14
 +    HIGH_4 = ON = 15
++
++
++class LedSprite:
++
++    def __init__(
++        self, size: Dimensions, level: LedLevel = LedLevel.OFF
++    ) -> None:
++        self.size = size
++        self._levels = [level] * size.width * size.height
++
++    def _index(self, offset: Position) -> int:
++        return self.size.height * offset.y + self.size.width * offset.x
++
++    def set(self, offset: Position, level: LedLevel) -> None:
++        self._levels[self._index(offset)] = level
++
++    def get(self, offset: Position) -> LedLevel:
++        return self._levels[self._index(offset)]
++
++    def __iter__(self) -> Iterator[Tuple[int, int, LedLevel]]:
++        for off_x in range(self.size.width):
++            for off_y in range(self.size.height):
++                yield off_x, off_y, self.get(Position(x=off_x, y=off_y))
 +
 +
 +class AIOSCMonolightApp(monome.Monome):
@@ -202,7 +227,7 @@ diff --git a/apps/monolight/monolight/monolight.py b/apps/monolight/monolight/mo
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/monolight.py
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,77 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -254,6 +279,7 @@ new file mode 100644
 +    loop.run_until_complete(asyncio.gather(
 +        loop.create_task(bulbs.start_lightsd_connection(loop, lightsd_url)),
 +        loop.create_task(grids.start_serialosc_connection(loop, monome_id)),
++        loop=loop,
 +    ))
 +
 +    click.echo("serialoscd running at {}:{}".format(
@@ -274,7 +300,8 @@ new file mode 100644
 +
 +    loop.run_until_complete(asyncio.gather(
 +        loop.create_task(grids.stop_all()),
-+        loop.create_task(bulbs.stop_all())
++        loop.create_task(bulbs.stop_all()),
++        loop=loop,
 +    ))
 +
 +    loop.close()
@@ -342,11 +369,13 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +from .ui import start  # noqa
-diff --git a/apps/monolight/monolight/ui/base.py b/apps/monolight/monolight/ui/base.py
+diff --git a/apps/monolight/monolight/ui/actions/__init__.py b/apps/monolight/monolight/ui/actions/__init__.py
+new file mode 100644
+diff --git a/apps/monolight/monolight/ui/actions/base.py b/apps/monolight/monolight/ui/actions/base.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/ui/base.py
-@@ -0,0 +1,122 @@
++++ b/apps/monolight/monolight/ui/actions/base.py
+@@ -0,0 +1,36 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -364,35 +393,107 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+from typing import Iterator, Tuple
++import asyncio
 +
-+from .. import grids
-+from ..types import Dimensions, Position
++from ..elements import UIComponentBase
 +
 +
-+class LedSprite:
++class ActionBase:
 +
 +    def __init__(
-+        self,
-+        size: Dimensions,
-+        level: grids.LedLevel = grids.LedLevel.OFF
++        self, loop: asyncio.AbstractEventLoop, source: UIComponentBase
 +    ) -> None:
-+        self.size = size
-+        self._levels = [level] * size.width * size.height
++        self._loop = loop
++        self._source = source
 +
-+    def _index(self, offset: Position) -> int:
-+        return self.size.height * offset.y + self.size.width * offset.x
++    async def execute(self) -> None:
++        self._source.busy = True
++        try:
++            await self._lightsd_call()
++        finally:
++            self._source.busy = False
+diff --git a/apps/monolight/monolight/ui/actions/power.py b/apps/monolight/monolight/ui/actions/power.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/ui/actions/power.py
+@@ -0,0 +1,28 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+    def set(self, offset: Position, level: grids.LedLevel) -> None:
-+        self._levels[self._index(offset)] = level
++from lightsc.requests import PowerOn
 +
-+    def get(self, offset: Position) -> grids.LedLevel:
-+        return self._levels[self._index(offset)]
++from ...bulbs import lightsd
 +
-+    def __iter__(self) -> Iterator[Tuple[int, int, grids.LedLevel]]:
-+        for off_x in range(self.size.width):
-+            for off_y in range(self.size.height):
-+                yield off_x, off_y, self.get(Position(x=off_x, y=off_y))
++from .base import ActionBase
++
++
++class PowerOnAction(ActionBase):
++
++    async def _lightsd_call(self):
++        await lightsd.apply(PowerOn([]))  # FIXME
+diff --git a/apps/monolight/monolight/ui/elements/__init__.py b/apps/monolight/monolight/ui/elements/__init__.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/ui/elements/__init__.py
+@@ -0,0 +1,20 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from .base import UIComponentBase  # noqa
++from .layer import Layer  # noqa
++from .button import Button  # noqa
+diff --git a/apps/monolight/monolight/ui/elements/base.py b/apps/monolight/monolight/ui/elements/base.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/ui/elements/base.py
+@@ -0,0 +1,95 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from ... import grids
++from ...types import Dimensions, Position
 +
 +
 +class UIComponentInsertionError(Exception):
@@ -455,8 +556,8 @@ new file mode 100644
 +            other._se_corner.y <= self._se_corner.y
 +        )
 +
-+    def to_sprite(self) -> LedSprite:
-+        return LedSprite(self.size)
++    def to_led_sprite(self) -> grids.LedSprite:
++        return grids.LedSprite(self.size)
 +
 +    def _handle_input(self, offset: Position) -> None:
 +        pass
@@ -469,11 +570,11 @@ new file mode 100644
 +            return False
 +        self._handle_input(position - self.offset, key_state)
 +        return True
-diff --git a/apps/monolight/monolight/ui/button.py b/apps/monolight/monolight/ui/button.py
+diff --git a/apps/monolight/monolight/ui/elements/button.py b/apps/monolight/monolight/ui/elements/button.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/ui/button.py
-@@ -0,0 +1,67 @@
++++ b/apps/monolight/monolight/ui/elements/button.py
+@@ -0,0 +1,59 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -491,11 +592,10 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+from typing import Callable
++from ... import grids
++from ...types import Dimensions, Position
 +
-+from .. import grids
-+from .base import LedSprite, UIComponentBase
-+from ..types import Dimensions, Position
++from .base import UIComponentBase
 +
 +OFF = 0
 +ON = 1
@@ -504,15 +604,8 @@ new file mode 100644
 +class Button(UIComponentBase):
 +
 +    # make the size configurable too?
-+    def __init__(
-+        self,
-+        name: str,
-+        offset: Position,
-+        state: int,
-+        action: Callable[..., None]  # XXX
-+    ) -> None:
++    def __init__(self, name: str, offset: Position, state: int) -> None:
 +        UIComponentBase.__init__(self, name, Dimensions(1, 1), offset)
-+        self.action = action
 +        self.state = state
 +
 +    def _handle_input(
@@ -536,16 +629,16 @@ new file mode 100644
 +        self.state = not self.state
 +        return bool(rv)
 +
-+    def to_sprite(self) -> None:
-+        return LedSprite(
++    def to_led_sprite(self) -> None:
++        return grids.LedSprite(
 +            Dimensions(1, 1),
 +            grids.LedLevel.ON if self.state is ON else grids.LedLevel.OFF,
 +        )
-diff --git a/apps/monolight/monolight/ui/layer.py b/apps/monolight/monolight/ui/layer.py
+diff --git a/apps/monolight/monolight/ui/elements/layer.py b/apps/monolight/monolight/ui/elements/layer.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/ui/layer.py
-@@ -0,0 +1,47 @@
++++ b/apps/monolight/monolight/ui/elements/layer.py
+@@ -0,0 +1,48 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -565,9 +658,10 @@ new file mode 100644
 +
 +import monome
 +
-+from .. import grids
++from ... import grids
++from ...types import Dimensions, Position, TimeMonotonic
++
 +from .base import UIComponentBase
-+from ..types import Dimensions, Position, TimeMonotonic
 +
 +
 +class Layer(UIComponentBase):
@@ -584,7 +678,7 @@ new file mode 100644
 +                break
 +
 +    def _blit(self, component: UIComponentBase):
-+        for off_x, off_y, level in component.to_sprite():
++        for off_x, off_y, level in component.to_led_sprite():
 +            self.led_buffer.led_set(
 +                component.offset.x + off_x, component.offset.y + off_y, level
 +            )
@@ -597,7 +691,7 @@ diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,67 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -620,8 +714,7 @@ new file mode 100644
 +import time
 +
 +from .. import grids
-+from .button import Button
-+from .layer import Layer
++from .elements import Layer
 +
 +DEFAULT_FRAMERATE = 60
 +
@@ -629,7 +722,7 @@ new file mode 100644
 +
 +
 +def _init_ui(layer: Layer) -> None:
-+    layer.insert(
++    pass
 +
 +
 +async def _ui_refresh(loop: asyncio.AbstractEventLoop, framerate: int) -> None:
