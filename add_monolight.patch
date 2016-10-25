@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  eaec2e58b1577590c008f40df1efd0cc5e1ab47c
+# Parent  c55d0126affdf45c934ca57c5ef599778a753003
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -18,7 +18,7 @@ diff --git a/apps/monolight/monolight/bulbs.py b/apps/monolight/monolight/bulbs.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/bulbs.py
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,75 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -38,26 +38,30 @@ new file mode 100644
 +
 +import asyncio
 +import collections
++import lightsc
 +
 +from lightsc.requests import GetLightState
++from lightsc.structs import LightBulb  # noqa
 +
 +from . import grids
 +
 +DEFAULT_REFRESH_DELAY = 0.1
 +KEEPALIVE_DELAY = 60
 +
-+lightsd = None
++lightsd = None  # type: lightsc.LightsClient
 +
-+bulbs_by_label = {}
-+bulbs_by_group = collections.defaultdict(set)
++bulbs_by_label = {}  # type: Dict[str, LightBulb]
++bulbs_by_group = collections.defaultdict(set)  # type: Dict[str, Set[LightBulb]]
 +
-+_refresh_task = None
++_refresh_task = None  # type: asyncio.Task
 +
 +
 +async def _poll(
 +    loop: asyncio.AbstractEventLoop,
 +    refresh_delay_s: float
 +) -> None:
++    global bulbs_by_label, bulbs_by_group
++
 +    while True:
 +        bulbs = await lightsd.apply(GetLightState(["*"]))
 +
@@ -79,22 +83,22 @@ new file mode 100644
 +) -> None:
 +    global _refresh_task, lightsd
 +
-+    lightsd = await lightsd.create_async_lightsd_connection(lightsd_url)
++    lightsd = await lightsc.create_async_lightsd_connection(lightsd_url)
 +    _refresh_task = loop.create_task(_poll(loop, refresh_delay_s))
 +
 +
-+async def stop_all() -> None:
++async def stop_all(loop: asyncio.AbstractEventLoop) -> None:
 +    global _refresh_task, lightsd
 +
 +    _refresh_task.cancel()
-+    await asyncio.wait_for(_refresh_task)
++    await asyncio.wait_for(_refresh_task, timeout=None, loop=loop)
 +    await lightsd.close()
 +    lightsd = _refresh_task = None
 diff --git a/apps/monolight/monolight/grids.py b/apps/monolight/monolight/grids.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/grids.py
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,142 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# # This file is part of lightsd.
 +#
@@ -112,16 +116,18 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +import asyncio
++import collections
 +import functools
 +import logging
 +import monome
 +
 +from enum import IntEnum
-+from typing import Iterator, Tuple
++from typing import TYPE_CHECKING, Iterator, Tuple
++from typing import List  # noqa
 +
-+
-+from .ui.layer import Layer
 +from .types import Dimensions, Position
++if TYPE_CHECKING:
++    from .ui.elements.layer import Layer  # noqa
 +
 +
 +logger = logging.getLogger("monolight.grids")
@@ -133,6 +139,13 @@ new file mode 100644
 +
 +    DOWN = 1
 +    UP = 0
++
++
++class KeyPress:
++
++    def __init__(self, position: Position, state: KeyState) -> None:
++        self.position = position
++        self.state = state
 +
 +
 +class LedLevel(IntEnum):
@@ -155,7 +168,7 @@ new file mode 100644
 +    HIGH_4 = ON = 15
 +
 +
-+class LedSprite:
++class LedSprite(collections.abc.Iterable):
 +
 +    def __init__(
 +        self, size: Dimensions, level: LedLevel = LedLevel.OFF
@@ -183,6 +196,7 @@ new file mode 100644
 +    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
 +        monome.Monome.__init__(self, "/monolight")
 +        self._grid = None  # type: MonomeGrid
++        self.loop = loop
 +
 +    def ready(self) -> None:
 +        self._grid = MonomeGrid(self)
@@ -194,15 +208,19 @@ new file mode 100644
 +
 +    def grid_key(self, x: int, y: int, s: int) -> None:
 +        if self._grid is not None:
-+            self._grid.input_queue.put_nowait(Position(x, y), s)
++            keypress = KeyPress(Position(x, y), KeyState(s))
++            self._grid.input_queue.put_nowait(keypress)
 +
 +
 +class MonomeGrid:
 +
 +    def __init__(self, monome: AIOSCMonolightApp) -> None:
++        loop = monome.loop
++
 +        self.size = Dimensions(height=monome.height, width=monome.width)
-+        self.layers = [Layer("root", self.size)]
-+        self.input_queue = asyncio.Queue(loop=monome.loop)
++        self.layers = []  # type: List[Layer]
++        self.show_ui = asyncio.Event(loop=loop)
++        self.input_queue = asyncio.Queue(loop=loop)  # type: asyncio.Queue
 +        self.monome = monome
 +
 +
@@ -227,7 +245,7 @@ diff --git a/apps/monolight/monolight/monolight.py b/apps/monolight/monolight/mo
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/monolight.py
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,76 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -275,7 +293,6 @@ new file mode 100644
 +
 +    click.echo("Connecting to serialoscd and lightsd...")
 +
-+    # Connect to lightsd and serialoscd then wait for everything to come online:
 +    loop.run_until_complete(asyncio.gather(
 +        loop.create_task(bulbs.start_lightsd_connection(loop, lightsd_url)),
 +        loop.create_task(grids.start_serialosc_connection(loop, monome_id)),
@@ -286,8 +303,8 @@ new file mode 100644
 +        serialoscd_host, serialoscd_port
 +    ))
 +    click.echo("lightsd running at {}".format(lightsd_url))
-+
 +    click.echo("Starting ui...")
++
 +    ui_task = ui.start(loop)
 +
 +    if hasattr(loop, "add_signal_handler"):
@@ -300,7 +317,7 @@ new file mode 100644
 +
 +    loop.run_until_complete(asyncio.gather(
 +        loop.create_task(grids.stop_all()),
-+        loop.create_task(bulbs.stop_all()),
++        loop.create_task(bulbs.stop_all(loop)),
 +        loop=loop,
 +    ))
 +
@@ -309,7 +326,7 @@ diff --git a/apps/monolight/monolight/types.py b/apps/monolight/monolight/types.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/types.py
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,44 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -330,7 +347,6 @@ new file mode 100644
 +from typing import NamedTuple
 +
 +_Dimensions = NamedTuple("Dimensions", [("height", int), ("width", int)])
-+_Position = NamedTuple("Position", [("x", int), ("y", int)])
 +
 +
 +class Dimensions(_Dimensions):
@@ -339,13 +355,22 @@ new file mode 100644
 +        return "height={}, width={}".format(*self)
 +
 +
-+class Position(_Position):
++class Position:  # can't be a NamedTuple to support __add__ and __sub__
++
++    def __init__(self, x: int, y: int) -> None:
++        self.x = x
++        self.y = y
 +
 +    def __repr__(self) -> str:
-+        return "{}, {}".format(*self)
++        return "{}, {}".format(self.x, self.y)
 +
++    def __sub__(self, other: "Position") -> "Position":
++        return Position(x=self.x - other.x, y=self.y - other.y)
 +
-+TimeMonotonic = float
++    def __add__(self, other: "Position") -> "Position":
++        return Position(x=self.x + other.x, y=self.y + other.y)
++
++TimeMonotonic = int
 diff --git a/apps/monolight/monolight/ui/__init__.py b/apps/monolight/monolight/ui/__init__.py
 new file mode 100644
 --- /dev/null
@@ -371,11 +396,93 @@ new file mode 100644
 +from .ui import start  # noqa
 diff --git a/apps/monolight/monolight/ui/actions/__init__.py b/apps/monolight/monolight/ui/actions/__init__.py
 new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/ui/actions/__init__.py
+@@ -0,0 +1,18 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from .base import Action  # noqa
+diff --git a/apps/monolight/monolight/ui/actions/actions.py b/apps/monolight/monolight/ui/actions/actions.py
+new file mode 100644
+--- /dev/null
++++ b/apps/monolight/monolight/ui/actions/actions.py
+@@ -0,0 +1,56 @@
++# Copyright (c) 2016, Louis Opter <louis@opter.org>
++#
++# This file is part of lightsd.
++#
++# lightsd is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++#
++# lightsd is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++
++from lightsc import requests
++from typing import List, Type  # noqa
++
++from ...bulbs import lightsd
++
++from .base import Action
++
++
++class _LightsdAction(Action):
++
++    def __init_(self, *args, **kwargs) -> None:
++        self._targets = []  # type: List[str]
++
++    def add_target(self, target: str) -> "_LightsdAction":
++        self._targets.append(target)
++        return self
++
++
++class _PowerAction(_LightsdAction):
++
++    REQUEST_TYPE = None  # type: Type[requests.RequestClass]
++
++    async def _run(self) -> None:
++        await lightsd.apply(self.REQUEST_TYPE(self._targets))
++
++
++class PowerOff(_PowerAction):
++
++    REQUEST_TYPE = requests.PowerOff
++
++
++class PowerOn(_PowerAction):
++
++    REQUEST_TYPE = requests.PowerOn
++
++
++class PowerToggle(_PowerAction):
++
++    REQUEST_TYPE = requests.PowerOn
 diff --git a/apps/monolight/monolight/ui/actions/base.py b/apps/monolight/monolight/ui/actions/base.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/actions/base.py
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,44 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -395,61 +502,36 @@ new file mode 100644
 +
 +import asyncio
 +
-+from ..elements import UIComponentBase
++from typing import TYPE_CHECKING
++
++if TYPE_CHECKING:
++    from ..elements import UIComponent  # noqa
 +
 +
-+class ActionBase:
++class Action:
 +
-+    def __init__(
-+        self, loop: asyncio.AbstractEventLoop, source: UIComponentBase
-+    ) -> None:
++    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
 +        self._loop = loop
++        self._source = None  # type: UIComponent
++
++    def set_source(self, source: "UIComponent") -> "Action":
 +        self._source = source
++        return self
++
++    async def _run(self) -> None:  # NOTE: must be re-entrant
++        pass
 +
 +    async def execute(self) -> None:
 +        self._source.busy = True
 +        try:
-+            await self._lightsd_call()
++            await self._run()
 +        finally:
 +            self._source.busy = False
-diff --git a/apps/monolight/monolight/ui/actions/power.py b/apps/monolight/monolight/ui/actions/power.py
-new file mode 100644
---- /dev/null
-+++ b/apps/monolight/monolight/ui/actions/power.py
-@@ -0,0 +1,28 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
-+
-+from lightsc.requests import PowerOn
-+
-+from ...bulbs import lightsd
-+
-+from .base import ActionBase
-+
-+
-+class PowerOnAction(ActionBase):
-+
-+    async def _lightsd_call(self):
-+        await lightsd.apply(PowerOn([]))  # FIXME
 diff --git a/apps/monolight/monolight/ui/elements/__init__.py b/apps/monolight/monolight/ui/elements/__init__.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements/__init__.py
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,18 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -467,14 +549,12 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+from .base import UIComponentBase  # noqa
-+from .layer import Layer  # noqa
-+from .button import Button  # noqa
++from .base import UIComponent  # noqa
 diff --git a/apps/monolight/monolight/ui/elements/base.py b/apps/monolight/monolight/ui/elements/base.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements/base.py
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,121 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -492,34 +572,55 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
++from typing import Dict
++from typing import Set  # noqa
++
 +from ... import grids
 +from ...types import Dimensions, Position
++
++from ..actions import Action
 +
 +
 +class UIComponentInsertionError(Exception):
 +    pass
 +
 +
-+class UIComponentBase:
++def UIPosition(position: Position) -> "UIComponent":
++    return UIComponent("_ui_position", position, Dimensions(1, 1), {})
 +
-+    def __init__(self, name: str, size: Dimensions, offset: Position) -> None:
++
++class UIComponent:
++
++    def __init__(
++        self,
++        name: str,
++        offset: Position,
++        size: Dimensions,
++        actions: Dict[grids.KeyState, Action] = None,
++    ) -> None:
 +        self.name = name
 +        self.size = size
 +        self.offset = offset
++        self.busy = False
++        self.children = set()  # type: Set[UIComponent]
++        self.actions = actions
++        for action in actions:
++            action.set_source(self)
++
 +        self._nw_corner = offset
 +        self._se_corner = Position(
 +            x=self.offset.x + self.size.width,
 +            y=self.offset.y + self.size.height
 +        )
-+        self.parent = None  # type: UIComponentBase
-+        self.children = set()
++        self._on_sprite = grids.LedSprite(size, grids.LedLevel.ON)
++        self._medium_sprite = grids.LedSprite(size, grids.LedLevel.MEDIUM)
 +
 +    def __repr__(self):
 +        return "<{}({}, size=({!r}), offset=({!r})>".format(
 +            self.__class__.__name__, self.name, self.size, self.offset
 +        )
 +
-+    def insert(self, new: "UIComponentBase") -> None:
++    def insert(self, new: "UIComponent") -> None:
 +        if new in self.children:
 +            raise UIComponentInsertionError(
 +                "{!r} is already part of {!r}".format(new, self)
@@ -533,48 +634,53 @@ new file mode 100644
 +                raise UIComponentInsertionError(
 +                    "{!r} conflicts with {!r}".format(new, child)
 +                )
-+        new.parent = self
 +        self.children.add(new)
 +
-+    def collides(self, other: "UIComponentBase") -> bool:
++    def collides(self, other: "UIComponent") -> bool:
 +        """Return True if ``self`` and ``other`` overlap in any way."""
 +
-+        return all(
++        return all((
 +            self._nw_corner.x <= other._se_corner.x,
 +            self._se_corner.x >= other._nw_corner.x,
 +            self._nw_corner.y <= other._se_corner.y,
 +            self._se_corner.y >= other._nw_corner.y,
-+        )
++        ))
 +
-+    def within(self, other: "UIComponentBase") -> bool:
++    def within(self, other: "UIComponent") -> bool:
 +        """Return True if ``self`` fits within ``other``."""
 +
-+        return all(
++        return all((
 +            other._nw_corner.x >= self._nw_corner.x,
 +            other._nw_corner.y >= self._nw_corner.y,
 +            other._se_corner.x <= self._se_corner.x,
 +            other._se_corner.y <= self._se_corner.y
-+        )
++        ))
 +
-+    def to_led_sprite(self) -> grids.LedSprite:
-+        return grids.LedSprite(self.size)
++    def to_led_sprite(self, frame_ts_ms: int) -> grids.LedSprite:
++        if self.busy and frame_ts_ms % 1000 >= 500:
++            return self._medium_sprite
++        return self._on_sprite
 +
-+    def _handle_input(self, offset: Position) -> None:
-+        pass
++    def _handle_input(
++        self, offset: Position, key_state: grids.KeyState
++    ) -> None:
++        action = self.actions is not None and self.actions.get(key_state)
++        if action:
++            action.execute()
 +
 +    # maybe that bool return type could become an enum or a composite:
 +    def submit_input(
 +        self, position: Position, key_state: grids.KeyState
 +    ) -> bool:
-+        if not self.collides(UIComponentBase(Dimensions(1, 1), position)):
++        if not self.collides(UIPosition(position)):
 +            return False
 +        self._handle_input(position - self.offset, key_state)
 +        return True
-diff --git a/apps/monolight/monolight/ui/elements/button.py b/apps/monolight/monolight/ui/elements/button.py
+diff --git a/apps/monolight/monolight/ui/elements/elements.py b/apps/monolight/monolight/ui/elements/elements.py
 new file mode 100644
 --- /dev/null
-+++ b/apps/monolight/monolight/ui/elements/button.py
-@@ -0,0 +1,59 @@
++++ b/apps/monolight/monolight/ui/elements/elements.py
+@@ -0,0 +1,34 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -592,48 +698,23 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
++from typing import Dict
++
 +from ... import grids
 +from ...types import Dimensions, Position
 +
-+from .base import UIComponentBase
++from ..actions import Action
 +
-+OFF = 0
-+ON = 1
-+
-+
-+class Button(UIComponentBase):
-+
-+    # make the size configurable too?
-+    def __init__(self, name: str, offset: Position, state: int) -> None:
-+        UIComponentBase.__init__(self, name, Dimensions(1, 1), offset)
-+        self.state = state
-+
-+    def _handle_input(
-+        self, offset: Position, key_state: grids.KeyState
-+    ) -> bool:
-+        if key_state == grids.KeyState.DOWN:
-+            self.action()
++from .base import UIComponent
 +
 +
-+class ToggleButton(Button):
-+
-+    def _handle_input(
-+        self, offset: Position, key_state: grids.KeyState
-+    ) -> bool:
-+        if key_state == grids.KeyState.DOWN:
-+            self.toggle()
-+            self.action(self.state)
-+
-+    def toggle(self) -> bool:  # returns previous state
-+        rv = self.state
-+        self.state = not self.state
-+        return bool(rv)
-+
-+    def to_led_sprite(self) -> None:
-+        return grids.LedSprite(
-+            Dimensions(1, 1),
-+            grids.LedLevel.ON if self.state is ON else grids.LedLevel.OFF,
-+        )
++# make the size configurable too?
++def Button(
++    name: str,
++    offset: Position,
++    actions: Dict[grids.KeyState, Action]
++) -> UIComponent:
++    return UIComponent(name, offset, Dimensions(1, 1), actions)
 diff --git a/apps/monolight/monolight/ui/elements/layer.py b/apps/monolight/monolight/ui/elements/layer.py
 new file mode 100644
 --- /dev/null
@@ -661,37 +742,37 @@ new file mode 100644
 +from ... import grids
 +from ...types import Dimensions, Position, TimeMonotonic
 +
-+from .base import UIComponentBase
++from .base import UIComponent
 +
 +
-+class Layer(UIComponentBase):
++class Layer(UIComponent):
 +
-+    def __init_(self, name: str, size: Dimensions):
-+        UIComponentBase.__init__(self, name, size, Position(0, 0))
++    def __init__(self, name: str, size: Dimensions) -> None:
++        UIComponent.__init__(self, name, Position(0, 0), size)
 +        self.led_buffer = monome.LedBuffer(width=size.width, height=size.height)
 +
-+    def _handle_input(
++    def submit_input(
 +        self, position: Position, key_state: grids.KeyState
 +    ) -> bool:
 +        for component in self.children:
 +            if component.submit_input(position, key_state):
 +                break
 +
-+    def _blit(self, component: UIComponentBase):
-+        for off_x, off_y, level in component.to_led_sprite():
-+            self.led_buffer.led_set(
-+                component.offset.x + off_x, component.offset.y + off_y, level
-+            )
-+
-+    def render(self, frame_ts: TimeMonotonic) -> None:
++    def render(self, frame_ts_ms: TimeMonotonic) -> None:
 +        self.led_buffer.led_level_all(grids.LedLevel.OFF)
 +        for component in self.children:
-+            self._blit(component)
++            led_sprite = component.to_led_sprite(frame_ts_ms)
++            for off_x, off_y, level in led_sprite:
++                self.led_buffer.led_set(
++                    component.offset.x + off_x,
++                    component.offset.y + off_y,
++                    level
++                )
 diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,114 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -714,25 +795,72 @@ new file mode 100644
 +import time
 +
 +from .. import grids
-+from .elements import Layer
++from ..types import Position
++
++from .actions import Action, actions
++from .elements import elements, layer
 +
 +DEFAULT_FRAMERATE = 60
 +
 +logger = logging.getLogger("monolight.ui")
 +
 +
-+def _init_ui(layer: Layer) -> None:
-+    pass
++class _ToggleUI(Action):
 +
++    def __init__(self, *args, **kwargs) -> None:
++        self._grid = None  # type: grids.MonomeGrid
++
++    def on_grid(self, grid: grids.MonomeGrid) -> "_ToggleUI":
++        self._grid = grid
++        return self
++
++    async def _run(self) -> None:
++        show_ui = self._grid.show_ui
++        show_ui.clear() if show_ui.is_set else show_ui.set()
++
++
++def _init_ui(loop: asyncio.AbstractEventLoop, grid: grids.MonomeGrid) -> None:
++    foreground_layer = layer.Layer("root", grid.size)
++
++    button = elements.Button("show/hide ui", Position(0, 0), actions={
++        grids.KeyState.DOWN: _ToggleUI(loop).on_grid(grid),
++    })
++    foreground_layer.insert(button)
++    button = elements.Button("off *", Position(0, 7), actions={
++        grids.KeyState.DOWN: actions.PowerOff(loop).add_target("*"),
++    })
++    foreground_layer.insert(button)
++    button = elements.Button("on *", Position(1, 7), actions={
++        grids.KeyState.DOWN: actions.PowerOn(loop).add_target("*"),
++    })
++    button = elements.Button("toggle kitchen", Position(2, 7), actions={
++        grids.KeyState.DOWN: actions.PowerToggle(loop).add_target("#kitchen"),
++    })
++    foreground_layer.insert(button)
++    button = elements.Button("toggle fugu", Position(3, 7), actions={
++        grids.KeyState.DOWN: actions.PowerToggle(loop).add_target("fugu"),
++    })
++    foreground_layer.insert(button)
++
++    grid.layers.append(foreground_layer)
 +
 +async def _ui_refresh(loop: asyncio.AbstractEventLoop, framerate: int) -> None:
 +    while True:
++        # NOTE: do something for when grids.running gets empty?
++        if not any(grid.show_ui.is_set() for grid in grids.running):
++            await asyncio.wait(
++                (grid.show_ui.wait() for grid in grids.running),
++                return_when=asyncio.FIRST_COMPLETED,
++                loop=loop
++            )
 +        render_starts_at = time.monotonic()
 +        for grid in grids.running:
++            if not grid.show_ui.is_set():
++                continue
 +            foreground_layer = grid.layers[-1]
 +            if not foreground_layer.children:
-+                _init_ui(foreground_layer)
-+            foreground_layer.render(frame_ts=time.monotonic())
++                _init_ui(loop, grid)
++            foreground_layer.render(frame_ts_ms=int(time.monotonic() * 1000))
 +            foreground_layer.led_buffer.render(grid.momome)
 +        render_latency = time.monotonic() - render_starts_at
 +        await asyncio.sleep(1000 / framerate / 1000 - render_latency)
@@ -746,15 +874,15 @@ new file mode 100644
 +        inputs = await asyncio.wait(
 +            (grid.input_queue.get for grid in grids.running),
 +            return_when=asyncio.FIRST_COMPLETED,
++            loop=loop,
 +        )
-+        for grid, input in zip(grids.running, inputs):
-+            grid.layers[-1].submit_input(input)
++        for grid, keypress in zip(grids.running, inputs):
++            grid.layers[-1].submit_input(keypress.position, keypress.state)
 +
 +
 +def start(
-+    loop: asyncio.AbstractEventLoop,
-+    framerate: int = DEFAULT_FRAMERATE
-+) -> None:
++    loop: asyncio.AbstractEventLoop, framerate: int = DEFAULT_FRAMERATE
++) -> asyncio.Future:
 +    return asyncio.gather(
 +        loop.create_task(_ui_refresh(loop, framerate)),
 +        loop.create_task(_process_inputs(loop))
@@ -890,53 +1018,81 @@ diff --git a/clients/python/lightsc/lightsc/__init__.py b/clients/python/lightsc
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/__init__.py
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,41 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# All rights reserved.
 +#
-+# This file is part of lightsd.
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are met:
 +#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
++# 1. Redistributions of source code must retain the above copyright notice,
++#    this list of conditions and the following disclaimer.
 +#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
++# 2. Redistributions in binary form must reproduce the above copyright notice,
++#    this list of conditions and the following disclaimer in the documentation
++#    and/or other materials provided with the distribution.
 +#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++# 3. Neither the name of the copyright holder nor the names of its contributors
++#    may be used to endorse or promote products derived from this software
++#    without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++# POSSIBILITY OF SUCH DAMAGE.
 +
++from . import (  # noqa
++    client,
++    exceptions,
++    requests,
++    responses,
++    structs,
++)
 +from .client import (  # noqa
 +    LightsClient,
 +    create_lightsd_connection,
 +    create_async_lightsd_connection,
 +)
-+from .view import (  # noqa
-+    LightsView,
-+)
 diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/lightsc/client.py
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/client.py
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,338 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# All rights reserved.
 +#
-+# This file is part of lightsd.
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are met:
 +#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
++# 1. Redistributions of source code must retain the above copyright notice,
++#    this list of conditions and the following disclaimer.
 +#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
++# 2. Redistributions in binary form must reproduce the above copyright notice,
++#    this list of conditions and the following disclaimer in the documentation
++#    and/or other materials provided with the distribution.
 +#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++# 3. Neither the name of the copyright holder nor the names of its contributors
++#    may be used to endorse or promote products derived from this software
++#    without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++# POSSIBILITY OF SUCH DAMAGE.
 +
 +import asyncio
 +import functools
@@ -1251,23 +1407,35 @@ diff --git a/clients/python/lightsc/lightsc/exceptions.py b/clients/python/light
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/exceptions.py
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,40 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# All rights reserved.
 +#
-+# This file is part of lightsd.
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are met:
 +#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
++# 1. Redistributions of source code must retain the above copyright notice,
++#    this list of conditions and the following disclaimer.
 +#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
++# 2. Redistributions in binary form must reproduce the above copyright notice,
++#    this list of conditions and the following disclaimer in the documentation
++#    and/or other materials provided with the distribution.
 +#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++# 3. Neither the name of the copyright holder nor the names of its contributors
++#    may be used to endorse or promote products derived from this software
++#    without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++# POSSIBILITY OF SUCH DAMAGE.
 +
 +
 +class LightsError(Exception):
@@ -1284,23 +1452,35 @@ diff --git a/clients/python/lightsc/lightsc/requests.py b/clients/python/lightsc
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/requests.py
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,77 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# All rights reserved.
 +#
-+# This file is part of lightsd.
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are met:
 +#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
++# 1. Redistributions of source code must retain the above copyright notice,
++#    this list of conditions and the following disclaimer.
 +#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
++# 2. Redistributions in binary form must reproduce the above copyright notice,
++#    this list of conditions and the following disclaimer in the documentation
++#    and/or other materials provided with the distribution.
 +#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++# 3. Neither the name of the copyright holder nor the names of its contributors
++#    may be used to endorse or promote products derived from this software
++#    without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++# POSSIBILITY OF SUCH DAMAGE.
 +
 +from typing import (
 +    Any,
@@ -1354,23 +1534,35 @@ diff --git a/clients/python/lightsc/lightsc/responses.py b/clients/python/lights
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/responses.py
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,53 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# All rights reserved.
 +#
-+# This file is part of lightsd.
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are met:
 +#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
++# 1. Redistributions of source code must retain the above copyright notice,
++#    this list of conditions and the following disclaimer.
 +#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
++# 2. Redistributions in binary form must reproduce the above copyright notice,
++#    this list of conditions and the following disclaimer in the documentation
++#    and/or other materials provided with the distribution.
 +#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++# 3. Neither the name of the copyright holder nor the names of its contributors
++#    may be used to endorse or promote products derived from this software
++#    without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++# POSSIBILITY OF SUCH DAMAGE.
 +
 +from typing import (
 +    List,
@@ -1400,23 +1592,35 @@ diff --git a/clients/python/lightsc/lightsc/structs.py b/clients/python/lightsc/
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/structs.py
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,54 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# All rights reserved.
 +#
-+# This file is part of lightsd.
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are met:
 +#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
++# 1. Redistributions of source code must retain the above copyright notice,
++#    this list of conditions and the following disclaimer.
 +#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
++# 2. Redistributions in binary form must reproduce the above copyright notice,
++#    this list of conditions and the following disclaimer in the documentation
++#    and/or other materials provided with the distribution.
 +#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
++# 3. Neither the name of the copyright holder nor the names of its contributors
++#    may be used to endorse or promote products derived from this software
++#    without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++# POSSIBILITY OF SUCH DAMAGE.
 +
 +from typing import (
 +    List,
@@ -1443,64 +1647,39 @@ new file mode 100644
 +        self.b = b
 +        self.k = k
 +        self.tags = tags
-diff --git a/clients/python/lightsc/lightsc/view.py b/clients/python/lightsc/lightsc/view.py
-new file mode 100644
---- /dev/null
-+++ b/clients/python/lightsc/lightsc/view.py
-@@ -0,0 +1,32 @@
-+# Copyright (c) 2016, Louis Opter <louis@opter.org>
-+#
-+# This file is part of lightsd.
-+#
-+# lightsd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
-+#
-+# lightsd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
-+#
-+# You should have received a copy of the GNU General Public License
-+# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
-+
-+import pprint
-+
-+
-+class LightsView:
-+
-+    def __init__(self):
-+        self.bulbs = []
-+        self.bulbs_by_label = {}
-+
-+    def __str__(self):
-+        return pprint.pformat(self.bulbs_by_label)
-+
-+    def update(self, lights_state):
-+        self.bulbs = lights_state.bulbs
-+        self.bulbs_by_label = {b.label for b in lights_state.bulbs.items()}
 diff --git a/clients/python/lightsc/setup.py b/clients/python/lightsc/setup.py
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/setup.py
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,65 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
++# All rights reserved.
 +#
-+# This file is part of lighstd.
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are met:
 +#
-+# lighstd is free software: you can redistribute it and/or modify
-+# it under the terms of the GNU General Public License as published by
-+# the Free Software Foundation, either version 3 of the License, or
-+# (at your option) any later version.
++# 1. Redistributions of source code must retain the above copyright notice,
++#    this list of conditions and the following disclaimer.
 +#
-+# lighstd is distributed in the hope that it will be useful,
-+# but WITHOUT ANY WARRANTY; without even the implied warranty of
-+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+# GNU General Public License for more details.
++# 2. Redistributions in binary form must reproduce the above copyright notice,
++#    this list of conditions and the following disclaimer in the documentation
++#    and/or other materials provided with the distribution.
 +#
-+# You should have received a copy of the GNU General Public License
-+# along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++# 3. Neither the name of the copyright holder nor the names of its contributors
++#    may be used to endorse or promote products derived from this software
++#    without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++# POSSIBILITY OF SUCH DAMAGE.
 +
 +import setuptools
 +
