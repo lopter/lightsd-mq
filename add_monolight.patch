@@ -411,7 +411,7 @@ diff --git a/apps/monolight/monolight/ui/actions.py b/apps/monolight/monolight/u
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/actions.py
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,72 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -432,8 +432,8 @@ new file mode 100644
 +import asyncio
 +
 +from lightsc import requests
-+from typing import TYPE_CHECKING
-+from typing import List, Type  # noqa
++from typing import TYPE_CHECKING, Type
++from typing import List  # noqa
 +
 +from .. import bulbs
 +
@@ -462,38 +462,28 @@ new file mode 100644
 +            self._source.busy = False
 +
 +
-+class _LightsdAction(Action):
++class LightsdAction(Action):
 +
 +    def __init__(self, *args, **kwargs) -> None:
 +        Action.__init__(self, *args, **kwargs)
 +        self._targets = []  # type: List[str]
++        self._batch = []  # type: List[Type[requests.RequestClass]]
 +
-+    def add_target(self, target: str) -> "_LightsdAction":
++    def add_target(self, target: str) -> "LightsdAction":
 +        self._targets.append(target)
 +        return self
 +
-+
-+class _PowerAction(_LightsdAction):
-+
-+    REQUEST_TYPE = None  # type: Type[requests.RequestClass]
++    def add_request(self, type: Type[requests.RequestClass]) -> "LightsdAction":
++        self._batch.append(type)
++        return self
 +
 +    async def _run(self) -> None:
-+        await bulbs.lightsd.apply(self.REQUEST_TYPE(self._targets))
-+
-+
-+class PowerOff(_PowerAction):
-+
-+    REQUEST_TYPE = requests.PowerOff
-+
-+
-+class PowerOn(_PowerAction):
-+
-+    REQUEST_TYPE = requests.PowerOn
-+
-+
-+class PowerToggle(_PowerAction):
-+
-+    REQUEST_TYPE = requests.PowerToggle
++        async with bulbs.lightsd.batch() as batch:
++            for RequestClass in self._batch:
++                if self._targets:
++                    batch.append(RequestClass(self._targets))
++                else:
++                    batch.append(RequestClass())
 diff --git a/apps/monolight/monolight/ui/elements.py b/apps/monolight/monolight/ui/elements.py
 new file mode 100644
 --- /dev/null
@@ -664,7 +654,7 @@ diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,170 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -683,9 +673,11 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +import asyncio
++import functools
 +import logging
 +import time
 +
++from lightsc import requests
 +from typing import Tuple  # noqa
 +
 +from .. import grids
@@ -709,30 +701,69 @@ new file mode 100644
 +
 +    async def _run(self) -> None:
 +        show_ui = self._grid.show_ui
-+        show_ui.clear() if show_ui.is_set() else show_ui.set()
++        if show_ui.is_set():
++            show_ui.clear()
++            self._grid.monome.led_level_all(grids.LedLevel.OFF.value)
++        else:
++            show_ui.set()
 +
 +
 +def _init_ui(loop: asyncio.AbstractEventLoop, grid: grids.MonomeGrid) -> None:
 +    foreground_layer = elements.Layer("root", grid.size)
++
++    def LightsdAction():
++        return actions.LightsdAction(loop)
 +
 +    button = elements.Button("show/hide ui", Position(0, 0), loop, actions={
 +        grids.KeyState.DOWN: _ToggleUI(loop).on_grid(grid),
 +    })
 +    foreground_layer.insert(button)
 +    button = elements.Button("off *", Position(0, 7), loop, actions={
-+        grids.KeyState.DOWN: actions.PowerOff(loop).add_target("*"),
++        grids.KeyState.DOWN: (
++            LightsdAction()
++            .add_request(requests.PowerOff)
++            .add_target("*")
++        )
 +    })
 +    foreground_layer.insert(button)
 +    button = elements.Button("on *", Position(1, 7), loop, actions={
-+        grids.KeyState.DOWN: actions.PowerOn(loop).add_target("*"),
++        grids.KeyState.DOWN: (
++            LightsdAction()
++            .add_request(requests.PowerOn)
++            .add_target("*")
++        )
 +    })
 +    foreground_layer.insert(button)
 +    button = elements.Button("toggle kitchen", Position(2, 7), loop, actions={
-+        grids.KeyState.DOWN: actions.PowerToggle(loop).add_target("#kitchen"),
++        grids.KeyState.DOWN: (
++            LightsdAction()
++            .add_request(requests.PowerToggle)
++            .add_target("#kitchen")
++        )
 +    })
 +    foreground_layer.insert(button)
 +    button = elements.Button("toggle fugu", Position(3, 7), loop, actions={
-+        grids.KeyState.DOWN: actions.PowerToggle(loop).add_target("fugu"),
++        grids.KeyState.DOWN: (
++            LightsdAction()
++            .add_request(requests.PowerToggle)
++            .add_target("fugu")
++        )
++    })
++    foreground_layer.insert(button)
++    button = elements.Button("orange", Position(4, 7), loop, actions={
++        grids.KeyState.DOWN: (
++            LightsdAction()
++            .add_request(functools.partial(
++                requests.SetLightFromHSBK,
++                ["#tower"], 37.469443, 1.0, 0.25, 3500, 600,
++            )).add_request(functools.partial(
++                requests.SetLightFromHSBK,
++                ["fugu", "buzz"], 47.469443, 0.2, 0.2, 3500, 600,
++            )).add_request(functools.partial(
++                requests.SetLightFromHSBK,
++                ["candle"], 47.469443, 0.2, 0.15, 3500, 600,
++            )).add_request(functools.partial(requests.PowerOn, ["#br"]))
++        )
 +    })
 +    foreground_layer.insert(button)
 +
@@ -891,8 +922,8 @@ new file mode 100644
 +           red_hsbk = (0., 1., 1., 3500)
 +           click.echo("Turning all bulbs to red in {}ms...".format(transition_ms))
 +           async with client.batch() as batch:
-+               batch.apply(PowerOn(targets))
-+               batch.apply(SetLightFromHSBK(targets, *red_hsbk, transition_ms=transition_ms))
++               batch.append(PowerOn(targets))
++               batch.append(SetLightFromHSBK(targets, *red_hsbk, transition_ms=transition_ms))
 +
 +           click.echo("Restoring original state")
 +           async with client.batch() as batch:
@@ -900,8 +931,8 @@ new file mode 100644
 +                   PowerState = PowerOn if b.power else PowerOff
 +                   hsbk = (b.h, b.s, b.b, b.k)
 +
-+                   batch.apply(PowerState([b.label]))
-+                   batch.apply(SetLightFromHSBK([b.label], *hsbk, transition_ms=transition_ms))
++                   batch.append(PowerState([b.label]))
++                   batch.append(SetLightFromHSBK([b.label], *hsbk, transition_ms=transition_ms))
 +
 +   @click.command()
 +   @click.option("--lightsd-url", help="supported schemes: tcp+jsonrpc://, unix+jsonrpc://")
@@ -925,7 +956,7 @@ diff --git a/clients/python/lightsc/lightsc/__init__.py b/clients/python/lightsc
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/__init__.py
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,42 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# All rights reserved.
 +#
@@ -964,6 +995,7 @@ new file mode 100644
 +)
 +from .client import (  # noqa
 +    LightsClient,
++    LightsCommandBatch,
 +    create_lightsd_connection,
 +    create_async_lightsd_connection,
 +)
@@ -971,7 +1003,7 @@ diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/l
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/client.py
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,344 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# All rights reserved.
 +#
@@ -1255,13 +1287,9 @@ new file mode 100644
 +
 +    async def __aexit__(self, exc_type, exc_val, exc_tb):
 +        if exc_type is None:
-+            reps_by_id = await self._client._jsonrpc_execute(self._batch)
-+            self.responses = (
-+                _JSONRPC_API[req.__class__].map_result(reps_by_id[req.id])
-+                for req in self._batch
-+            )
++            await self.execute()
 +
-+    def apply(
++    def append(
 +        self,
 +        req: requests.Request,
 +        timeout: int = AsyncJSONRPCLightsClient.TIMEOUT
@@ -1269,6 +1297,16 @@ new file mode 100644
 +        method = _JSONRPC_API[req.__class__]
 +        call = _JSONRPCCall(method.name, req.params, timeout=timeout)
 +        self._batch.append(call)
++
++    async def execute(self) -> None:
++        reps_by_id = await self._client._jsonrpc_execute(self._batch)
++        self.responses = (
++            _JSONRPC_API[req.__class__].map_result(reps_by_id[req.id])
++            for req in self._batch
++        )
++
++
++LightsCommandBatch = _AsyncJSONRPCBatch
 +
 +
 +async def get_lightsd_unix_socket_async(
