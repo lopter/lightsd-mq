@@ -18,7 +18,7 @@ diff --git a/apps/monolight/monolight/bulbs.py b/apps/monolight/monolight/bulbs.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/bulbs.py
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,78 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -91,14 +91,17 @@ new file mode 100644
 +    global _refresh_task, lightsd
 +
 +    _refresh_task.cancel()
-+    await asyncio.wait_for(_refresh_task, timeout=None, loop=loop)
++    try:
++        await asyncio.wait_for(_refresh_task, timeout=None, loop=loop)
++    except asyncio.CancelledError:
++        pass
 +    await lightsd.close()
 +    lightsd = _refresh_task = None
 diff --git a/apps/monolight/monolight/grids.py b/apps/monolight/monolight/grids.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/grids.py
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,154 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# # This file is part of lightsd.
 +#
@@ -250,13 +253,14 @@ new file mode 100644
 +async def stop_all() -> None:
 +    if _serialosc is not None:
 +        _serialosc.disconnect()
-+    for grid in running:
++    # copy the set since we're gonna modify it as we iter through it:
++    for grid in list(running):
 +        grid.monome.disconnect()
 diff --git a/apps/monolight/monolight/monolight.py b/apps/monolight/monolight/monolight.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/monolight.py
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,81 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -324,7 +328,10 @@ new file mode 100644
 +        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
 +            loop.add_signal_handler(signum, ui_task.cancel)
 +
-+    loop.run_until_complete(ui_task)
++    try:
++        loop.run_until_complete(ui_task)
++    except asyncio.CancelledError:
++        pass
 +
 +    click.echo("ui stopped, disconnecting from serialoscd and lightsd...")
 +
@@ -1003,7 +1010,7 @@ diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/l
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/client.py
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,350 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# All rights reserved.
 +#
@@ -1181,6 +1188,12 @@ new file mode 100644
 +    async def close(self) -> None:
 +        if self._listen_task is not None:
 +            self._listen_task.cancel()
++            try:
++                await asyncio.wait_for(
++                    self._listen_task, timeout=None, loop=self._loop
++                )
++            except asyncio.CancelledError:
++                pass
 +            self._listen_task = None
 +
 +        if self._writer is not None:
