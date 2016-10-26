@@ -635,7 +635,7 @@ new file mode 100644
 +        for component in self.children:
 +            led_sprite = component.to_led_sprite(frame_ts_ms)
 +            for off_x, off_y, level in led_sprite:
-+                self.led_buffer.led_set(
++                self.led_buffer.led_level_set(
 +                    component.offset.x + off_x,
 +                    component.offset.y + off_y,
 +                    level.value
@@ -685,7 +685,7 @@ new file mode 100644
 +
 +from . import actions, elements
 +
-+DEFAULT_FRAMERATE = 60
++DEFAULT_FRAMERATE = 40
 +
 +logger = logging.getLogger("monolight.ui")
 +
