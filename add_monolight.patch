@@ -18,7 +18,7 @@ diff --git a/apps/monolight/monolight/bulbs.py b/apps/monolight/monolight/bulbs.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/bulbs.py
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,75 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -91,17 +91,14 @@ new file mode 100644
 +    global _refresh_task, lightsd
 +
 +    _refresh_task.cancel()
-+    try:
-+        await asyncio.wait_for(_refresh_task, timeout=None, loop=loop)
-+    except asyncio.CancelledError:
-+        pass
++    await asyncio.wait([_refresh_task], loop=loop)
 +    await lightsd.close()
 +    lightsd = _refresh_task = None
 diff --git a/apps/monolight/monolight/grids.py b/apps/monolight/monolight/grids.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/grids.py
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,157 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# # This file is part of lightsd.
 +#
@@ -213,6 +210,8 @@ new file mode 100644
 +        if len(running) == 1:
 +            running_event.clear()
 +        running.remove(self._grid)
++        self._grid.input_queue.join()
++        self._grid.queue_get.cancel()
 +        monome.Monome.disconnect(self)
 +        logger.info("Grid {} disconnected".format(self.id))
 +
@@ -231,6 +230,7 @@ new file mode 100644
 +        self.show_ui = asyncio.Event(loop=loop)
 +        self.show_ui.set()
 +        self.input_queue = asyncio.Queue(loop=loop)  # type: asyncio.Queue
++        self.queue_get = None  # type: asyncio.Future
 +        self.monome = monome
 +
 +    @property
@@ -418,7 +418,7 @@ diff --git a/apps/monolight/monolight/ui/actions.py b/apps/monolight/monolight/u
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/actions.py
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,83 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -437,15 +437,17 @@ new file mode 100644
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
 +import asyncio
++import lightsc
++import logging
 +
-+from lightsc import requests
-+from typing import TYPE_CHECKING, Type
-+from typing import List  # noqa
++from typing import TYPE_CHECKING, List, Type
 +
 +from .. import bulbs
 +
 +if TYPE_CHECKING:
 +    from ..elements import UIComponent  # noqa
++
++logger = logging.getLogger("monolight.ui.actions")
 +
 +
 +class Action:
@@ -471,26 +473,35 @@ new file mode 100644
 +
 +class LightsdAction(Action):
 +
++    RequestType = Type[lightsc.requests.RequestClass]
++    RequestTypeList = List[RequestType]
++
 +    def __init__(self, *args, **kwargs) -> None:
 +        Action.__init__(self, *args, **kwargs)
 +        self._targets = []  # type: List[str]
-+        self._batch = []  # type: List[Type[requests.RequestClass]]
++        self._batch = []  # type: RequestTypeList
 +
 +    def add_target(self, target: str) -> "LightsdAction":
 +        self._targets.append(target)
 +        return self
 +
-+    def add_request(self, type: Type[requests.RequestClass]) -> "LightsdAction":
++    def add_request(self, type: RequestType) -> "LightsdAction":
 +        self._batch.append(type)
 +        return self
 +
 +    async def _run(self) -> None:
-+        async with bulbs.lightsd.batch() as batch:
-+            for RequestClass in self._batch:
-+                if self._targets:
-+                    batch.append(RequestClass(self._targets))
-+                else:
-+                    batch.append(RequestClass())
++        try:
++            requests = []
++            async with bulbs.lightsd.batch() as batch:
++                for RequestClass in self._batch:
++                    if self._targets:
++                        req = RequestClass(self._targets)
++                    else:
++                        req = RequestClass()
++                    batch.append(req)
++                    requests.append(req.__class__.__name__)
++        except lightsc.exceptions.LightsClientTimeoutError:
++            logging.error("Timeout on request [{}]".format(", ".join(requests)))
 diff --git a/apps/monolight/monolight/ui/elements.py b/apps/monolight/monolight/ui/elements.py
 new file mode 100644
 --- /dev/null
@@ -661,7 +672,7 @@ diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,177 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -811,17 +822,24 @@ new file mode 100644
 +        if not grids.running_event.is_set():
 +            await grids.running_event.wait()
 +
++        for grid in grids.running:
++            grid.queue_get = loop.create_task(grid.input_queue.get())
 +        keypresses, _ = await asyncio.wait(
-+            [grid.input_queue.get() for grid in grids.running],
++            [grid.queue_get for grid in grids.running],
 +            return_when=asyncio.FIRST_COMPLETED,
 +            loop=loop,
-+            )  # type: Tuple[Set[asyncio.Future], Set[asyncio.Future]]
-+        for grid, position, state in [each.result() for each in keypresses]:
-+            logger.info("Keypress {} on grid {} at {}".format(
-+                state, grid.monome.id, position
-+            ))
-+            if grid.foreground_layer is not None:
-+                grid.foreground_layer.submit_input(position, state)
++        )  # type: Tuple[Set[asyncio.Future], Set[asyncio.Future]]
++        try:
++            for grid, position, state in [each.result() for each in keypresses]:
++                grid.queue_get = None
++                grid.input_queue.task_done()
++                logger.info("Keypress {} on grid {} at {}".format(
++                    state, grid.monome.id, position
++                ))
++                if grid.foreground_layer is not None:
++                    grid.foreground_layer.submit_input(position, state)
++        except asyncio.CancelledError:
++            continue
 +
 +
 +def start(
@@ -1010,7 +1028,7 @@ diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/l
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/client.py
-@@ -0,0 +1,350 @@
+@@ -0,0 +1,345 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# All rights reserved.
 +#
@@ -1188,12 +1206,7 @@ new file mode 100644
 +    async def close(self) -> None:
 +        if self._listen_task is not None:
 +            self._listen_task.cancel()
-+            try:
-+                await asyncio.wait_for(
-+                    self._listen_task, timeout=None, loop=self._loop
-+                )
-+            except asyncio.CancelledError:
-+                pass
++            await asyncio.wait([self._listen_task], loop=self._loop)
 +            self._listen_task = None
 +
 +        if self._writer is not None:
