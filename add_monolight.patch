@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  c55d0126affdf45c934ca57c5ef599778a753003
+# Parent  0b4f648b6f8e6a877a881914ee0203913b542643
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -562,7 +562,7 @@ diff --git a/apps/monolight/monolight/ui/elements.py b/apps/monolight/monolight/
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements.py
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,273 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -594,6 +594,7 @@ new file mode 100644
 +from . import actions
 +
 +logger = logging.getLogger("monolight.ui.elements")
++logger.setLevel(logging.DEBUG)
 +
 +
 +class UIComponentInsertionError(Exception):
@@ -690,10 +691,36 @@ new file mode 100644
 +        return self._on_sprite
 +
 +    async def _process_actions(self) -> None:
++        current_action = next_action = None
 +        while True:
-+            action = await self._action_queue.get()
-+            await action.execute()
-+            self._action_queue.task_done()
++            tasks = []
++            if current_action is None:
++                if next_action is None:
++                    next_action = await self._action_queue.get()
++                current_action = self.loop.create_task(next_action.execute())
++                next_action = None
++            tasks.append(current_action)
++            if next_action is None:
++                next_action = self.loop.create_task(self._action_queue.get())
++                tasks.append(next_action)
++
++            done, pending = await asyncio.wait(
++                tasks, return_when=asyncio.FIRST_COMPLETED, loop=self.loop,
++            )
++
++            if current_action in done:
++                logging.debug("Finished current action: {}".format(
++                    current_action
++                ))
++                self._action_queue.task_done()
++                current_action = None
++            if next_action in done:
++                next_action = next_action.result()
++                logging.debug("Got next action: {}".format(next_action))
++                if current_action is None:
++                    current_action = self.loop.create_task(
++                        next_action.execute()
++                    )
 +
 +    def _handle_input(
 +        self, offset: Position, key_state: grids.KeyState
