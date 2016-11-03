@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  0b4f648b6f8e6a877a881914ee0203913b542643
+# Parent  4e9a32c7035ac32ac88249ead2d14da461ece7dc
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -299,7 +299,7 @@ diff --git a/apps/monolight/monolight/monolight.py b/apps/monolight/monolight/mo
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/monolight.py
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,83 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -339,6 +339,8 @@ new file mode 100644
 +    lightsd_url: str,
 +) -> None:
 +    logging.basicConfig(level=logging.INFO)
++    logging.getLogger("monolight.ui").setLevel(logging.DEBUG)
++    logging.getLogger("monolight").setLevel(logging.DEBUG)
 +    logging.getLogger("lightsc").setLevel(logging.WARN)
 +
 +    # NOTE: this isn't good enough on Windows unless you pass --lightsd-url:
@@ -562,7 +564,7 @@ diff --git a/apps/monolight/monolight/ui/elements.py b/apps/monolight/monolight/
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements.py
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,271 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -594,7 +596,6 @@ new file mode 100644
 +from . import actions
 +
 +logger = logging.getLogger("monolight.ui.elements")
-+logger.setLevel(logging.DEBUG)
 +
 +
 +class UIComponentInsertionError(Exception):
@@ -691,36 +692,33 @@ new file mode 100644
 +        return self._on_sprite
 +
 +    async def _process_actions(self) -> None:
-+        current_action = next_action = None
++        current_action = None
++        next_action = None
 +        while True:
 +            tasks = []
-+            if current_action is None:
-+                if next_action is None:
-+                    next_action = await self._action_queue.get()
-+                current_action = self.loop.create_task(next_action.execute())
-+                next_action = None
-+            tasks.append(current_action)
 +            if next_action is None:
++                if current_action is None:
++                    next_action = (await self._action_queue.get()).execute()
++                    current_action = self.loop.create_task(next_action)
++                    next_action = None
++                tasks.append(current_action)
 +                next_action = self.loop.create_task(self._action_queue.get())
-+                tasks.append(next_action)
++            tasks.append(next_action)
 +
 +            done, pending = await asyncio.wait(
 +                tasks, return_when=asyncio.FIRST_COMPLETED, loop=self.loop,
 +            )
 +
 +            if current_action in done:
-+                logging.debug("Finished current action: {}".format(
-+                    current_action
-+                ))
 +                self._action_queue.task_done()
 +                current_action = None
 +            if next_action in done:
 +                next_action = next_action.result()
-+                logging.debug("Got next action: {}".format(next_action))
 +                if current_action is None:
 +                    current_action = self.loop.create_task(
 +                        next_action.execute()
 +                    )
++                next_action = None
 +
 +    def _handle_input(
 +        self, offset: Position, key_state: grids.KeyState
@@ -800,9 +798,11 @@ new file mode 100644
 +        self, offset: Position, key_state: grids.KeyState
 +    ) -> None:
 +        if key_state is grids.KeyState.DOWN:
++            logger.info("Button {} pressed".format(self.name))
 +            action = self.actions.get(Button.ActionEnum.DOWN)
 +            self.state = self.State.DOWN
 +        else:
++            logger.info("Button {} depressed".format(self.name))
 +            action = self.actions.get(Button.ActionEnum.UP)
 +            self.state = self.State.UP
 +
@@ -898,11 +898,11 @@ new file mode 100644
 +        return actions.LightsdAction(loop)
 +
 +    button = Button("show/hide ui", Position(15, 7), loop, actions={
-+        Button.ActionEnum.DOWN: _ToggleUI(loop).on_grid(grid),
++        Button.ActionEnum.UP: _ToggleUI(loop).on_grid(grid),
 +    })
 +    foreground_layer.insert(button)
 +    button = Button("off *", Position(0, 7), loop, actions={
-+        Button.ActionEnum.DOWN: (
++        Button.ActionEnum.UP: (
 +            LightsdAction()
 +            .add_request(requests.PowerOff)
 +            .add_target("*")
@@ -910,7 +910,7 @@ new file mode 100644
 +    })
 +    foreground_layer.insert(button)
 +    button = Button("on *", Position(1, 7), loop, actions={
-+        Button.ActionEnum.DOWN: (
++        Button.ActionEnum.UP: (
 +            LightsdAction()
 +            .add_request(requests.PowerOn)
 +            .add_target("*")
@@ -918,7 +918,7 @@ new file mode 100644
 +    })
 +    foreground_layer.insert(button)
 +    button = Button("toggle kitchen", Position(2, 7), loop, actions={
-+        Button.ActionEnum.DOWN: (
++        Button.ActionEnum.UP: (
 +            LightsdAction()
 +            .add_request(requests.PowerToggle)
 +            .add_target("#kitchen")
@@ -926,7 +926,7 @@ new file mode 100644
 +    })
 +    foreground_layer.insert(button)
 +    button = Button("toggle fugu", Position(3, 7), loop, actions={
-+        Button.ActionEnum.DOWN: (
++        Button.ActionEnum.UP: (
 +            LightsdAction()
 +            .add_request(requests.PowerToggle)
 +            .add_target("fugu")
@@ -934,7 +934,7 @@ new file mode 100644
 +    })
 +    foreground_layer.insert(button)
 +    button = Button("orange", Position(4, 7), loop, actions={
-+        Button.ActionEnum.DOWN: (
++        Button.ActionEnum.UP: (
 +            LightsdAction()
 +            .add_request(functools.partial(
 +                requests.SetLightFromHSBK,
@@ -987,7 +987,7 @@ new file mode 100644
 +
 +DEFAULT_FRAMERATE = 40
 +
-+logger = logging.getLogger("monolight.ui")
++logger = logging.getLogger("monolight.ui.base")
 +
 +
 +async def _ui_refresh(loop: asyncio.AbstractEventLoop, framerate: int) -> None:
