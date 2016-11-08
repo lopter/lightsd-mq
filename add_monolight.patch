@@ -589,7 +589,7 @@ diff --git a/apps/monolight/monolight/ui/elements.py b/apps/monolight/monolight/
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements.py
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,455 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -615,9 +615,9 @@ new file mode 100644
 +import time
 +
 +from lightsc import requests
-+from lightsc.constants import HUE_RANGE
-+from typing import Dict, List
-+from typing import Set  # noqa
++from lightsc.constants import HUE_RANGE, KELVIN_RANGE
++from typing import Dict, List, Tuple
++from typing import Set, Union  # noqa
 +
 +from .. import bulbs, grids
 +from ..types import Dimensions, Position, TimeMonotonic
@@ -864,6 +864,8 @@ new file mode 100644
 +
 +class Range(UIComponent):
 +
++    RANGE = None
++
 +    class ActionEnum(UIActionEnum):
 +
 +        COARSE_INC = 0
@@ -878,11 +880,9 @@ new file mode 100644
 +        size: Dimensions,
 +        loop: asyncio.AbstractEventLoop,
 +        actions: Dict[UIActionEnum, actions.Action],
-+        minmaxstep: range,
 +    ) -> None:
 +        UIComponent.__init__(self, name, offset, size, loop, actions)
-+        self.range = minmaxstep
-+        self.value = self.range.start
++        self.value = self.RANGE.start  # XXX not ideal: type: Union[int, float]
 +        self._action_map = {
 +            (0, size.height - 1): self.ActionEnum.COARSE_DEC,
 +            (0, size.height - 2): self.ActionEnum.FINE_DEC,
@@ -911,7 +911,7 @@ new file mode 100644
 +            logger.warning("{!r}: action queue full".format(self))
 +
 +
-+class HueSlider(Range):
++class IntSlider(Range):
 +
 +    def __init__(
 +        self,
@@ -920,29 +920,22 @@ new file mode 100644
 +        size: Dimensions,
 +        loop: asyncio.AbstractEventLoop,
 +        actions: Dict[UIActionEnum, actions.Action],
-+        minmaxstep: range,
 +        targets: List[str],  # targets this slider tracks
 +    ) -> None:
-+        Range.__init__(self, name, offset, size, loop, actions, minmaxstep)
++        Range.__init__(self, name, offset, size, loop, actions)
 +        self.targets = targets
 +        self._steps = size.area * (grids.LedLevel.ON + 1)
 +        self._steps_per_button = self._steps / size.height
 +        self._sprite = grids.LedSprite(size, grids.LedLevel.OFF)
 +
++    def _update_value_from_bulbs(self) -> bool:
++        raise NotImplementedError
++
 +    def to_led_sprite(self, frame_ts_ms: TimeMonotonic) -> grids.LedSprite:
-+        hues = [bulb.h for bulb in bulbs.iter_targets(self.targets)]
-+        if not hues:
++        if not self._update_value_from_bulbs():
 +            return self._sprite
 +
-+        # Find a better method when an operation is in progress (maybe 0
-+        # should be mapped at the middle of the slider):
-+        hue = sum(hues) / len(hues)
-+        if hue == self.value:
-+            return self._sprite
-+
-+        self.value = hue
-+
-+        step = hue / (HUE_RANGE.stop / self._steps)
++        step = self.value / (self.RANGE.stop / self._steps)
 +        on_range = range(
 +            self.size.height - 1,
 +            self.size.height - 1 - int(step // self._steps_per_button),
@@ -961,46 +954,102 @@ new file mode 100644
 +        for y in range(y, -1, -1):
 +            self._sprite.set(Position(0, y), grids.LedLevel.OFF)
 +
-+        logger.info(
-+            "hue for {} over {} targets: "
-+            "{}, step {}/{}, on_buttons={}".format(
-+                self.targets, len(hues), hue, step, self._steps, on_range
-+            )
-+        )
++        logger.info("step {}/{}, on_buttons={}".format(
++            step, self._steps, on_range
++        ))
 +
 +        return self._sprite
++
++    @classmethod
++    def _value_to_hsbk(cls, bulb, value) -> Tuple[int, float, float, int]:
++        raise NotImplementedError
 +
 +    async def update(self, change: int, transition_ms: int = 600) -> None:
 +        if change == 0:
 +            return
 +
 +        if change > 0:
-+            hue = (self.value + change) % HUE_RANGE.stop
++            new_value = (self.value + change) % self.RANGE.stop
 +        elif self.value + change < 0:
-+            hue = HUE_RANGE.stop + change + self.value
++            new_value = self.RANGE.stop + change + self.value
 +        else:
-+            hue = self.value + change
++            new_value = self.value + change
 +
 +        # XXX: implement setting one component at a time in lightsd so
 +        # you can re-use targets:
 +        async with bulbs.lightsd.batch() as batch:
 +            for target in bulbs.iter_targets(self.targets):
-+                logger.info("{}, hue -> {}".format(target.label, hue))
 +                batch.append(requests.SetLightFromHSBK(
 +                    [target.label],
-+                    hue, target.s, target.b, target.k,
-+                    transition_ms
++                    *self._value_to_hsbk(target, new_value),
++                    transition_ms=transition_ms,
 +                ))
 +            batch_start = time.monotonic()
 +        batch_end = time.monotonic()
 +        transition_remaining = transition_ms / 1000 - batch_end - batch_start
 +        if transition_remaining > 0:
 +            await asyncio.sleep(transition_remaining)
++
++
++class HueSlider(IntSlider):
++
++    RANGE = HUE_RANGE
++
++    def _update_value_from_bulbs(self) -> bool:
++        hues = [bulb.h for bulb in bulbs.iter_targets(self.targets)]
++        if not hues:
++            return False
++
++        # Find a better method when an operation is in progress (maybe 0
++        # should be mapped at the middle of the slider):
++        hue = sum(hues) / len(hues)
++        if hue == self.value:
++            return False
++
++        self.value = hue
++
++        logger.info("hue for {} over {} targets: {}".format(
++            self.targets, len(hues), hue
++        ))
++
++        return True
++
++    @classmethod
++    def _value_to_hsbk(cls, bulb, value) -> Tuple[int, float, float, int]:
++        return value, bulb.s, bulb.b, bulb.k
++
++
++class KelvinSlider(IntSlider):
++
++    RANGE = KELVIN_RANGE
++
++    def _update_value_from_bulbs(self) -> bool:
++        temps = [bulb.k for bulb in bulbs.iter_targets(self.targets)]
++        if not temps:
++            return False
++
++        # Find a better method when an operation is in progress (maybe 0
++        # should be mapped at the middle of the slider):
++        temp = int(sum(temps) / len(temps))
++        if temp == self.value:
++            return False
++
++        self.value = temp
++
++        logger.info("temperature for {} over {} targets: {}K".format(
++            self.targets, len(temps), temp
++        ))
++
++        return True
++
++    @classmethod
++    def _value_to_hsbk(cls, bulb, value) -> Tuple[int, float, float, int]:
++        return bulb.h, bulb.s, bulb.b, value
 diff --git a/apps/monolight/monolight/ui/layers.py b/apps/monolight/monolight/ui/layers.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/layers.py
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,143 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -1029,7 +1078,13 @@ new file mode 100644
 +from ..types import Dimensions, Position
 +
 +from . import actions
-+from .elements import Button, HueSlider, Layer
++from .elements import (
++    Button,
++    HueSlider,
++    KelvinSlider,
++    Layer,
++    Range,
++)
 +
 +logger = logging.getLogger("monolight.ui.layers")
 +
@@ -1099,25 +1154,40 @@ new file mode 100644
 +    })
 +    foreground_layer.insert(button)
 +
++    coarse_temp_step = 500
++    fine_temp_step = 100
++    temp_slider = KelvinSlider(
++        "#kitchen temperature slider",
++        Position(3, 1),
++        Dimensions(width=1, height=6),
++        loop,
++        actions={
++            Range.ActionEnum.COARSE_INC: actions.Range(coarse_temp_step),
++            Range.ActionEnum.FINE_INC: actions.Range(fine_temp_step),
++            Range.ActionEnum.FINE_DEC: actions.Range(-fine_temp_step),
++            Range.ActionEnum.COARSE_DEC: actions.Range(-coarse_temp_step),
++        },
++        targets=["#kitchen"],
++    )
++    foreground_layer.insert(temp_slider)
++
 +    coarse_hue_step = HUE_RANGE.stop // 20
 +    fine_hue_step = 1
 +
 +    hue_slider = HueSlider(
 +        "#tower hue slider",
-+        Position(0, 1),
++        Position(4, 1),
 +        Dimensions(width=1, height=6),
 +        loop,
 +        actions={
-+            HueSlider.ActionEnum.COARSE_INC: actions.Range(coarse_hue_step),
-+            HueSlider.ActionEnum.FINE_INC: actions.Range(fine_hue_step),
-+            HueSlider.ActionEnum.FINE_DEC: actions.Range(-fine_hue_step),
-+            HueSlider.ActionEnum.COARSE_DEC: actions.Range(-coarse_hue_step),
++            Range.ActionEnum.COARSE_INC: actions.Range(coarse_hue_step),
++            Range.ActionEnum.FINE_INC: actions.Range(fine_hue_step),
++            Range.ActionEnum.FINE_DEC: actions.Range(-fine_hue_step),
++            Range.ActionEnum.COARSE_DEC: actions.Range(-coarse_hue_step),
 +        },
-+        minmaxstep=HUE_RANGE,
 +        targets=["#tower"],
 +    )
 +    foreground_layer.insert(hue_slider)
-+
 +    grid.layers.append(foreground_layer)
 +    logger.info("UI initialized on grid {}: {!r}".format(
 +        grid.monome.id, foreground_layer
