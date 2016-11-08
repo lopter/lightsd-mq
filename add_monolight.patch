@@ -575,21 +575,21 @@ new file mode 100644
 +
 +class Range(Action):
 +
-+    def __init__(self, step: Union[float, int], value=0) -> None:
++    def __init__(self, step: Union[float, int]) -> None:
 +        Action.__init__(self)
 +        self.step = step
-+        self._value = value
++        self._step = step
 +
-+    def update(self, value: int) -> None:
-+        self._value = min(self._value + value, self._source.range.stop)
++    def set_step(self, step: int) -> None:
++        self._step = step
 +
 +    async def _run(self) -> None:
-+        await self._source.set(self._value)
++        await self._source.update(self._step)
 diff --git a/apps/monolight/monolight/ui/elements.py b/apps/monolight/monolight/ui/elements.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements.py
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,406 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -612,6 +612,7 @@ new file mode 100644
 +import logging
 +import monome
 +import os
++import time
 +
 +from lightsc import requests
 +from lightsc.constants import HUE_RANGE
@@ -863,6 +864,13 @@ new file mode 100644
 +
 +class Range(UIComponent):
 +
++    class ActionEnum(UIActionEnum):
++
++        COARSE_INC = 0
++        FINE_INC = 1
++        FINE_DEC = 2
++        COARSE_DEC = 3
++
 +    def __init__(
 +        self,
 +        name: str,
@@ -875,21 +883,35 @@ new file mode 100644
 +        UIComponent.__init__(self, name, offset, size, loop, actions)
 +        self.range = minmaxstep
 +        self.value = self.range.start
++        self._action_map = {
++            (0, size.height - 1): self.ActionEnum.COARSE_DEC,
++            (0, size.height - 2): self.ActionEnum.FINE_DEC,
++            (0, 0): self.ActionEnum.COARSE_INC,
++            (0, 1): self.ActionEnum.FINE_INC,
++        }
 +
 +    def _handle_input(
 +        self, offset: Position, key_state: grids.KeyState
 +    ) -> None:
-+        pass
++        logger.info("Range {} pressed at {}".format(self.name, offset))
++        if key_state is not grids.KeyState.UP:
++            return
++
++        action = self.actions.get(self._action_map.get((offset.x, offset.y)))
++        logger.info("Range {} action = {}".format(
++            self.name, self._action_map.get((offset.x, offset.y))
++        ))
++
++        if action is None:
++            return
++
++        try:
++            self._action_queue.put_nowait(action)
++        except asyncio.QueueFull:
++            logger.warning("{!r}: action queue full".format(self))
 +
 +
 +class HueSlider(Range):
-+
-+    class ActionEnum(UIActionEnum):
-+
-+        COARSE_INC = 0
-+        FINE_INC = 1
-+        FINE_DEC = 2
-+        COARSE_DEC = 3
 +
 +    def __init__(
 +        self,
@@ -926,12 +948,6 @@ new file mode 100644
 +            self.size.height - 1 - int(step // self._steps_per_button),
 +            -1
 +        )
-+        logger.info(
-+            "hue for {} over {} targets: "
-+            "{}, step {}/{}, on_buttons={}".format(
-+                self.targets, len(hues), hue, step, self._steps, on_range
-+            )
-+        )
 +        y = on_range.start
 +        for each in on_range:
 +            self._sprite.set(Position(0, y), grids.LedLevel.ON)
@@ -945,23 +961,41 @@ new file mode 100644
 +        for y in range(y, -1, -1):
 +            self._sprite.set(Position(0, y), grids.LedLevel.OFF)
 +
++        logger.info(
++            "hue for {} over {} targets: "
++            "{}, step {}/{}, on_buttons={}".format(
++                self.targets, len(hues), hue, step, self._steps, on_range
++            )
++        )
++
 +        return self._sprite
 +
-+    async def set(self, hue: int, transition_ms: int = 600) -> None:
-+        if hue not in self.range:
-+            raise ValueError("{}: {} not in range({}, {}, {})".format(
-+                self, hue, self.range.start, self.range.stop, self.range.step
-+            ))
++    async def update(self, change: int, transition_ms: int = 600) -> None:
++        if change == 0:
++            return
 +
++        if change > 0:
++            hue = (self.value + change) % HUE_RANGE.stop
++        elif self.value + change < 0:
++            hue = HUE_RANGE.stop + change + self.value
++        else:
++            hue = self.value + change
++
++        # XXX: implement setting one component at a time in lightsd so
++        # you can re-use targets:
 +        async with bulbs.lightsd.batch() as batch:
 +            for target in bulbs.iter_targets(self.targets):
++                logger.info("{}, hue -> {}".format(target.label, hue))
 +                batch.append(requests.SetLightFromHSBK(
 +                    [target.label],
 +                    hue, target.s, target.b, target.k,
 +                    transition_ms
 +                ))
-+
-+        self.value = hue
++            batch_start = time.monotonic()
++        batch_end = time.monotonic()
++        transition_remaining = transition_ms / 1000 - batch_end - batch_start
++        if transition_remaining > 0:
++            await asyncio.sleep(transition_remaining)
 diff --git a/apps/monolight/monolight/ui/layers.py b/apps/monolight/monolight/ui/layers.py
 new file mode 100644
 --- /dev/null
