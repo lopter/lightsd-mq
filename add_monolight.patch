@@ -119,7 +119,7 @@ diff --git a/apps/monolight/monolight/grids.py b/apps/monolight/monolight/grids.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/grids.py
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,226 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# # This file is part of lightsd.
 +#
@@ -143,12 +143,12 @@ new file mode 100644
 +import logging
 +import monome
 +
-+from typing import TYPE_CHECKING, Iterator, Tuple, NamedTuple
++from typing import TYPE_CHECKING, Any, Iterator, Tuple, NamedTuple, cast
 +from typing import List, Set  # noqa
 +
 +from .types import Dimensions, Position
 +if TYPE_CHECKING:
-+    from .ui.elements.layer import Layer  # noqa
++    from .ui.elements import UILayer  # noqa
 +
 +
 +logger = logging.getLogger("monolight.grids")
@@ -191,7 +191,7 @@ new file mode 100644
 +    HIGH_4 = ON = 15
 +
 +
-+class LedSprite(collections.abc.Iterable):  # TODO: make it a real Sequence
++class LedCanvas(collections.abc.Iterable):
 +
 +    def __init__(
 +        self, size: Dimensions, level: LedLevel = LedLevel.OFF
@@ -204,6 +204,22 @@ new file mode 100644
 +
 +    def set(self, offset: Position, level: LedLevel) -> None:
 +        self._levels[self._index(offset)] = level
++
++    def shift(self, offset: Position) -> "LedCanvas":
++        class _Proxy:
++            def __init__(_self, canvas: LedCanvas, shift: Position):
++                _self._canvas = canvas
++                _self._shift = shift
++
++            def set(_self, offset: Position, level: LedLevel) -> None:
++                offset.x += _self._shift.x
++                offset.y += _self._shift.y
++                return _self._canvas.set(offset, level)
++
++            def __getattr__(self, name: str) -> Any:
++                return self._canvas.__getattribute__(name)
++        # I guess some kind of interface would avoid the cast, but whatever:
++        return cast(LedCanvas, _Proxy(self, offset))
 +
 +    def get(self, offset: Position) -> LedLevel:
 +        return self._levels[self._index(offset)]
@@ -246,19 +262,22 @@ new file mode 100644
 +
 +class MonomeGrid:
 +
-+    def __init__(self, monome: AIOSCMonolightApp) -> None:
-+        self.loop = monome.loop
-+        self.size = Dimensions(height=monome.height, width=monome.width)
-+        self.layers = []  # type: List[Layer]
-+        self.show_ui = asyncio.Event(loop=self.loop)
-+        self.show_ui.set()
++    def __init__(self, monome_app: AIOSCMonolightApp) -> None:
++        self.loop = monome_app.loop
++        self.size = Dimensions(height=monome_app.height, width=monome_app.width)
++        self.layers = []  # type: List[UILayer]
++        self._show_ui = asyncio.Event(loop=self.loop)
++        self._show_ui.set()
 +        self._input_queue = asyncio.Queue(loop=self.loop)  # type: asyncio.Queue
 +        self._queue_get = None  # type: asyncio.Future
-+        self.monome = monome
++        self.monome = monome_app
++        self._led_buffer = monome.LedBuffer(
++            width=self.size.width, height=self.size.height
++        )
 +
 +    def shutdown(self):
 +        self._queue_get.cancel()
-+        self.show_ui.clear()
++        self.show_ui = False
 +        for layer in self.layers:
 +            layer.shutdown()
 +        self.monome.led_level_all(LedLevel.OFF.value)
@@ -267,19 +286,40 @@ new file mode 100644
 +        self._input_queue.put_nowait(keypress)
 +
 +    async def get_input(self) -> KeyPress:
-+        try:
-+            self._queue_get = self.loop.create_task(self._input_queue.get())
-+            keypress = await asyncio.wait_for(
-+                self._queue_get, timeout=None, loop=self.loop
-+            )
-+            self._input_queue.task_done()
-+            return keypress
-+        except asyncio.CancelledError:
-+            pass
++        self._queue_get = self.loop.create_task(self._input_queue.get())
++        keypress = await asyncio.wait_for(
++            self._queue_get, timeout=None, loop=self.loop
++        )
++        self._input_queue.task_done()
++        return keypress
++
++    def _hide_ui(self) -> None:
++        self._show_ui.clear()
++        self.monome.led_level_all(LedLevel.OFF.value)
++
++    def _display_ui(self) -> None:
++        self._show_ui.set()
++        self._led_buffer.render(self.monome)
++
++    @property
++    def show_ui(self) -> bool:
++        return self._show_ui.is_set()
++
++    @show_ui.setter
++    def show_ui(self, value: bool) -> None:
++        self._hide_ui() if value is False else self._display_ui()
++
++    async def wait_ui(self) -> None:
++        await self._show_ui.wait()
 +
 +    @property
 +    def foreground_layer(self):
 +        return self.layers[-1] if self.layers else None
++
++    def display(self, canvas: LedCanvas) -> None:
++        for off_x, off_y, level in canvas:
++            self._led_buffer.led_level_set(off_x, off_y, level.value)
++        self._led_buffer.render(self.monome)
 +
 +
 +_serialosc = None
@@ -405,7 +445,7 @@ diff --git a/apps/monolight/monolight/types.py b/apps/monolight/monolight/types.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/types.py
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,62 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -423,22 +463,12 @@ new file mode 100644
 +# You should have received a copy of the GNU General Public License
 +# along with lightsd.  If not, see <http://www.gnu.org/licenses/>.
 +
-+from typing import NamedTuple
++import itertools
 +
-+_Dimensions = NamedTuple("Dimensions", [("height", int), ("width", int)])
-+
-+
-+class Dimensions(_Dimensions):
-+
-+    def __repr__(self) -> str:
-+        return "height={}, width={}".format(*self)
-+
-+    @property
-+    def area(self) -> int:
-+        return self.height * self.width
++from typing import Iterator
 +
 +
-+class Position:  # can't be a NamedTuple to support __add__ and __sub__
++class Position:
 +
 +    def __init__(self, x: int, y: int) -> None:
 +        self.x = x
@@ -452,6 +482,30 @@ new file mode 100644
 +
 +    def __add__(self, other: "Position") -> "Position":
 +        return Position(x=self.x + other.x, y=self.y + other.y)
++
++
++class Dimensions:
++
++    def __init__(self, height: int, width: int) -> None:
++        self.height = height
++        self.width = width
++
++    def __repr__(self) -> str:
++        return "height={}, width={}".format(self.height, self.width)
++
++    def __mul__(self, other: "Dimensions") -> "Dimensions":
++        return Dimensions(
++            height=self.height * other.height,
++            width=self.width * other.width,
++        )
++
++    @property
++    def area(self) -> int:
++        return self.height * self.width
++
++    def iter_area(self) -> Iterator[Position]:
++        positions = itertools.product(range(self.width), range(self.height))
++        return itertools.starmap(Position, positions)
 +
 +TimeMonotonic = int
 diff --git a/apps/monolight/monolight/ui/__init__.py b/apps/monolight/monolight/ui/__init__.py
@@ -481,7 +535,7 @@ diff --git a/apps/monolight/monolight/ui/actions.py b/apps/monolight/monolight/u
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/actions.py
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,107 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -539,6 +593,10 @@ new file mode 100644
 +
 +class Lightsd(Action):
 +
++    # XXX:
++    #
++    # This isn't correct, as of now RequestType is just a "factory" that
++    # optionally takes a targets argument or not:
 +    RequestType = Type[lightsc.requests.RequestClass]
 +    RequestTypeList = List[RequestType]
 +
@@ -589,7 +647,7 @@ diff --git a/apps/monolight/monolight/ui/elements/__init__.py b/apps/monolight/m
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements/__init__.py
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,27 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -611,6 +669,7 @@ new file mode 100644
 +from .buttons import Button  # noqa
 +from .sliders import (  # noqa
 +    BrightnessSlider,
++    HSBKPad,
 +    HueSlider,
 +    KelvinSlider,
 +    SaturationSlider,
@@ -620,7 +679,7 @@ diff --git a/apps/monolight/monolight/ui/elements/base.py b/apps/monolight/monol
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements/base.py
-@@ -0,0 +1,218 @@
+@@ -0,0 +1,255 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -641,10 +700,9 @@ new file mode 100644
 +import asyncio
 +import enum
 +import logging
-+import monome
 +import os
 +
-+from typing import Dict
++from typing import Dict, List
 +
 +from ... import grids
 +from ...types import Dimensions, Position, TimeMonotonic
@@ -682,23 +740,27 @@ new file mode 100644
 +        self.actions = actions if actions is not None else {}
 +        for action in self.actions.values():
 +            action.set_source(self)
-+        self._action_queue = asyncio.Queue(
-+            self.ACTION_QUEUE_SIZE
-+        )  # type: asyncio.Queue
++
 +        if loop is not None:
++            qsize = self.ACTION_QUEUE_SIZE
++            self._action_queue = asyncio.Queue(qsize)  # type: asyncio.Queue
 +            self._action_runner = loop.create_task(self._process_actions())
 +            self._action_queue_get = None  # type: asyncio.Future
 +            self._current_action = None  # type: UIActionEnum
 +
-+        self._nw_corner = offset - Position(1, 1)
++        self._nw_corner = offset
 +        self._se_corner = Position(
 +            x=self.offset.x + self.size.width - 1,
 +            y=self.offset.y + self.size.height - 1,
 +        )
 +
-+    def __repr__(self):
-+        return "<{}(\"{}\", size=({!r}), offset=({!r})>".format(
-+            self.__class__.__name__, self.name, self.size, self.offset
++    def __repr__(self, indent=None):
++        if self.name:
++            return "<{}(\"{}\", size=({!r}), offset=({!r})>".format(
++                self.__class__.__name__, self.name, self.size, self.offset
++            )
++        return "<{}(size=({!r}), offset=({!r})>".format(
++            self.__class__.__name__, self.size, self.offset
 +        )
 +
 +    def shutdown(self) -> None:
@@ -708,44 +770,21 @@ new file mode 100644
 +        if self._action_queue_get is not None:
 +            self._action_queue_get.cancel()
 +
-+    def insert(self, new: "UIComponent") -> None:
-+        if new in self.children:
-+            raise UIComponentInsertionError(
-+                "{!r} is already part of {!r}".format(new, self)
-+            )
-+        if not new.within(self):
-+            raise UIComponentInsertionError(
-+                "{!r} doesn't fit into {!r}".format(new, self)
-+            )
-+        for child in self.children:
-+            if child.collides(new):
-+                raise UIComponentInsertionError(
-+                    "{!r} conflicts with {!r}".format(new, child)
-+                )
-+        self.children.add(new)
-+
 +    def collides(self, other: "UIComponent") -> bool:
-+        """Return True if ``self`` and ``other`` overlap in any way."""
++        """Return True if ``self`` and ``other`` overlap in any way.
++
++        .. important::
++
++           ``self`` and ``other`` must be in the same container otherwise
++           the result is undefined.
++        """
 +
 +        return all((
-+            self._nw_corner.x < other._se_corner.x,
-+            self._se_corner.x > other._nw_corner.x,
-+            self._nw_corner.y < other._se_corner.y,
-+            self._se_corner.y > other._nw_corner.y,
++            self._nw_corner.x <= other._se_corner.x,
++            self._se_corner.x >= other._nw_corner.x,
++            self._nw_corner.y <= other._se_corner.y,
++            self._se_corner.y >= other._nw_corner.y,
 +        ))
-+
-+    def within(self, other: "UIComponent") -> bool:
-+        """Return True if ``self`` fits within ``other``."""
-+
-+        return all((
-+            other._nw_corner.x <= self._nw_corner.x,
-+            other._nw_corner.y <= self._nw_corner.y,
-+            other._se_corner.x >= self._se_corner.x,
-+            other._se_corner.y >= self._se_corner.y
-+        ))
-+
-+    def to_led_sprite(self, frame_ts_ms: TimeMonotonic) -> grids.LedSprite:
-+        raise NotImplementedError
 +
 +    async def _process_actions(self) -> None:
 +        current_action = None
@@ -780,18 +819,11 @@ new file mode 100644
 +                    )
 +                self._action_queue_get = next_action = None
 +
-+    def _handle_input(
-+        self, offset: Position, key_state: grids.KeyState
-+    ) -> None:
-+        return None
++    def draw(self, frame_ts_ms: TimeMonotonic, canvas: grids.LedCanvas) -> bool:
++        raise NotImplementedError
 +
-+    # maybe that bool return type could become an enum or a composite:
-+    def submit_input(
-+        self, position: Position, key_state: grids.KeyState
-+    ) -> bool:
-+        if not self.collides(_UIPosition(position)):
-+            return False
-+        self._handle_input(position - self.offset, key_state)
++    def handle_input(self, offset: Position, value: grids.KeyState) -> None:
++        raise NotImplementedError
 +
 +
 +class _UIPosition(UIComponent):
@@ -801,49 +833,113 @@ new file mode 100644
 +            self, "_ui_position", position, Dimensions(1, 1), loop=None
 +        )
 +
-+    def shutdown(self) -> None:
-+        pass
++
++class _UIContainer(UIComponent):
++
++    def __init__(
++        self,
++        name: str,
++        offset: Position,
++        size: Dimensions,
++        loop: asyncio.AbstractEventLoop
++    ) -> None:
++        UIComponent.__init__(self, name, offset, size, loop)
++
++    def __repr__(self, indent=1) -> str:
++        linesep = ",{}{}".format(os.linesep, "  " * indent)
++        return (
++            "<{}(\"{}\", size=({!r}), offset=({!r}), "
++            "components=[{nl}  {indent}{}{nl}{indent}])>".format(
++                self.__class__.__name__,
++                self.name,
++                self.size,
++                self.offset,
++                linesep.join(
++                    component.__repr__(indent + 1)
++                    for component in self.children
++                ),
++                indent="  " * (indent - 1),
++                nl=os.linesep,
++            )
++        )
++
++    def fits(self, other: "UIComponent") -> bool:
++        """Return True if ``self`` has enough space to contain ``other``."""
++
++        return all((
++            other._nw_corner.x >= 0,
++            other._nw_corner.y >= 0,
++            other._se_corner.x < self.size.width,
++            other._se_corner.y < self.size.height,
++        ))
++
++    def insert(self, new: "UIComponent") -> None:
++        if new in self.children:
++            raise UIComponentInsertionError(
++                "{!r} is already part of {!r}".format(new, self)
++            )
++        if not self.fits(new):
++            raise UIComponentInsertionError(
++                "{!r} doesn't fit into {!r}".format(new, self)
++            )
++        for child in self.children:
++            if child.collides(new):
++                raise UIComponentInsertionError(
++                    "{!r} conflicts with {!r}".format(new, child)
++                )
++
++        self.children.add(new)
++
++    def submit_input(self, offset: Position, value: grids.KeyState) -> bool:
++        if self.collides(_UIPosition(offset)):
++            self.handle_input(offset - self.offset, value)
++            return True
++
++        return False
++
++    def handle_input(self, offset: Position, value: grids.KeyState) -> None:
++        for component in self.children:
++            if component.collides(_UIPosition(offset)):
++                component.handle_input(offset - component.offset, value)
++
++    def draw(self, frame_ts_ms: TimeMonotonic, canvas: grids.LedCanvas) -> bool:
++        dirty = False
++        for component in self.children:
++            shifted_canvas = canvas.shift(component.offset + self.offset)
++            dirty = component.draw(frame_ts_ms, shifted_canvas) or dirty
++        return dirty
 +
 +
-+class UILayer(UIComponent):
++class UIGroup(_UIContainer):
++
++    def __init__(
++        self,
++        name: str,
++        offset: Position,
++        size: Dimensions,
++        loop: asyncio.AbstractEventLoop,
++        members: List[UIComponent],
++    ) -> None:
++        UIComponent.__init__(self, name, offset, size, loop)
++        for member in members:
++            self.insert(member)
++
++
++class UILayer(_UIContainer):
 +
 +    def __init__(
 +        self, name: str, size: Dimensions, loop: asyncio.AbstractEventLoop
 +    ) -> None:
-+        UIComponent.__init__(self, name, Position(0, 0), size, loop)
-+        self.led_buffer = monome.LedBuffer(width=size.width, height=size.height)
++        _UIContainer.__init__(self, name, Position(0, 0), size, loop)
++        self.canvas = grids.LedCanvas(self.size, grids.LedLevel.OFF)
 +
-+    def __repr__(self) -> str:
-+        linesep = ", {}  ".format(os.linesep)
-+        return "<{}(\"{}\", components=[{nl}  {}{nl}])>".format(
-+            self.__class__.__name__,
-+            self.name,
-+            linesep.join(repr(component) for component in self.children),
-+            nl=os.linesep
-+        )
-+
-+    def submit_input(
-+        self, position: Position, key_state: grids.KeyState
-+    ) -> bool:
-+        for component in self.children:
-+            if component.submit_input(position, key_state):
-+                break
-+
-+    def render(self, frame_ts_ms: TimeMonotonic) -> None:
-+        self.led_buffer.led_level_all(grids.LedLevel.OFF.value)
-+        for component in self.children:
-+            led_sprite = component.to_led_sprite(frame_ts_ms)
-+            for off_x, off_y, level in led_sprite:
-+                self.led_buffer.led_level_set(
-+                    component.offset.x + off_x,
-+                    component.offset.y + off_y,
-+                    level.value
-+                )
++    def render(self, frame_ts_ms: TimeMonotonic) -> bool:
++        return self.draw(frame_ts_ms, self.canvas)
 diff --git a/apps/monolight/monolight/ui/elements/buttons.py b/apps/monolight/monolight/ui/elements/buttons.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements/buttons.py
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,76 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -880,8 +976,6 @@ new file mode 100644
 +        DOWN = 1
 +        UP = 0
 +
-+    State = ActionEnum
-+
 +    # make the size configurable too?
 +    def __init__(
 +        self,
@@ -890,29 +984,30 @@ new file mode 100644
 +        loop: asyncio.AbstractEventLoop,
 +        actions: Dict[UIActionEnum, actions.Action],
 +    ) -> None:
-+        UIComponent.__init__(
-+            self, name, offset, Dimensions(1, 1), loop, actions
-+        )
-+        self.state = self.State.UP
-+        self._on_sprite = grids.LedSprite(self.size, grids.LedLevel.ON)
-+        self._medium_sprite = grids.LedSprite(self.size, grids.LedLevel.MEDIUM)
++        size = Dimensions(1, 1)
++        UIComponent.__init__(self, name, offset, size, loop, actions)
++        self._last_level = None  # type: grids.LedLevel
 +
-+    def to_led_sprite(self, frame_ts_ms: TimeMonotonic) -> grids.LedSprite:
-+        if self.busy and frame_ts_ms % 1000 // 100 % 2:
-+            return self._medium_sprite
-+        return self._on_sprite
++    def draw(self, frame_ts_ms: TimeMonotonic, canvas: grids.LedCanvas) -> bool:
++        animate_busy = self.busy and frame_ts_ms % 1000 // 100 % 2
++        level = grids.LedLevel.MEDIUM if animate_busy else grids.LedLevel.ON
 +
-+    def _handle_input(
-+        self, offset: Position, key_state: grids.KeyState
-+    ) -> None:
-+        if key_state is grids.KeyState.DOWN:
++        if level == self._last_level:
++            return False
++
++        self._last_level = level
++        for offset in self.size.iter_area():
++            canvas.set(offset, level)
++
++        return True
++
++    def handle_input(self, offset: Position, value: grids.KeyState) -> None:
++        if value is grids.KeyState.DOWN:
 +            logger.info("Button {} pressed".format(self.name))
 +            action = self.actions.get(Button.ActionEnum.DOWN)
-+            self.state = self.State.DOWN
 +        else:
 +            logger.info("Button {} depressed".format(self.name))
 +            action = self.actions.get(Button.ActionEnum.UP)
-+            self.state = self.State.UP
 +
 +        if action is None:
 +            return
@@ -925,7 +1020,7 @@ diff --git a/apps/monolight/monolight/ui/elements/sliders.py b/apps/monolight/mo
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements/sliders.py
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,313 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -950,14 +1045,14 @@ new file mode 100644
 +import statistics
 +import time
 +
-+from typing import Any, Callable, Dict, Iterable, List, TypeVar
++from typing import Any, Callable, Dict, Iterable, List, NamedTuple, TypeVar
 +
 +from ... import bulbs, grids
 +from ...types import Dimensions, Position, TimeMonotonic
 +
 +from .. import actions
 +
-+from .base import UIComponent, UIActionEnum, logger
++from .base import UIActionEnum, UIComponent, UIGroup, logger
 +
 +
 +class SliderTraits:
@@ -1024,13 +1119,10 @@ new file mode 100644
 +        }
 +        self._steps = size.area * (grids.LedLevel.ON + 1)
 +        self._steps_per_button = self._steps / size.height
-+        self._sprite = grids.LedSprite(size, grids.LedLevel.OFF)
 +
-+    def _handle_input(
-+        self, offset: Position, key_state: grids.KeyState
-+    ) -> None:
++    def handle_input(self, offset: Position, value: grids.KeyState) -> None:
 +        logger.info("Slider {} pressed at {}".format(self.name, offset))
-+        if key_state is not grids.KeyState.UP:
++        if value is not grids.KeyState.UP:
 +            return
 +
 +        action = self.actions.get(self._action_map.get((offset.x, offset.y)))
@@ -1046,10 +1138,10 @@ new file mode 100644
 +        except asyncio.QueueFull:
 +            logger.warning("Slider {} action queue full".format(self.name))
 +
-+    def to_led_sprite(self, frame_ts_ms: TimeMonotonic) -> grids.LedSprite:
++    def draw(self, frame_ts_ms: TimeMonotonic, canvas: grids.LedCanvas) -> bool:
 +        new_value = self.traits.consolidate(self.traits.gather(self.targets))
 +        if new_value is None or new_value == self.value:
-+            return self._sprite
++            return False
 +
 +        step = (new_value - self.traits.RANGE.start) / (
 +            (self.traits.RANGE.stop - self.traits.RANGE.start)
@@ -1070,18 +1162,16 @@ new file mode 100644
 +        )
 +        y = on_range.start
 +        for each in on_range:
-+            self._sprite.set(Position(0, y), grids.LedLevel.ON)
++            canvas.set(Position(0, y), grids.LedLevel.ON)
 +            y -= 1
 +        if y >= 0:
-+            self._sprite.set(
-+                Position(0, y),
-+                grids.LedLevel(int(step % self._steps_per_button))
-+            )
++            level = grids.LedLevel(int(step % self._steps_per_button))
++            canvas.set(Position(0, y), level)
 +            y -= 1
 +        for y in range(y, -1, -1):
-+            self._sprite.set(Position(0, y), grids.LedLevel.OFF)
++            canvas.set(Position(0, y), grids.LedLevel.OFF)
 +
-+        return self._sprite
++        return True
 +
 +    async def update(self, change: int, transition_ms: int = 600) -> None:
 +        if change == 0:
@@ -1186,11 +1276,69 @@ new file mode 100644
 +    consolidate_fn=mean_or_none,
 +    scatter_fn=scatter_temperature,
 +))
++
++
++class HSBKPad(UIGroup):
++
++    # I feel like this sucks, so I'm keeping it specific to this class
++    # for now, maybe that should just be part of SliderTraits:
++    SliderSteps = NamedTuple(
++        "SliderSteps", [("coarse", float), ("fine", float)]
++    )
++
++    def __init__(
++        self,
++        name: str,
++        offset: Position,
++        sliders_size: Dimensions,
++        loop: asyncio.AbstractEventLoop,
++        hue_steps: SliderSteps,
++        sb_steps: SliderSteps,
++        temp_steps: SliderSteps,
++        targets: List[str],
++    ) -> None:
++        sliders = [
++            functools.partial(HueSlider, name="hue", actions={
++                Slider.ActionEnum.COARSE_INC: actions.Slide(hue_steps.coarse),
++                Slider.ActionEnum.FINE_INC: actions.Slide(hue_steps.fine),
++                Slider.ActionEnum.FINE_DEC: actions.Slide(-hue_steps.fine),
++                Slider.ActionEnum.COARSE_DEC: actions.Slide(-hue_steps.coarse),
++            }),
++            functools.partial(SaturationSlider, name="saturation", actions={
++                Slider.ActionEnum.COARSE_INC: actions.Slide(sb_steps.coarse),
++                Slider.ActionEnum.FINE_INC: actions.Slide(sb_steps.fine),
++                Slider.ActionEnum.FINE_DEC: actions.Slide(-sb_steps.fine),
++                Slider.ActionEnum.COARSE_DEC: actions.Slide(-sb_steps.coarse),
++            }),
++            functools.partial(BrightnessSlider, name="brightness", actions={
++                Slider.ActionEnum.COARSE_INC: actions.Slide(sb_steps.coarse),
++                Slider.ActionEnum.FINE_INC: actions.Slide(sb_steps.fine),
++                Slider.ActionEnum.FINE_DEC: actions.Slide(-sb_steps.fine),
++                Slider.ActionEnum.COARSE_DEC: actions.Slide(-sb_steps.coarse),
++            }),
++            functools.partial(KelvinSlider, name="temperature", actions={
++                Slider.ActionEnum.COARSE_INC: actions.Slide(temp_steps.coarse),
++                Slider.ActionEnum.FINE_INC: actions.Slide(temp_steps.fine),
++                Slider.ActionEnum.FINE_DEC: actions.Slide(-temp_steps.fine),
++                Slider.ActionEnum.COARSE_DEC: actions.Slide(-temp_steps.coarse),
++            }),
++        ]
++        sliders = [
++            Slider(
++                offset=Position(i, 0),
++                size=sliders_size,
++                loop=loop,
++                targets=targets
++            )
++            for i, Slider in enumerate(sliders)
++        ]
++        group_size = sliders_size * Dimensions(width=len(sliders), height=1)
++        UIGroup.__init__(self, name, offset, group_size, loop, sliders)
 diff --git a/apps/monolight/monolight/ui/layers.py b/apps/monolight/monolight/ui/layers.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/layers.py
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,153 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -1221,9 +1369,7 @@ new file mode 100644
 +from . import actions
 +from .elements import (
 +    Button,
-+    HueSlider,
-+    KelvinSlider,
-+    Slider,
++    HSBKPad,
 +    UILayer,
 +)
 +
@@ -1234,15 +1380,10 @@ new file mode 100644
 +
 +    def __init__(self, grid: grids.MonomeGrid) -> None:
 +        actions.Action.__init__(self)
-+        self.grid = grid
++        self._grid = grid
 +
 +    async def _run(self) -> None:
-+        show_ui = self.grid.show_ui
-+        if show_ui.is_set():
-+            show_ui.clear()
-+            self.grid.monome.led_level_all(grids.LedLevel.OFF.value)
-+        else:
-+            show_ui.set()
++        self._grid.show_ui = not self._grid.show_ui
 +
 +
 +def root(loop: asyncio.AbstractEventLoop, grid: grids.MonomeGrid) -> UILayer:
@@ -1297,49 +1438,65 @@ new file mode 100644
 +
 +    coarse_temp_step = 500
 +    fine_temp_step = 100
-+    temp_slider = KelvinSlider(
-+        "#kitchen temperature slider",
-+        Position(3, 1),
-+        Dimensions(width=1, height=6),
-+        loop,
-+        actions={
-+            Slider.ActionEnum.COARSE_INC: actions.Slide(coarse_temp_step),
-+            Slider.ActionEnum.FINE_INC: actions.Slide(fine_temp_step),
-+            Slider.ActionEnum.FINE_DEC: actions.Slide(-fine_temp_step),
-+            Slider.ActionEnum.COARSE_DEC: actions.Slide(-coarse_temp_step),
-+        },
-+        targets=["#kitchen"],
-+    )
-+    foreground_layer.insert(temp_slider)
-+
 +    coarse_hue_step = HUE_RANGE.stop // 20
 +    fine_hue_step = 1
-+    hue_slider = HueSlider(
-+        "#tower hue slider",
++    coarse_sb_step = 0.1
++    fine_sb_step = 0.01
++
++    kitchen_control = HSBKPad(
++        "#kitchen hsbk pad",
++        Position(0, 1),
++        Dimensions(width=1, height=6),
++        loop,
++        HSBKPad.SliderSteps(coarse_hue_step, fine_hue_step),
++        HSBKPad.SliderSteps(coarse_sb_step, fine_sb_step),
++        HSBKPad.SliderSteps(coarse_temp_step, fine_temp_step),
++        ["#kitchen"],
++    )
++    foreground_layer.insert(kitchen_control)
++
++    tower_control = HSBKPad(
++        "#tower hsbk pad",
 +        Position(4, 1),
 +        Dimensions(width=1, height=6),
 +        loop,
-+        actions={
-+            Slider.ActionEnum.COARSE_INC: actions.Slide(coarse_hue_step),
-+            Slider.ActionEnum.FINE_INC: actions.Slide(fine_hue_step),
-+            Slider.ActionEnum.FINE_DEC: actions.Slide(-fine_hue_step),
-+            Slider.ActionEnum.COARSE_DEC: actions.Slide(-coarse_hue_step),
-+        },
-+        targets=["#tower"],
++        HSBKPad.SliderSteps(coarse_hue_step, fine_hue_step),
++        HSBKPad.SliderSteps(coarse_sb_step, fine_sb_step),
++        HSBKPad.SliderSteps(coarse_temp_step, fine_temp_step),
++        ["#tower"],
 +    )
-+    foreground_layer.insert(hue_slider)
++    foreground_layer.insert(tower_control)
 +
-+    grid.layers.append(foreground_layer)
-+    logger.info("UI initialized on grid {}: {!r}".format(
-+        grid.monome.id, foreground_layer
-+    ))
++    tower_control = HSBKPad(
++        "fugu hsbk pad",
++        Position(8, 1),
++        Dimensions(width=1, height=6),
++        loop,
++        HSBKPad.SliderSteps(coarse_hue_step, fine_hue_step),
++        HSBKPad.SliderSteps(coarse_sb_step, fine_sb_step),
++        HSBKPad.SliderSteps(coarse_temp_step, fine_temp_step),
++        ["fugu"],
++    )
++    foreground_layer.insert(tower_control)
++
++    tower_control = HSBKPad(
++        "candle hsbk pad",
++        Position(12, 1),
++        Dimensions(width=1, height=6),
++        loop,
++        HSBKPad.SliderSteps(coarse_hue_step, fine_hue_step),
++        HSBKPad.SliderSteps(coarse_sb_step, fine_sb_step),
++        HSBKPad.SliderSteps(coarse_temp_step, fine_temp_step),
++        ["candle"],
++    )
++    foreground_layer.insert(tower_control)
 +
 +    return foreground_layer
 diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.py
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,99 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -1369,7 +1526,7 @@ new file mode 100644
 +
 +DEFAULT_FRAMERATE = 40
 +
-+logger = logging.getLogger("monolight.ui.base")
++logger = logging.getLogger("monolight.ui")
 +
 +
 +async def _ui_refresh(loop: asyncio.AbstractEventLoop, framerate: int) -> None:
@@ -1377,9 +1534,10 @@ new file mode 100644
 +        if not grids.running_event.is_set():
 +            await grids.running_event.wait()
 +
-+        if not any(grid.show_ui.is_set() for grid in grids.running):
++        if not any(grid.show_ui for grid in grids.running):
++            # TODO: handle clean-up when we get ^C while in there:
 +            await asyncio.wait(
-+                [grid.show_ui.wait() for grid in grids.running],
++                [grid.wait_ui() for grid in grids.running],
 +                return_when=asyncio.FIRST_COMPLETED,
 +                loop=loop
 +            )
@@ -1387,13 +1545,20 @@ new file mode 100644
 +        render_starts_at = time.monotonic()
 +
 +        for grid in grids.running:
-+            if not grid.show_ui.is_set():
++            if not grid.show_ui:
 +                continue
++
 +            layer = grid.foreground_layer
 +            if layer is None:
 +                layer = layers.root(loop, grid)
-+            layer.render(frame_ts_ms=int(time.monotonic() * 1000))
-+            layer.led_buffer.render(grid.monome)
++                grid.layers.insert(0, layer)
++                logger.info("UI initialized on grid {}: {!r}".format(
++                    grid.monome.id, layer
++                ))
++
++            if layer.render(frame_ts_ms=int(time.monotonic() * 1000)):
++                logger.info("Refreshing UI on grid {}".format(grid.monome.id))
++                grid.display(layer.canvas)
 +
 +        render_latency = time.monotonic() - render_starts_at
 +        await asyncio.sleep(1000 / framerate / 1000 - render_latency, loop=loop)
@@ -1415,12 +1580,12 @@ new file mode 100644
 +                keypresses.append(future.result())
 +            except asyncio.CancelledError:
 +                continue
-+        for grid, position, state in keypresses:
++        for grid, position, value in keypresses:
 +            logger.info("Keypress {} on grid {} at {}".format(
-+                state, grid.monome.id, position
++                value, grid.monome.id, position
 +            ))
 +            if grid.foreground_layer is not None:
-+                grid.foreground_layer.submit_input(position, state)
++                grid.foreground_layer.submit_input(position, value)
 +
 +
 +def start(
@@ -1609,7 +1774,7 @@ diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/l
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/client.py
-@@ -0,0 +1,392 @@
+@@ -0,0 +1,391 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# All rights reserved.
 +#
@@ -1812,11 +1977,10 @@ new file mode 100644
 +    async def apply(self, req: requests.Request, timeout: int = TIMEOUT):
 +        method = _JSONRPC_API[req.__class__]
 +        call = _JSONRPCCall(method.name, req.params, timeout=timeout)
-+        resp_by_id = await self._jsonrpc_execute([call])
-+        response = method.map_result(resp_by_id[call.id])
-+        if isinstance(response, Exception):
-+            raise response
-+        return response
++        result = (await self._jsonrpc_execute([call]))[call.id]
++        if isinstance(result, Exception):
++            raise result
++        return method.map_result(result)
 +
 +    async def connect(self) -> None:
 +        parts = urllib.parse.urlparse(self.url)
