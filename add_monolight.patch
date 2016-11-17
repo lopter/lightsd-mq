@@ -1506,7 +1506,7 @@ new file mode 100644
 +            Button.ActionEnum.UP: actions.Lightsd(requests=[
 +                functools.partial(
 +                    requests.SetLightFromHSBK,
-+                    ["#kitchen"], 0.0, 0.0, 1.0, 400, 1000,
++                    ["#kitchen"], 0.0, 0.0, 1.0, 4000, 1000,
 +                ),
 +                functools.partial(requests.PowerOn, ["#kitchen"]),
 +            ])
@@ -1557,7 +1557,7 @@ diff --git a/apps/monolight/monolight/ui/ui.py b/apps/monolight/monolight/ui/ui.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/ui.py
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,101 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -1622,6 +1622,8 @@ new file mode 100644
 +                grid.display(layer.canvas)
 +
 +        render_latency = time.monotonic() - render_starts_at
++        # The plan is to have lightsd push updates and then make
++        # something smarter than this:
 +        await asyncio.sleep(1000 / framerate / 1000 - render_latency, loop=loop)
 +
 +
