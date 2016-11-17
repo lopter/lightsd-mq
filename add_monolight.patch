@@ -696,7 +696,7 @@ diff --git a/apps/monolight/monolight/ui/elements/base.py b/apps/monolight/monol
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/elements/base.py
-@@ -0,0 +1,266 @@
+@@ -0,0 +1,259 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -910,15 +910,9 @@ new file mode 100644
 +
 +    def submit_input(self, offset: Position, value: grids.KeyState) -> bool:
 +        if self.collides(_UIPosition(offset)):
-+            logger.info("{!r}: accepting input at ({!r}): {}".format(
-+                self, offset, value
-+            ))
 +            self.handle_input(offset - self.offset, value)
 +            return True
 +
-+        logger.info("{!r}: rejecting input at ({!r}): {}".format(
-+            self, offset, value
-+        ))
 +        return False
 +
 +    def handle_input(self, offset: Position, value: grids.KeyState) -> None:
@@ -949,7 +943,6 @@ new file mode 100644
 +    ) -> None:
 +        UIComponent.__init__(self, name, offset, size, loop)
 +        for member in members:
-+            logger.info("Inserting {!r} into {!r}".format(member, self))
 +            self.insert(member)
 +
 +
@@ -1442,7 +1435,7 @@ diff --git a/apps/monolight/monolight/ui/layers.py b/apps/monolight/monolight/ui
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/layers.py
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,117 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -1508,13 +1501,18 @@ new file mode 100644
 +            requests=[requests.PowerOn], targets=["*"]
 +        )
 +    }))
-+    foreground_layer.insert(PowerButton(
-+        "toggle kitchen", Position(2, 7), loop, targets=["#kitchen"]
-+    ))
-+    foreground_layer.insert(PowerButton(
-+        "toggle fugu", Position(3, 7), loop, targets=["fugu"]
-+    ))
-+    foreground_layer.insert(Button("orange", Position(4, 7), loop, actions={
++    foreground_layer.insert(
++        Button("4000k kitchen", Position(2, 7), loop, actions={
++            Button.ActionEnum.UP: actions.Lightsd(requests=[
++                functools.partial(
++                    requests.SetLightFromHSBK,
++                    ["#kitchen"], 0.0, 0.0, 1.0, 400, 1000,
++                ),
++                functools.partial(requests.PowerOn, ["#kitchen"]),
++            ])
++        })
++    )
++    foreground_layer.insert(Button("orange", Position(3, 7), loop, actions={
 +        Button.ActionEnum.UP: actions.Lightsd(requests=[
 +            functools.partial(
 +                requests.SetLightFromHSBK,
@@ -1531,6 +1529,9 @@ new file mode 100644
 +            functools.partial(requests.PowerOn, ["#br"])
 +        ]),
 +    }))
++    foreground_layer.insert(PowerButton(
++        "white", Position(4, 7), loop, targets=["white"]
++    ))
 +
 +    # some control blocks:
 +    BulbControlPad = functools.partial(
@@ -1539,7 +1540,7 @@ new file mode 100644
 +        sliders_size=Dimensions(width=1, height=6),
 +    )
 +    foreground_layer.insert(BulbControlPad(
-+        name="#kitchen control", offset=Position(0, 0), targets=["#kitchen"],
++        "#kitchen control", Position(0, 0), targets=["#kitchen"],
 +    ))
 +    foreground_layer.insert(BulbControlPad(
 +        "#tower control", Position(4, 0), targets=["#tower"],
