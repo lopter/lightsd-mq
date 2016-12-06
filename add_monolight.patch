@@ -1435,7 +1435,7 @@ diff --git a/apps/monolight/monolight/ui/layers.py b/apps/monolight/monolight/ui
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/layers.py
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,120 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -1530,7 +1530,10 @@ new file mode 100644
 +        ]),
 +    }))
 +    foreground_layer.insert(PowerButton(
-+        "white", Position(4, 7), loop, targets=["white"]
++        "#br", Position(4, 7), loop, targets=["#br"]
++    ))
++    foreground_layer.insert(PowerButton(
++        "white", Position(5, 7), loop, targets=["white"]
 +    ))
 +
 +    # some control blocks:
