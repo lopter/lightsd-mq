@@ -1,8 +1,8 @@
 # HG changeset patch
-# Parent  1bc74610c471047ba4ac28e55c77c44db07b1142
-Start to setup some slides for 33C3
+# Parent  11494fecd49645aca5e36787b4dece9e5d0ee8ee
+Start to setup some slides for Fosdem 2017
 
-Hopefully my talk proposal will be selected!
+https://fosdem.org/2017/schedule/event/iot_smart_bulbs/
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -1688,109 +1688,332 @@ new file mode 100644
 +  latex_setup_variables()
 +  latex_setup_targets()
 +endif()
-diff --git a/slides/33c3/33c3.tex b/slides/33c3/33c3.tex
-new file mode 100644
---- /dev/null
-+++ b/slides/33c3/33c3.tex
-@@ -0,0 +1,89 @@
-+\documentclass[xcolor={usenames,svgnames}]{beamer}
-+
-+\usepackage[american]{babel}
-+\usepackage{pdfcomment}
-+\usepackage{tikz}
-+
-+\usetikzlibrary{shapes,fit}
-+
-+\newcommand{\pdfnote}[1]{\marginnote{\pdfcomment[icon=note]{#1}}}
-+
-+\title{Making-of lightsd: a daemon to control your (LIFX) smart-bulbs.}
-+\date{33C3 --- December 2016}
-+\author{Louis Opter \\ \texttt{www.lightsd.io}}
-+
-+\begin{document}
-+
-+\begin{frame}\titlepage\end{frame}
-+
-+\section[design]{Design choices}
-+
-+% TODO: strip les notes lorsque tu es en release via cmake. (voir faire
-+% carrément des targets différentes pour être sûr de pas te tromper).
-+
-+\pdfnote{% Notes:
-+- Monolithic approach to solve the problem;\
-+- Est-ce que l'argument de l'isolation fonctionne ou IoTivity le résoud aussi?\
-+- Je ressens pas le besoin d'investir dans plus de domotique donc que lightsd\
-+  soit restreint ne me dérange pas, puis la stabilitité m'arrange;\
-+- Ce qui peut faire la différence avec IoTivity c'est la documentation, en
-+  bonus un plan pour vraiment extend;\
-+- Tu peux aussi dire: « voilà, moi j'ai fais ça, je sais pas trop comment\
-+  fonctionne IoTivity et les autres projets, mais si vous avez été déçu, venez\
-+  jeter un coup d'œil. »\
-+- Interfaces are bad because they encourage inheritance, I believe composition\
-+  is a better design pattern. (Though you can't really say the \"mixin\"\
-+  approach is composition, it really is inheritance, like interfaces, in the \
-+  sense that it delegates all attributes of the composite object).\
-+}
-+
-+\begin{frame}{Being a daemon}
-+\pdfnote{%
-+Pros:\
-+\
-+- Instant devices ``discovery'';\
-+- Conflict resolution;\
-+- Good network location.\
-+\
-+Cons:\
-+\
-+- Applications aren't self-contained: side-car process though, or even tighter\
-+  if you're GPLv3;\
-+- Discovery: avahi? dns?\
-+}
-+\end{frame}
-+
-+\section[tbd]{TBD}
-+
-+\begin{frame}{Device suppport}
-+\pdfnote{%
-+I think this is a pretty obvious idea, avoid getting locked with one\
-+manufacturer or product.\
-+\
-+lightsd has been architectured around a minimal set of bulb commands, meaning\
-+that while abstractions/integrations are missing to make lightsd work with\
-+other bulbs, it at least relies on a very limited set of commands (get/set\
-+the state of the bulb and that's about it). For example lightsd can totally\
-+implement transitions internally.\
-+\
-+Modules that would need heavy changes to support other bulb models:\
-+}
-+\end{frame}
-+
-+\section[related]{Related efforts}
-+
-+\begin{frame}{Related efforts}
-+\pdfnote{%
-+- AllJoyn (churned by IoTivity): https://allseenalliance.org/;\
-+- IoTivity: https://wiki.iotivity.org/architecture;\
-+- IBM Node-RED: http://nodered.org/;\
-+- Homekit: ;\
-+- openHAB: http://www.openhab.org/.\
-+}
-+\end{frame}
-+
-+\pdfnote{% Side-project ideas:
-+- ARP ping implementation for latency measurement + better debug;\
-+}
-+
-+\end{document}
-diff --git a/slides/33c3/CMakeLists.txt b/slides/33c3/CMakeLists.txt
-new file mode 100644
---- /dev/null
-+++ b/slides/33c3/CMakeLists.txt
-@@ -0,0 +1,1 @@
-+ADD_LATEX_DOCUMENT(33c3.tex)
 diff --git a/slides/CMakeLists.txt b/slides/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/slides/CMakeLists.txt
 @@ -0,0 +1,1 @@
 +ADD_ALL_SUBDIRECTORIES()
+diff --git a/slides/fosdem_2017/CMakeLists.txt b/slides/fosdem_2017/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/slides/fosdem_2017/CMakeLists.txt
+@@ -0,0 +1,1 @@
++ADD_LATEX_DOCUMENT(fosdem_2017.tex)
+diff --git a/slides/fosdem_2017/fosdem_2017.tex b/slides/fosdem_2017/fosdem_2017.tex
+new file mode 100644
+--- /dev/null
++++ b/slides/fosdem_2017/fosdem_2017.tex
+@@ -0,0 +1,312 @@
++\documentclass[utf8,xcolor={usenames,svgnames}]{beamer}
++
++\usepackage{tikz}
++\usepackage{lmodern}
++\usepackage{arev}
++\usepackage{tgbonum}
++\usepackage{inconsolata}
++\usepackage[T1]{fontenc}
++\usepackage[american]{babel}
++\usepackage[fixlanguage]{babelbib}
++
++\useoutertheme{infolines}
++\setbeamertemplate{navigation symbols}{}
++\setbeamertemplate{bibliography item}[text]
++
++\usetikzlibrary{calc,decorations.pathreplacing,decorations.pathmorphing,shapes,positioning}
++
++\title{Playing with the lights}
++\subtitle{\textit{Control LIFX WiFi-enabled light bulbs}}
++\date{Fosdem, IoT, 2017}
++\author{Louis Opter}
++
++% butts:
++\tikzset{mbuttoff/.style={color=gray,rounded corners=1pt}}
++\tikzset{mbuttvlow/.style={color=orange!20!gray,rounded corners=1pt}}
++\tikzset{mbuttlow/.style={color=orange!35!gray,rounded corners=1pt}}
++\tikzset{mbuttmed/.style={color=orange!50!gray,rounded corners=1pt}}
++\tikzset{mbutthigh/.style={color=orange!80!gray,rounded corners=1pt}}
++\tikzset{mbutton/.style={fill,color=orange!95!white,rounded corners=1pt}}
++
++\tikzset{bubble/.style={fill,opacity=0.7,rounded corners=2pt}}
++\tikzset{arrow/.style={->, >=stealth,ultra thick,rounded corners}}
++\tikzset{controlpt/.style={opacity=0}}
++\tikzset{hidden/.style={opacity=0}}
++
++\colorlet{plate}{Gainsboro}
++\colorlet{case}{Sienna}
++\colorlet{fgcolor}{White}
++
++\begin{document}
++
++\begin{frame}\titlepage\end{frame}
++
++\begin{frame}{\texttt{\$ whoami}}
++\onslide<1->{%
++Hello, my name is Louis and I:\vspace{1em}
++\begin{itemize}
++\item am a good software engineer, a bad computer scientist;
++\item am (distributed) systems oriented;
++\item do hella C, Python and devops, use FOSS since '05;
++\item \emph{do not really know anything about hardware.}
++\end{itemize}
++\vspace{1em}
++}
++\onslide<2>{Anyway, let's get started!}
++\end{frame}
++
++\section{Monolight}
++
++\subsection{Controller UI}
++
++\begin{frame}{What are we looking at?}
++A controller (Monome grid 128 varibright):
++\begin{itemize}
++\item A matrix of 128 programmable button;
++\item 16 levels of brightness per button;
++\item Serial connection (FTDI).
++\end{itemize}
++\pause
++\vspace{1em}
++Controlling a "smart" bulb (LIFX Original 1000):
++\begin{itemize}
++\item A 1000 lumens programmable light bulb;
++\item Nice colors, nice range of whites;
++\item WiFi connection (2.4ghz).
++\end{itemize}
++\pause
++\vspace{1em}
++An uncomfortable amount of code.
++\end{frame}
++
++\begin{frame}{The grid}
++\begin{center}
++\begin{tikzpicture}[overlay,scale=1.2]
++\coordinate (NW) at (-4, 1.75);
++\coordinate (NE) at (3.86, 1.75);
++\coordinate (SW) at (-4, -2.11);
++\coordinate (SE) at (3.86, -2.11);
++\coordinate (b0) at (-4, 1.75);
++
++\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
++\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
++
++\fill[controlpt] (NW) circle (0.1);
++\fill[controlpt] (SW) circle (0.1);
++\fill[controlpt] (NE) circle (0.1);
++\fill[controlpt] (SE) circle (0.1);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\foreach \y in {1.75,1.25,...,-1.75}
++\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
++\end{tikzpicture}
++\end{center}
++\end{frame}
++
++\begin{frame}{General functions/scenes row}
++\begin{center}
++\begin{tikzpicture}[overlay,scale=1.2]
++\onslide<1->{%
++\coordinate (NW) at (-4, 1.75);
++\coordinate (NE) at (3.86, 1.75);
++\coordinate (SW) at (-4, -2.11);
++\coordinate (SE) at (3.86, -2.11);
++
++\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
++\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
++
++\fill[controlpt] (NW) circle (0.1);
++\fill[controlpt] (SW) circle (0.1);
++\fill[controlpt] (NE) circle (0.1);
++\fill[controlpt] (SE) circle (0.1);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\foreach \y in {1.75,1.25,...,-1.75}
++\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\fill[mbutton] (\x, -1.75) rectangle +(0.36, -0.36);
++}
++\onslide<2->{%
++\foreach \x in {-1.5,-1,...,3}
++\fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36);
++
++\fill[color=fgcolor,decoration={name=snake,amplitude=2,segment length=45}]
++  decorate {(-4.25,-1.35) -- (4.15,-1.35)} -- (4.15,2) -- (-4.25,2) -- cycle;
++
++\node[rectangle] (b112) at (-3.82,-1.93) {};
++\node[rectangle] (b113) at (-3.32,-1.93) {};
++\node[rectangle] (b114) at (-2.82,-1.93) {};
++\node[rectangle] (b115) at (-2.32,-1.93) {};
++\node[rectangle] (b116) at (-1.82,-1.93) {};
++\node[rectangle] (b117) at (-1.32,-1.93) {}; \node[rectangle] (b127) at (3.68,-1.93)  {};
++
++\node (toggle) [above=1.1cm of b112] {toggle};
++\node (off) [above=0.7cm of b113] {off};
++\node (on) [above=1.1cm of b114] {on};
++\node (scenes) [above=0.7cm of b116] {scenes\ldots};
++\node (uitoggle) [above=1.1cm of b127] {toggle UI};
++
++\draw[arrow] (toggle) -- (b112);
++\draw[arrow] (off) -- (b113);
++\draw[arrow] (on) -- (b114);
++\draw[arrow] (uitoggle) -- (b127);
++
++\draw[ultra thick,decorate,decoration={name=brace}]
++  ($(b115.north west) + (-0.1,0.35)$) -- ($(b116.north east) + (0.1,0.35)$);
++}
++\end{tikzpicture}
++\end{center}
++\end{frame}
++
++%\node[rectangle] (b112) at (-3.82,-1.93) {};
++%\fill ($(b112.west) + (-1,1)$) circle (0.1);
++%\fill ($(b112.west) + (-0.5,0.25)$) circle (0.1);
++
++%\node[rectangle] (b0) at (-3.82,1.57) {0};
++%\node[rectangle] (b99) at (-2.32,-1.43) {99};
++%\node[bubble,color=LightGreen,fit=(b0) (b99)] (BLOCK) {};
++
++\begin{frame}{Target control pads x4}
++\begin{center}
++\begin{tikzpicture}[overlay,scale=1.2]
++\onslide<1->{%
++\coordinate (NW) at (-4, 1.75);
++\coordinate (NE) at (3.86, 1.75);
++\coordinate (SW) at (-4, -2.11);
++\coordinate (SE) at (3.86, -2.11);
++\coordinate (b0) at (-4, 1.75);
++
++\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
++\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
++
++\foreach \x in {-4,-3.5,...,-2.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutton] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {-2,-1.5,...,-0.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutthigh] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {0,0.5,...,1.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutton] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {2,2.5,...,3.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutthigh] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36);
++
++\fill[controlpt] (NW) circle (0.1);
++\fill[controlpt] (SW) circle (0.1);
++\fill[controlpt] (NE) circle (0.1);
++\fill[controlpt] (SE) circle (0.1);
++}
++\onslide<2->{%
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbuttoff] (-2, \y) rectangle +(0.36, -0.36);
++
++\fill[color=fgcolor,decoration={name=snake,amplitude=2,segment length=45}] 
++  decorate {(-1.75,2) -- (-1.75,-2.36)} -- (4.2,-2.36) -- (4.2,2) -- cycle;
++
++\foreach \x in {-3.5,-3,...,-2.5}
++\fill[mbuttoff] (\x, 1.75) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-0.25} % h
++\fill[mbuttoff] (-4, \y) rectangle +(0.36, -0.36);
++\fill[mbutthigh] (-4, -0.25) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-0.75} % s
++\fill[mbuttoff] (-3.5, \y) rectangle +(0.36, -0.36);
++\fill[mbuttmed] (-3.5, -0.75) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-1.25} % b
++\fill[mbutton] (-3, \y) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-1.25} % k
++\fill[mbuttoff] (-2.5, \y) rectangle +(0.36, -0.36);
++\fill[mbutthigh] (-2.5, -1.25) rectangle +(0.36, -0.36);
++
++\node[rectangle] (b16) at (-3.82,1.07) {};
++\node (INC) at (-4.82,1.07) {INC};
++\draw[arrow] (INC) -- (b16);
++
++\node[rectangle] (b32) at (-3.82,0.57) {};
++\node (inc) at (-4.82,0.57) {inc};
++\draw[arrow] (inc) -- (b32);
++
++\node[rectangle] (b80) at (-3.82,-0.93) {};
++\node (dec) at (-4.82,-0.93) {dec};
++\draw[arrow] (dec) -- (b80);
++
++\node[rectangle] (b96) at (-3.82,-1.43) {};
++\node (DEC) at (-4.82,-1.43) {DEC};
++\draw[arrow] (DEC) -- (b96);
++
++\node[rectangle] (b4) at (-1.82,1.57) {};
++\node[rectangle] (b5) at (-1.32,1.57) {};
++\draw[arrow] (b5) -- (b4.west);
++\draw (b5) node[right] {Functions/status row (toggle/TBD)};
++
++\node[rectangle] (b20) at (-1.82,1.07) {};
++\node[rectangle] (b21) at (-1.32,1.07) {};
++\draw[arrow] (b21) -- (b20.west);
++\draw (-1.32,1.32) node[below right] {%
++\begin{minipage}{10cm}
++4 sliders (Hsbk):
++\begin{itemize}
++\item Hue: 0.0--360.0°;
++\item Saturation: 0.0--1.0;
++\item Brightness: 0.0--1.0;
++\item Temperature: 2500--9000K.
++\end{itemize}
++\end{minipage}};
++}
++\end{tikzpicture}
++\end{center}
++\end{frame}
++
++\subsection{Demo}
++
++\begin{frame}{Live}
++\begin{itemize}
++\item Controls;
++\item CLI interface to lightsd;
++\item UI feedback;
++\item Monolight layer definitions.
++\end{itemize}
++\end{frame}
++
++\subsection{More ideas}
++
++\begin{frame}{Timer/Repeat}
++\end{frame}
++
++\section{Implementation details}
++
++\subsection{Architecture}
++
++\begin{frame}{High-level architecture}
++\end{frame}
++
++% Things that gets in the way:
++%
++% - bugged firmware
++% - adulting
++
++\section{}
++
++\begin{frame}
++\begin{center}\Huge{Thanks}\end{center}
++\vspace{1em}
++\begin{center}\Large{Time for Q\&A and discussion}\end{center}
++\vspace{1em}
++\begin{itemize}
++\item \Large{\url{https://www.lightsd.io/}}
++\item \Large{\texttt{\#lightsd} on IRC (\texttt{chat.freenode.net})}
++\end{itemize}
++\end{frame}
++
++\end{document}
