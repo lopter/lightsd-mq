@@ -1704,7 +1704,7 @@ diff --git a/slides/fosdem_2017/fosdem_2017.tex b/slides/fosdem_2017/fosdem_2017
 new file mode 100644
 --- /dev/null
 +++ b/slides/fosdem_2017/fosdem_2017.tex
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,459 @@
 +\documentclass[utf8,xcolor={usenames,svgnames}]{beamer}
 +
 +\usepackage{tikz}
@@ -1720,12 +1720,18 @@ new file mode 100644
 +\setbeamertemplate{navigation symbols}{}
 +\setbeamertemplate{bibliography item}[text]
 +
-+\usetikzlibrary{calc,decorations.pathreplacing,decorations.pathmorphing,shapes,positioning}
++\usetikzlibrary{%
++  calc,
++  decorations.pathreplacing,
++  decorations.pathmorphing,
++  shapes,
++  positioning
++}
 +
 +\title{Playing with the lights}
-+\subtitle{\textit{Control LIFX WiFi-enabled light bulbs}}
-+\date{Fosdem, IoT, 2017}
-+\author{Louis Opter}
++\subtitle{\textit{Control WiFi-enabled LIFX light bulbs}}
++\date{Fosdem 2017, IoT track}
++\author{Louis Opter <louis@opter.org>}
 +
 +% butts:
 +\tikzset{mbuttoff/.style={color=gray,rounded corners=1pt}}
@@ -1818,6 +1824,9 @@ new file mode 100644
 +\coordinate (NE) at (3.86, 1.75);
 +\coordinate (SW) at (-4, -2.11);
 +\coordinate (SE) at (3.86, -2.11);
++\coordinate (b0) at (-4, 1.75);
++\coordinate (b16) at (-3.82,1.07);
++\coordinate (b32) at (-3.82,0.57);
 +
 +\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
 +\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
@@ -1846,9 +1855,18 @@ new file mode 100644
 +\node[rectangle] (b114) at (-2.82,-1.93) {};
 +\node[rectangle] (b115) at (-2.32,-1.93) {};
 +\node[rectangle] (b116) at (-1.82,-1.93) {};
-+\node[rectangle] (b117) at (-1.32,-1.93) {}; \node[rectangle] (b127) at (3.68,-1.93)  {};
++\node[rectangle] (b117) at (-1.32,-1.93) {};
++\node[rectangle] (b127) at (3.68,-1.93)  {};
++}
++\onslide<2>{
++\node (toggle) [above=1.1cm of b112] {%
++\begin{minipage}{2cm}
++\begin{center}
++on/off
 +
-+\node (toggle) [above=1.1cm of b112] {toggle};
++toggle
++\end{center}
++\end{minipage}};
 +\node (off) [above=0.7cm of b113] {off};
 +\node (on) [above=1.1cm of b114] {on};
 +\node (scenes) [above=0.7cm of b116] {scenes\ldots};
@@ -1861,6 +1879,18 @@ new file mode 100644
 +
 +\draw[ultra thick,decorate,decoration={name=brace}]
 +  ($(b115.north west) + (-0.1,0.35)$) -- ($(b116.north east) + (0.1,0.35)$);
++}
++\onslide<3->{%
++\draw ($(b0) + (-0.25, 0)$) node[below right] {%
++\begin{minipage}{10cm}
++Other ideas:
++\vspace{1em}
++\begin{itemize}
++\item Navigation controls (pagination\ldots);  % will make sense on the next slide
++\item MPD control.
++\end{itemize}
++\end{minipage}
++};
 +}
 +\end{tikzpicture}
 +\end{center}
@@ -1893,7 +1923,7 @@ new file mode 100644
 +
 +\foreach \x in {-2,-1.5,...,-0.5}
 +\foreach \y in {1.75,1.25,...,-1.25}
-+\fill[mbutthigh] (\x, \y) rectangle +(0.36, -0.36);
++\fill[mbuttmed] (\x, \y) rectangle +(0.36, -0.36);
 +
 +\foreach \x in {0,0.5,...,1.5}
 +\foreach \y in {1.75,1.25,...,-1.25}
@@ -1901,7 +1931,7 @@ new file mode 100644
 +
 +\foreach \x in {2,2.5,...,3.5}
 +\foreach \y in {1.75,1.25,...,-1.25}
-+\fill[mbutthigh] (\x, \y) rectangle +(0.36, -0.36);
++\fill[mbuttmed] (\x, \y) rectangle +(0.36, -0.36);
 +
 +\foreach \x in {-4,-3.5,...,3.5}
 +\fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36);
@@ -1915,7 +1945,7 @@ new file mode 100644
 +\foreach \y in {1.75,1.25,...,-1.25}
 +\fill[mbuttoff] (-2, \y) rectangle +(0.36, -0.36);
 +
-+\fill[color=fgcolor,decoration={name=snake,amplitude=2,segment length=45}] 
++\fill[color=fgcolor,decoration={name=snake,amplitude=2,segment length=45}]
 +  decorate {(-1.75,2) -- (-1.75,-2.36)} -- (4.2,-2.36) -- (4.2,2) -- cycle;
 +
 +\foreach \x in {-3.5,-3,...,-2.5}
@@ -1955,14 +1985,15 @@ new file mode 100644
 +\node[rectangle] (b4) at (-1.82,1.57) {};
 +\node[rectangle] (b5) at (-1.32,1.57) {};
 +\draw[arrow] (b5) -- (b4.west);
-+\draw (b5) node[right] {Functions/status row (toggle/TBD)};
++\draw (b5) node[right] {Functions/status row (toggle, TBD\ldots)};
 +
 +\node[rectangle] (b20) at (-1.82,1.07) {};
 +\node[rectangle] (b21) at (-1.32,1.07) {};
 +\draw[arrow] (b21) -- (b20.west);
 +\draw (-1.32,1.32) node[below right] {%
 +\begin{minipage}{10cm}
-+4 sliders (Hsbk):
++4 sliders (Hsbk, ``color wheel''):
++\vspace{1ex}
 +\begin{itemize}
 +\item Hue: 0.0--360.0°;
 +\item Saturation: 0.0--1.0;
@@ -1984,11 +2015,127 @@ new file mode 100644
 +\item UI feedback;
 +\item Monolight layer definitions.
 +\end{itemize}
++\vspace{1em}
++\pause
++One last (unimplemented) idea I wanna show you\ldots
 +\end{frame}
 +
-+\subsection{More ideas}
++\subsection{One last idea}
 +
 +\begin{frame}{Timer/Repeat}
++\begin{center}
++\begin{tikzpicture}[overlay,scale=1.2]
++\onslide<1->{%
++\coordinate (NW) at (-4, 1.75);
++\coordinate (NE) at (3.86, 1.75);
++\coordinate (SW) at (-4, -2.11);
++\coordinate (SE) at (3.86, -2.11);
++\coordinate (caption) at ($(NW) + (-1.155,0.65)$);
++
++\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
++\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\foreach \y in {1.75,1.25,...,-1.75}
++\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36); % blank grid
++
++\foreach \x in {-4,-3.5,...,-1}
++\fill[mbutton] (\x, -1.75) rectangle +(0.36, -0.36); % function row
++
++\fill[controlpt] (NW) circle (0.1);
++\fill[controlpt] (SW) circle (0.1);
++\fill[controlpt] (NE) circle (0.1);
++\fill[controlpt] (SE) circle (0.1);
++
++\node[rectangle] (b117) at (-1.32,-1.93) {};
++\node[rectangle] (b118) at (-0.82,-1.93) {};
++}
++\onslide<1,3->{%
++% targets toggles:
++\fill[mbutton] (-4, 1.75) rectangle +(0.36, -0.36);
++\foreach \x in {-2,0,...,3.5}
++\fill[mbuttvlow] (\x, 1.75) rectangle +(0.36, -0.36);
++
++% h:
++\fill[mbutthigh] (-4, -0.25) rectangle +(0.36, -0.36);
++\fill[mbutton] (-4, -0.75) rectangle +(0.36, -0.36);
++\fill[mbutton] (-4, -1.25) rectangle +(0.36, -0.36);
++
++% s:
++\fill[mbuttmed] (-3.5, -0.75) rectangle +(0.36, -0.36);
++\fill[mbutton] (-3.5, -1.25) rectangle +(0.36, -0.36);
++
++% b:
++\foreach \y in {1.25,0.75,...,-1.25}
++\fill[mbutton] (-3, \y) rectangle +(0.36, -0.36);
++
++% k:
++\fill[mbutthigh] (-2.5, -1.25) rectangle +(0.36, -0.36);
++}
++\onslide<1>{%
++\draw (caption) node[right] {Let's add two more functions:};
++
++\node (timer) [below=0.5cm of b117] {timer};
++\node (repeat) [below=0.9cm of b118] {repeat};
++\draw[arrow] (timer) -- (b117);
++\draw[arrow] (repeat) -- (b118);
++}
++\onslide<2>{%
++\draw (caption) node[right] {Time selection (1 lit button = 1 unit of time):};
++
++% partially lit grid:
++\foreach \x in {-4,-3.5,...,-0.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutton] (\x, \y) rectangle +(0.36, -0.36);
++\foreach \y in {1.75,1.25,...,-0.5}
++\fill[mbutton] (0, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36); % blank function row
++
++\fill[mbutton] (-1.5, -1.75) rectangle +(0.36, -0.36); % time button
++\fill[mbutton] (0, -1.75) rectangle +(0.36, -0.36); % dec time scale
++\fill[mbutton] (0.5, -1.75) rectangle +(0.36, -0.36); % inc time scale
++
++%\node[rectangle] (b117) at (-1.32,-1.93) {};
++%\node[rectangle] (b118) at (-0.82,-1.93) {};
++%\node[rectangle] (b119) at (-0.32,-1.93) {};
++\node[rectangle] (b120) at (0.18,-1.93) {};
++\node[rectangle] (b121) at (0.68,-1.93) {};
++\node[rectangle] (b122) at (1.18,-1.93) {};
++\draw[ultra thick,decorate,decoration={name=brace,mirror}]
++  ($(b120.south west) + (-0.1,-0.35)$) -- ($(b121.south east) + (0.1,-0.35)$);
++\node (timectl) [below=0.5cm of b122] {dec/inc time unit\ldots};
++}
++\onslide<3>{%
++\draw (caption) node[right] {Target selection, optional repeat selection:};
++
++\node (repeat) [below=0.5cm of b118] {[repeat]};
++\draw[arrow] (repeat) -- (b118);
++
++\node[rectangle,opacity=0] (b0) at (-3.82,1.57) {B};
++\node[rectangle,opacity=0] (b4) at (-1.82,1.57) {B};
++\node[rectangle,opacity=0] (b8) at (0.18,1.57) {B};
++\node[rectangle,opacity=0] (b12) at (2.18,1.57) {B};
++
++\coordinate (targetwd) at ($(caption) + (0.7, -0.05)$);
++\node[controlpt,circle] (legend) at (targetwd) {};
++
++\coordinate (upturn) at ($(legend) + (0,-1.36)$);
++\draw[arrow,<-] (b0.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++\draw[arrow,<-] (b4.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++\draw[arrow,<-] (b8.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++\draw[arrow,<-] (b12.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++}
++\onslide<4>{%
++\fill[mbutton] (-3.5, 1.75) rectangle +(0.36, -0.36);
++
++\node[rectangle] (b1) at (-3.32,1.57) {};
++\node (feedback) [above=0.5cm of b1] {Activity feedback};
++\draw[arrow] (feedback) -- (b1);
++}
++\end{tikzpicture}
++\end{center}
 +\end{frame}
 +
 +\section{Implementation details}
@@ -2008,7 +2155,7 @@ new file mode 100644
 +\begin{frame}
 +\begin{center}\Huge{Thanks}\end{center}
 +\vspace{1em}
-+\begin{center}\Large{Time for Q\&A and discussion}\end{center}
++\begin{center}\Large{\emph{Time for Q\&A and discussion}}\end{center}
 +\vspace{1em}
 +\begin{itemize}
 +\item \Large{\url{https://www.lightsd.io/}}
