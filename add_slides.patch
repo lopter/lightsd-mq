@@ -1704,10 +1704,11 @@ diff --git a/slides/fosdem_2017/fosdem_2017.tex b/slides/fosdem_2017/fosdem_2017
 new file mode 100644
 --- /dev/null
 +++ b/slides/fosdem_2017/fosdem_2017.tex
-@@ -0,0 +1,459 @@
-+\documentclass[utf8,xcolor={usenames,svgnames}]{beamer}
+@@ -0,0 +1,593 @@
++\documentclass[utf8x,xcolor={usenames,svgnames}]{beamer}
 +
 +\usepackage{tikz}
++\usepackage{tikzsymbols}
 +\usepackage{lmodern}
 +\usepackage{arev}
 +\usepackage{tgbonum}
@@ -1719,6 +1720,7 @@ new file mode 100644
 +\useoutertheme{infolines}
 +\setbeamertemplate{navigation symbols}{}
 +\setbeamertemplate{bibliography item}[text]
++\setbeamerfont{footnote}{size=\tiny}
 +
 +\usetikzlibrary{%
 +  calc,
@@ -1743,7 +1745,7 @@ new file mode 100644
 +
 +\tikzset{bubble/.style={fill,opacity=0.7,rounded corners=2pt}}
 +\tikzset{arrow/.style={->, >=stealth,ultra thick,rounded corners}}
-+\tikzset{controlpt/.style={opacity=0}}
++\tikzset{controlpt/.style={opacity=1}}
 +\tikzset{hidden/.style={opacity=0}}
 +
 +\colorlet{plate}{Gainsboro}
@@ -1753,6 +1755,10 @@ new file mode 100644
 +\begin{document}
 +
 +\begin{frame}\titlepage\end{frame}
++
++\section{Intro}
++
++\subsection{About me}
 +
 +\begin{frame}{\texttt{\$ whoami}}
 +\onslide<1->{%
@@ -1765,7 +1771,7 @@ new file mode 100644
 +\end{itemize}
 +\vspace{1em}
 +}
-+\onslide<2>{Anyway, let's get started!}
++\onslide<2>{Anyway, it doesn't matter, let's get started!}
 +\end{frame}
 +
 +\section{Monolight}
@@ -2105,7 +2111,7 @@ new file mode 100644
 +\node[rectangle] (b122) at (1.18,-1.93) {};
 +\draw[ultra thick,decorate,decoration={name=brace,mirror}]
 +  ($(b120.south west) + (-0.1,-0.35)$) -- ($(b121.south east) + (0.1,-0.35)$);
-+\node (timectl) [below=0.5cm of b122] {dec/inc time unit\ldots};
++\node (timectl) [below=0.5cm of b121] {dec/inc time unit};
 +}
 +\onslide<3>{%
 +\draw (caption) node[right] {Target selection, optional repeat selection:};
@@ -2142,15 +2148,141 @@ new file mode 100644
 +
 +\subsection{Architecture}
 +
++\tikzset{box/.style={draw,ultra thick, rectangle, rounded corners=1pt}}
++
 +\begin{frame}{High-level architecture}
++\begin{center}
++\begin{tikzpicture}[overlay]
++\coordinate (Origin) at (0,0);
++
++\fill[controlpt] (Origin) circle (0.1);
++
++\node[box] (serialoscd) at (0,1.5) {serialoscd};
++\node[box] (monome) at (-3.5,1.5) {\begin{tikzpicture}[overlay,scale=0.3]
++\coordinate (NW) at (-4, 1.75);
++\coordinate (SE) at (3.86, -2.11);
++
++\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
++\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\foreach \y in {1.75,1.25,...,-1.75}
++\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
++\end{tikzpicture}};
++\node[box] (monolight) at (3.5,-0.25) {monolight};
++\node[box] (lightsd) at (0,-2) {lightsd};
++\node[box] (bulbh) at (-3.5,-1) {bulb};
++\node[box] (bulbm) at (-3.5,-2) {bulb};
++\node[box] (bulbl) at (-3.5,-3) {bulb};
++\end{tikzpicture}
++\end{center}
 +\end{frame}
 +
-+% Things that gets in the way:
-+%
-+% - bugged firmware
-+% - adulting
++\subsection{About monolight}
 +
-+\section{}
++\begin{frame}{Monolight implementation}
++High-level details:
++\begin{itemize}
++\item Python ≥ 3.5 (pondering ≥ 3.6);
++\item Fully async (using \texttt{asyncio} with the stream API);
++\item Fully typed, it's great;
++\item Very slow, no tests \Neutrey;
++\item Uses Artem Popov's \texttt{pymonome} library;
++\item 2/3 months of work, GPLv3.
++\end{itemize}
++\pause
++\vspace{1em}
++It's really just the beginning, lot of fun stuff:
++\begin{itemize}
++\item More UI features;
++\item UI animations;
++\item Control other things.
++\end{itemize}
++\end{frame}
++
++\subsection{About lightsd}
++
++\begin{frame}{lightsd implementation}
++\only<1>{%
++The ``parent'' project:
++\vspace{1em}
++\begin{itemize}
++\item C99, libevent2, CMake --- that's all;
++\item Daemon, low memory footprint, fast enough\footnote{A bit of a CPU consumer.};
++\item 32/64 bits, big/little endian, FPU optional;
++\item Runs on nearly everything but Windows\footnote{LXSS will fix that though?};
++\item First PoC in 2014, mostly written through 2015;
++\item GPLv3 with non-GPL users in mind.
++\end{itemize}
++}
++\only<2>{%
++Original ideas:
++\vspace{1em}
++\begin{itemize}
++\item Remove discovery delays and glitches;
++\item While exposing a high-level \emph{vendor agnostic} API;
++\item While offering network isolation;
++\item No cloud nor Internet required;
++\item ``Accessible''.
++\end{itemize}
++}
++\only<3>{%
++Implementation details:
++\vspace{1em}
++\begin{itemize}
++\item Uses LIFX's faster and \emph{harder} LAN API;
++\item Proxies all communications to the bulb;
++\item Keeps track of the \emph{current} state of the bulbs (sampling);
++\item High-level API in JSON-RPC over TCP, Unix sockets or a named ``command'' pipe\footnote{The pipe is unidirectional: only usable to send commands.};
++\item Very good modular C, unit-tests, good docs.
++\end{itemize}
++}
++\end{frame}
++
++\begin{frame}{The (hard|fun) parts}
++TABLE.
++\end{frame}
++
++\begin{frame}{Notes on the LIFX bulbs}
++\begin{itemize}
++\item Get them on sale;
++\item Best brightness/colors;
++\item Cool LAN API, hope they keep it;
++\item Only Gen 1 (EOLed in 2015) doesn't crash for me;
++\pause
++\item \large{\emph{Binary blobs suck.}}
++\end{itemize}
++\end{frame}
++
++\subsection{Next}
++
++\begin{frame}{``My Roadmap''}
++Things I wanna do:
++\vspace{1em}
++\begin{itemize}
++\item Time based releases;
++\item Better CI/automation;
++\item ``State-enforcement'';
++\item Effects API and effects plugins;
++\end{itemize}
++\end{frame}
++
++\begin{frame}{Not on my roadmap}
++Things I wanna have:
++\vspace{1em}
++\begin{itemize}
++\item JSON-RPC extensions: streaming, auth, server notifs;
++\item A reversed-engineered LIFX firmware;
++\item A firmware that doesn't crash;
++\item Support for other bulbs;
++\item Color calibration;
++\item LIFX stripe support.
++\end{itemize}
++\end{frame}
++
++\section{Thanks}
++
++\setbeamertemplate{headline}{}
 +
 +\begin{frame}
 +\begin{center}\Huge{Thanks}\end{center}
@@ -2162,5 +2294,7 @@ new file mode 100644
 +\item \Large{\texttt{\#lightsd} on IRC (\texttt{chat.freenode.net})}
 +\end{itemize}
 +\end{frame}
++
++\section{Extras}
 +
 +\end{document}
