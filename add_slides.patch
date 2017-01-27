@@ -1704,7 +1704,7 @@ diff --git a/slides/fosdem_2017/fosdem_2017.tex b/slides/fosdem_2017/fosdem_2017
 new file mode 100644
 --- /dev/null
 +++ b/slides/fosdem_2017/fosdem_2017.tex
-@@ -0,0 +1,593 @@
+@@ -0,0 +1,730 @@
 +\documentclass[utf8x,xcolor={usenames,svgnames}]{beamer}
 +
 +\usepackage{tikz}
@@ -2150,6 +2150,9 @@ new file mode 100644
 +
 +\tikzset{box/.style={draw,ultra thick, rectangle, rounded corners=1pt}}
 +
++\colorlet{BodyColor}{Grey!90!black}
++\colorlet{SocketColor}{Silver!90!black}
++
 +\begin{frame}{High-level architecture}
 +\begin{center}
 +\begin{tikzpicture}[overlay]
@@ -2158,7 +2161,7 @@ new file mode 100644
 +\fill[controlpt] (Origin) circle (0.1);
 +
 +\node[box] (serialoscd) at (0,1.5) {serialoscd};
-+\node[box] (monome) at (-3.5,1.5) {\begin{tikzpicture}[overlay,scale=0.3]
++\node[box] (monome) at (-3.5,1.5) {\begin{tikzpicture}[overlay,scale=0.5]
 +\coordinate (NW) at (-4, 1.75);
 +\coordinate (SE) at (3.86, -2.11);
 +
@@ -2171,9 +2174,136 @@ new file mode 100644
 +\end{tikzpicture}};
 +\node[box] (monolight) at (3.5,-0.25) {monolight};
 +\node[box] (lightsd) at (0,-2) {lightsd};
-+\node[box] (bulbh) at (-3.5,-1) {bulb};
-+\node[box] (bulbm) at (-3.5,-2) {bulb};
-+\node[box] (bulbl) at (-3.5,-3) {bulb};
++\node (bulbh) at (-4.2,-1.2) {%
++\colorlet{LightColor}{MediumBlue}
++\begin{tikzpicture}[scale=0.19,rotate=90]
++% main body
++\fill[color=BodyColor]
++    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
++    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
++
++% led - body separator
++\fill[color=BodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
++
++% led part
++\fill[color=LightColor]
++    (-28mm,34.5mm) -- ++(0,14mm)
++    .. controls ++(28mm,1mm) .. ++(56mm,0)
++    -- ++(0,-14mm) -- cycle;
++
++% lower body
++\fill[color=BodyColor!90!black]
++    (-14mm,-18mm) -- ++(0,-18mm) --
++    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
++    -- ++(0,18mm);
++
++% socket
++\fill[color=SocketColor]
++    (-10mm,-38mm) -- ++(0,-4mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(-10mm,-42mm) -- ++(0,-10mm)}
++    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(10mm,-52mm) -- ++(0,10mm)}
++    -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
++\draw[thin,color=SocketColor] (-10mm,-42mm) -- (10mm,-52mm);
++
++% led - body separator shade
++\draw[thin, color=BodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
++\draw[thin, color=BodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
++
++% socket shade
++\draw[color=SocketColor!80!black]
++    (-10mm,-38mm) -- ++(0,-4mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(-10mm,-42mm) -- ++(0,-10mm)}
++    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(10mm,-52mm) -- ++(0,10mm)}
++    -- (10mm,-38mm);
++\draw[color=fgcolor]
++    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
++\draw[rounded corners=1pt,color=SocketColor!80!black]
++    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
++
++% lower body shade
++\draw[rounded corners=1pt,color=BodyColor!50!black]
++    (-14mm,-18mm) -- ++(0,-18mm) --
++    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
++    -- ++(0,18mm);
++
++% body shade
++\draw[thick,rounded corners=1pt,color=BodyColor!60!black]
++    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
++    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
++
++% led shade
++\draw[thick,rounded corners=1pt,color=LightColor!70!white]
++    (-28mm,34.5mm) -- ++(0,14mm)
++    .. controls ++(28mm,1mm) .. ++(56mm,0)
++    -- ++(0,-14mm) -- cycle;
++\end{tikzpicture}};
++\node (bulbl) at (-4.2,-2.8) {%
++\colorlet{LightColor}{BlueViolet}
++\begin{tikzpicture}[scale=0.19,rotate=90]
++% main body
++\fill[color=BodyColor]
++    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
++    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
++
++% led - body separator
++\fill[color=BodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
++
++% led part
++\fill[color=LightColor]
++    (-28mm,34.5mm) -- ++(0,14mm)
++    .. controls ++(28mm,1mm) .. ++(56mm,0)
++    -- ++(0,-14mm) -- cycle;
++
++% lower body
++\fill[color=BodyColor!90!black]
++    (-14mm,-18mm) -- ++(0,-18mm) --
++    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
++    -- ++(0,18mm);
++
++% socket
++\fill[color=SocketColor]
++    (-10mm,-38mm) -- ++(0,-4mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(-10mm,-42mm) -- ++(0,-10mm)}
++    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(10mm,-52mm) -- ++(0,10mm)}
++    -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
++\draw[thin,color=SocketColor] (-10mm,-42mm) -- (10mm,-52mm);
++
++% led - body separator shade
++\draw[thin, color=BodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
++\draw[thin, color=BodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
++
++% socket shade
++\draw[color=SocketColor!80!black]
++    (-10mm,-38mm) -- ++(0,-4mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(-10mm,-42mm) -- ++(0,-10mm)}
++    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
++    decorate[decoration={name=snake,amplitude=0.1mm,segment length=0.6mm}] {(10mm,-52mm) -- ++(0,10mm)}
++    -- (10mm,-38mm);
++\draw[color=fgcolor]
++    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
++\draw[rounded corners=1pt,color=SocketColor!80!black]
++    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
++
++% lower body shade
++\draw[rounded corners=1pt,color=BodyColor!50!black]
++    (-14mm,-18mm) -- ++(0,-18mm) --
++    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
++    -- ++(0,18mm);
++
++% body shade
++\draw[thick,rounded corners=1pt,color=BodyColor!60!black]
++    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
++    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
++
++% led shade
++\draw[thick,rounded corners=1pt,color=LightColor!70!white]
++    (-28mm,34.5mm) -- ++(0,14mm)
++    .. controls ++(28mm,1mm) .. ++(56mm,0)
++    -- ++(0,-14mm) -- cycle;
++\end{tikzpicture}};
 +\end{tikzpicture}
 +\end{center}
 +\end{frame}
@@ -2263,7 +2393,7 @@ new file mode 100644
 +\item Time based releases;
 +\item Better CI/automation;
 +\item ``State-enforcement'';
-+\item Effects API and effects plugins;
++\item Effects API and effects plugins.
 +\end{itemize}
 +\end{frame}
 +
@@ -2274,7 +2404,7 @@ new file mode 100644
 +\item JSON-RPC extensions: streaming, auth, server notifs;
 +\item A reversed-engineered LIFX firmware;
 +\item A firmware that doesn't crash;
-+\item Support for other bulbs;
++\item Support for other brands (Hue?);
 +\item Color calibration;
 +\item LIFX stripe support.
 +\end{itemize}
@@ -2296,5 +2426,12 @@ new file mode 100644
 +\end{frame}
 +
 +\section{Extras}
++
++\begin{frame}{Questions for you!}
++\begin{itemize}
++\item Have you considered hardware hacks on things like the LIFX bulbs?
++\item How has been your experience with more generic projects?
++\end{itemize}
++\end{frame}
 +
 +\end{document}
