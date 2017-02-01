@@ -1,0 +1,177 @@
+# HG changeset patch
+# Parent  34941cec2be902384d9b93acc2eeb807139d5275
+Update the docs a little bit
+
+- Use brew services in mac OS;
+- clean-up command subsitutions;
+- clean-up :: blocks a bit;
+- fix that debuild thing again;
+- use github start button and leave the credits with alabaster.
+
+diff --git a/docs/conf.py.in b/docs/conf.py.in
+--- a/docs/conf.py.in
++++ b/docs/conf.py.in
+@@ -48,7 +48,7 @@
+ 
+ # General information about the project.
+ project = 'lightsd'
+-copyright = '2015 - 2016, <a href="https://www.kalessin.fr/">Louis Opter</a>'
++copyright = '2015 - 2017, <a href="https://www.kalessin.fr/">Louis Opter</a>'
+ 
+ # The version info for the project you're documenting, acts as replacement for
+ # |version| and |release|, also used in various other places throughout the
+@@ -111,8 +111,9 @@
+     "github_user": "lopter",
+     "github_repo": "lightsd",
+     "github_button": True,
++    "github_type": "star",
+     "analytics_id": "@LIGHTSD_GOOGLE_ANALYTICS_ID@",
+-    "show_powered_by": False,
++    "show_powered_by": True,
+ }
+ 
+ # Add any paths that contain custom themes here, relative to this directory.
+diff --git a/docs/first-steps.rst b/docs/first-steps.rst
+--- a/docs/first-steps.rst
++++ b/docs/first-steps.rst
+@@ -23,29 +23,26 @@
+ 
+    Click Allow, lightsd uses the network to communicate with your bulbs.
+ 
+-Start lightsd with:
+-
+-::
+-
+-   launchctl load ~/Library/LaunchAgents/homebrew.mxcl.lightsd.plist
++Start lightsd with::
+ 
+-Stop lightsd with:
+-
+-::
++   brew services run lightsd
+ 
+-   launchctl unload ~/Library/LaunchAgents/homebrew.mxcl.lightsd.plist
++.. note::
+ 
+-Check how lightsd is running with:
++   If you wish to start lightsd automatically when you log into your Mac run
++   ``brew services start lightsd`` instead.
+ 
+-::
++Stop lightsd with::
++
++   brew services stop lightsd
++
++Check how lightsd is running with::
+ 
+    ps aux | grep lightsd
+ 
+-Read the logs with:
++Read the logs with::
+ 
+-::
+-
+-   tail -F `brew --prefix`/var/log/lightsd.log
++   tail -F $(brew --prefix)/var/log/lightsd.log
+ 
+ Try to :ref:`toggle your lights <toggle>` and read on some of the examples
+ bundled with lightsd.
+@@ -177,7 +174,7 @@
+ Command line options
+ ~~~~~~~~~~~~~~~~~~~~
+ 
+-::
++.. code-block:: none
+ 
+    Usage: lightsd ...
+ 
+@@ -218,13 +215,11 @@
+ Toggle your lights
+ ------------------
+ 
+-::
++Run::
+ 
+-   `lightsd --prefix`/share/lightsd/examples/toggle
++   $(lightsd --prefix)/share/lightsd/examples/toggle
+ 
+-Or, from the root of the repository:
+-
+-::
++Or, from the root of the repository::
+ 
+    examples/toggle
+ 
+@@ -240,15 +235,11 @@
+ ----------------
+ 
+ `lightsc.sh`_ is a small shell script that wraps a few things around lightsd'
+-command pipe. Once you've sourced it with:
+-
+-::
++command pipe. Once you've sourced it with::
+ 
+-   . `lightsd --prefix`/share/lightsd/lightsc.sh
++   . $(lightsd --prefix)/share/lightsd/lightsc.sh
+ 
+-Or, from the root of the repository:
+-
+-::
++Or, from the root of the repository::
+ 
+    . share/lightsc.sh
+ 
+@@ -308,7 +299,7 @@
+ 
+ ::
+ 
+-   `lightsd --prefix`/share/lightsd/examples/lightsc.py
++   $(lightsd --prefix)/share/lightsd/examples/lightsc.py
+ 
+ Or, from the root of the repository:
+ 
+@@ -342,7 +333,7 @@
+ 
+ ::
+ 
+-    lightsc.py -u unix:///path/to/lightsd/socket
++   lightsc.py -u unix:///path/to/lightsd/socket
+ 
+ Check out :doc:`lightsd's API </protocol>` to see everything you can do!
+ 
+diff --git a/docs/installation.rst b/docs/installation.rst
+--- a/docs/installation.rst
++++ b/docs/installation.rst
+@@ -17,14 +17,6 @@
+    brew tap lopter/lightsd
+    brew install lightsd
+ 
+-
+-Make sure you execute the ``ln -sfv`` command displayed at the end of the
+-installation:
+-
+-::
+-
+-   ln -sfv /usr/local/opt/lightsd/*.plist ~/Library/LaunchAgents
+-
+ Please, also install Python 3 and ipython if you want to follow the examples in
+ the next section:
+ 
+@@ -69,7 +61,7 @@
+ 
+ ::
+ 
+-   cat >>feeds.conf`[ -f feeds.conf ] || echo .default` <<EOF
++   cat >>feeds.conf$([ -f feeds.conf ] || echo .default) <<EOF
+    src-git lightsd https://github.com/lopter/openwrt-lightsd.git
+    EOF
+    ./scripts/feeds update -a
+@@ -113,7 +105,7 @@
+ 
+ ::
+ 
+-   debuild
++   debuild -uc -us
+ 
+ Install the package:
+ 

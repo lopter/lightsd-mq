@@ -2,6 +2,7 @@ ask_for_remote_dest_before_running_hg_out.patch
 fix_xcode_8_build.patch
 add_monolight.patch
 add_slides.patch
+docs_updates.patch
 add_power_transition.patch #+future
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future
