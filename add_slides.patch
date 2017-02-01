@@ -1,8 +1,12 @@
 # HG changeset patch
-# Parent  11494fecd49645aca5e36787b4dece9e5d0ee8ee
-Start to setup some slides for Fosdem 2017
+# Parent  191742bf4871ca6b3ee45a3dd2fd5fdf967a8cff
+Add slides for Fosdem 2017
 
 https://fosdem.org/2017/schedule/event/iot_smart_bulbs/
+
+This adds the pdf alongside its sources since the build is unlikely to be
+reproducible in the future (e.g. scaling bugs within tikz will probably get
+fixed at some point and I'm working around them here).
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -8364,15 +8368,24 @@ diff --git a/slides/fosdem_2017/monolight-demo.sh b/slides/fosdem_2017/monolight
 new file mode 100755
 --- /dev/null
 +++ b/slides/fosdem_2017/monolight-demo.sh
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,32 @@
 +#!/bin/sh
 +
 +check_process() {
 +  local name=$1
 +
 +  /bin/echo -n "checking that ${name} is running: "
-+  pgrep $name 2>&1 >/dev/null && echo ok || { echo "not running"; exit 1; }
++  pgrep ${name} 2>&1 >/dev/null && echo ok || { echo "not running"; exit 1; }
 +}
++
++check_venv() {
++  local name=$1
++
++  /bin/echo -n "checking that the virtualenv ${name} is active: "
++  echo ${VIRTUAL_ENV} | grep ${name} 2>&1 >/dev/null && echo ok || { echo nope; exit 1; }
++}
++
++check_venv monolight
 +
 +check_process serialoscd
 +check_process lightsd
