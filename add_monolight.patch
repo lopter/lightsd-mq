@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  4e9a32c7035ac32ac88249ead2d14da461ece7dc
+# Parent  dedc8f412d885abef3da2acb9153998f409c3a2a
 Start an experimental GUI for a Monome 128 Varibright
 
 Written in Python >= 3.5.
@@ -18,7 +18,7 @@ diff --git a/apps/monolight/monolight/bulbs.py b/apps/monolight/monolight/bulbs.
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/bulbs.py
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,99 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -63,7 +63,10 @@ new file mode 100644
 +
 +def iter_targets(targets: List[str]):
 +    for target in targets:
-+        if target.startswith("#"):
++        if target == "*":
++            for bulb in bulbs_by_label.values():
++                yield bulb
++        elif target.startswith("#"):
 +            for bulb in bulbs_by_group.get(target[1:], set()):
 +                yield bulb
 +        elif target in bulbs_by_label:
@@ -342,7 +345,7 @@ new file mode 100644
 +    global running_event, _not_running_event
 +
 +    if _serialosc is not None:
-+        _serialosc.disconnect()
++        _serialosc.transport.close()
 +    # copy the set since we're gonna modify it as we iter through it:
 +    for grid in list(running):
 +        grid.monome.disconnect()
@@ -352,7 +355,7 @@ diff --git a/apps/monolight/monolight/monolight.py b/apps/monolight/monolight/mo
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/monolight.py
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,98 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -404,13 +407,21 @@ new file mode 100644
 +    # requires an IOCP event loop, which doesn't support UDP connections.
 +    loop = asyncio.get_event_loop()
 +
-+    click.echo("Connecting to serialoscd and lightsd...")
++    click.echo("connecting to serialoscd and lightsd...")
 +
-+    loop.run_until_complete(asyncio.gather(
-+        loop.create_task(bulbs.start_lightsd_connection(loop, lightsd_url)),
-+        loop.create_task(grids.start_serialosc_connection(loop, monome_id)),
-+        loop=loop,
-+    ))
++    try:
++        loop.run_until_complete(asyncio.gather(
++            loop.create_task(bulbs.start_lightsd_connection(loop, lightsd_url)),
++            loop.create_task(grids.start_serialosc_connection(loop, monome_id)),
++            loop=loop,
++        ))
++    except Exception as ex:
++        click.echo(
++            "couldn't connect to lightsd and/or serialoscd, please check that "
++            "they are properly setup."
++        )
++        loop.close()
++        sys.exit(1)
 +
 +    click.echo("serialoscd running at {}:{}".format(
 +        serialoscd_host, serialoscd_port
@@ -1435,7 +1446,7 @@ diff --git a/apps/monolight/monolight/ui/layers.py b/apps/monolight/monolight/ui
 new file mode 100644
 --- /dev/null
 +++ b/apps/monolight/monolight/ui/layers.py
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,117 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +#
 +# This file is part of lightsd.
@@ -1502,57 +1513,54 @@ new file mode 100644
 +        )
 +    }))
 +    foreground_layer.insert(
-+        Button("4000k kitchen", Position(2, 7), loop, actions={
++        Button("4000k *", Position(2, 7), loop, actions={
 +            Button.ActionEnum.UP: actions.Lightsd(requests=[
 +                functools.partial(
 +                    requests.SetLightFromHSBK,
-+                    ["#kitchen"], 0.0, 0.0, 1.0, 4000, 1000,
++                    ["*"], 0.0, 0.0, 1.0, 4000, 1000,
 +                ),
-+                functools.partial(requests.PowerOn, ["#kitchen"]),
++                functools.partial(requests.PowerOn, ["*"]),
 +            ])
 +        })
 +    )
-+    foreground_layer.insert(Button("orange", Position(3, 7), loop, actions={
++    foreground_layer.insert(Button("blue", Position(3, 7), loop, actions={
 +        Button.ActionEnum.UP: actions.Lightsd(requests=[
 +            functools.partial(
 +                requests.SetLightFromHSBK,
-+                ["#tower"], 37.469443, 1.0, 0.25, 3500, 600,
++                ["*"], 218, 1.0, 1.0, 3500, 600,
 +            ),
-+            functools.partial(
-+                requests.SetLightFromHSBK,
-+                ["fugu", "buzz"], 47.469443, 0.2, 0.2, 3500, 600,
-+            ),
-+            functools.partial(
-+                requests.SetLightFromHSBK,
-+                ["candle"], 47.469443, 0.2, 0.15, 3500, 600,
-+            ),
-+            functools.partial(requests.PowerOn, ["#br"])
++            functools.partial(requests.PowerOn, ["*"])
 +        ]),
 +    }))
-+    foreground_layer.insert(PowerButton(
-+        "#br", Position(4, 7), loop, targets=["#br"]
-+    ))
-+    foreground_layer.insert(PowerButton(
-+        "white", Position(5, 7), loop, targets=["white"]
-+    ))
++    foreground_layer.insert(
++        Button("pink breathe *", Position(4, 7), loop, actions={
++            Button.ActionEnum.UP: actions.Lightsd(requests=[
++                functools.partial(
++                    requests.SetWaveform,
++                    ["*"], "TRIANGLE", 285, 0.3, 0.8, 3500, 20000, 2, 0.5,
++                ),
++                functools.partial(requests.PowerOn, ["*"])
++            ]),
++        })
++    )
++    foreground_layer.insert(Button("alert *", Position(5, 7), loop, actions={
++        Button.ActionEnum.UP: actions.Lightsd(requests=[
++            functools.partial(
++                requests.SetWaveform,
++                ["*"], "SQUARE", 0, 1.0, 1, 3500, 500, 5, 0.5
++            ),
++            functools.partial(requests.PowerOn, ["*"]),
++        ]),
++    }))
 +
-+    # some control blocks:
++    # example control blocks:
 +    BulbControlPad = functools.partial(
 +        groups.BulbControlPad,
 +        loop=loop,
 +        sliders_size=Dimensions(width=1, height=6),
 +    )
 +    foreground_layer.insert(BulbControlPad(
-+        "#kitchen control", Position(0, 0), targets=["#kitchen"],
-+    ))
-+    foreground_layer.insert(BulbControlPad(
-+        "#tower control", Position(4, 0), targets=["#tower"],
-+    ))
-+    foreground_layer.insert(BulbControlPad(
-+        "fugu control", Position(8, 0), targets=["fugu"],
-+    ))
-+    foreground_layer.insert(BulbControlPad(
-+        "candle control", Position(12, 0), targets=["candle"],
++        "* control", Position(0, 0), targets=["*"],
 +    ))
 +
 +    return foreground_layer
@@ -1841,7 +1849,7 @@ diff --git a/clients/python/lightsc/lightsc/client.py b/clients/python/lightsc/l
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/client.py
-@@ -0,0 +1,391 @@
+@@ -0,0 +1,401 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# All rights reserved.
 +#
@@ -1928,6 +1936,10 @@ new file mode 100644
 +    ),
 +    requests.PowerToggle: _JSONRPCMethod(
 +        name="power_toggle",
++        map_result=lambda result: responses.Bool(result)
++    ),
++    requests.SetWaveform: _JSONRPCMethod(
++        name="set_waveform",
 +        map_result=lambda result: responses.Bool(result)
 +    ),
 +}  # type: Dict[Type[requests.RequestClass], _JSONRPCMethod]
@@ -2197,17 +2209,23 @@ new file mode 100644
 +async def get_lightsd_unix_socket_async(
 +    loop: asyncio.AbstractEventLoop = None,
 +) -> str:
-+    process = await asyncio.create_subprocess_exec(
-+        "lightsd", "--rundir",
-+        stdout=asyncio.subprocess.PIPE,
-+        stderr=asyncio.subprocess.DEVNULL,
-+        loop=loop,
-+    )
-+    stdout, stderr = await process.communicate()
-+    stdout = stdout.decode(locale.getpreferredencoding()).strip()
-+    if process.returncode == 0 and stdout:
-+        lightsdrundir = stdout
++    lightsdrundir = None
++    try:
++        process = await asyncio.create_subprocess_exec(
++            "lightsd", "--rundir",
++            stdout=asyncio.subprocess.PIPE,
++            stderr=asyncio.subprocess.DEVNULL,
++            loop=loop,
++        )
++    except FileNotFoundError:  # couldn't find the lightsd bin
++        pass
 +    else:
++        stdout, stderr = await process.communicate()
++        stdout = stdout.decode(locale.getpreferredencoding()).strip()
++        if process.returncode == 0 and stdout:
++            lightsdrundir = stdout
++
++    if lightsdrundir is None:
 +        lightsdrundir = "build"
 +        logger.warning(
 +            "Couldn't infer lightsd's runtime directory, is "
@@ -2323,7 +2341,7 @@ diff --git a/clients/python/lightsc/lightsc/requests.py b/clients/python/lightsc
 new file mode 100644
 --- /dev/null
 +++ b/clients/python/lightsc/lightsc/requests.py
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,101 @@
 +# Copyright (c) 2016, Louis Opter <louis@opter.org>
 +# All rights reserved.
 +#
@@ -2401,6 +2419,30 @@ new file mode 100644
 +
 +    def __init__(self, targets: List[str]) -> None:
 +        Request.__init__(self, targets)
++
++
++class SetWaveform(Request):
++
++    def __init__(
++        self,
++        targets: List[str],
++        waveform: str,
++        h: float, s: float, b: float, k: int,
++        period_ms: int,
++        cycles: int,
++        skew_ratio: float,
++        transient: bool = True,
++    ) -> None:
++        Request.__init__(
++            self,
++            targets,
++            waveform,
++            h, s, b, k,
++            period_ms,
++            cycles,
++            skew_ratio,
++            transient,
++        )
 diff --git a/clients/python/lightsc/lightsc/responses.py b/clients/python/lightsc/lightsc/responses.py
 new file mode 100644
 --- /dev/null
