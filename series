@@ -1,3 +1,8 @@
+update_jsmn.patch
+fix_display_bulb_id_label_display.patch
+dont_check_that_lightsd_is_running.patch
+update_lightsc_example.patch
+update_changelog.patch
 add_power_transition.patch #+future
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future

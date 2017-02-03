@@ -1,0 +1,17 @@
+# HG changeset patch
+# Parent  e34e830efd2159da8bb0436e79c2ed5d7872db62
+Don't check that lightsd is running in the demo script
+
+I'll try to have it running on the WiFi access point directly.
+
+diff --git a/slides/fosdem_2017/monolight-demo.sh b/slides/fosdem_2017/monolight-demo.sh
+--- a/slides/fosdem_2017/monolight-demo.sh
++++ b/slides/fosdem_2017/monolight-demo.sh
+@@ -17,7 +17,6 @@
+ check_venv monolight
+ 
+ check_process serialoscd
+-check_process lightsd
+ 
+ cat <<EOF
+ ### monolight demo ###
