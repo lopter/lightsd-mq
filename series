@@ -1,3 +1,5 @@
+exclude_slides_pdf_from_releases.patch
+add_www.patch
 add_power_transition.patch #+future
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future
