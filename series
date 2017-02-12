@@ -1,6 +1,3 @@
-monolight_type_fixes.patch
-update_lifx_product_ids.patch
-update_changelog.patch
 add_power_transition.patch #+future
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future
