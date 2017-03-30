@@ -264,428 +264,507 @@ rename to slides/2017-02-04_fosdem/fosdem_2017.tex
  \end{tikzpicture}};
  
  \draw[ultra thick] (lightsd) -| (monolight);
-@@ -321,8 +123,8 @@
- \coordinate (SE) at (3.86, -2.11);
- \coordinate (b0) at (-4, 1.75);
+@@ -314,24 +116,8 @@
  
+ \begin{frame}{The grid}
+ \begin{center}
+-\begin{tikzpicture}[overlay,scale=1.2]
+-\coordinate (NW) at (-4, 1.75);
+-\coordinate (NE) at (3.86, 1.75);
+-\coordinate (SW) at (-4, -2.11);
+-\coordinate (SE) at (3.86, -2.11);
+-\coordinate (b0) at (-4, 1.75);
+-
 -\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
 -\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
-+\fill[color=MonomeCase,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
-+\fill[color=MonomePlate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
- 
- \fill[controlpt] (NW) circle (0.1);
- \fill[controlpt] (SW) circle (0.1);
-@@ -348,8 +150,8 @@
- \coordinate (b16) at (-3.82,1.07);
- \coordinate (b32) at (-3.82,0.57);
- 
+-
+-\fill[controlpt] (NW) circle (0.1);
+-\fill[controlpt] (SW) circle (0.1);
+-\fill[controlpt] (NE) circle (0.1);
+-\fill[controlpt] (SE) circle (0.1);
+-
+-\foreach \x in {-4,-3.5,...,3.5}
+-\foreach \y in {1.75,1.25,...,-1.75}
+-\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
++\begin{tikzpicture}[overlay]
++\pic (0, 0) {monome={scale 1.2}};
+ \end{tikzpicture}
+ \end{center}
+ \end{frame}
+@@ -340,25 +126,7 @@
+ \begin{center}
+ \begin{tikzpicture}[overlay,scale=1.2]
+ \onslide<1->{%
+-\coordinate (NW) at (-4, 1.75);
+-\coordinate (NE) at (3.86, 1.75);
+-\coordinate (SW) at (-4, -2.11);
+-\coordinate (SE) at (3.86, -2.11);
+-\coordinate (b0) at (-4, 1.75);
+-\coordinate (b16) at (-3.82,1.07);
+-\coordinate (b32) at (-3.82,0.57);
+-
 -\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
 -\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
-+\fill[color=MonomeCase,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
-+\fill[color=MonomePlate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
+-
+-\fill[controlpt] (NW) circle (0.1);
+-\fill[controlpt] (SW) circle (0.1);
+-\fill[controlpt] (NE) circle (0.1);
+-\fill[controlpt] (SE) circle (0.1);
+-
+-\foreach \x in {-4,-3.5,...,3.5}
+-\foreach \y in {1.75,1.25,...,-1.75}
+-\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
++\pic (0, 0) {monome={scale 1.2}};
  
- \fill[controlpt] (NW) circle (0.1);
- \fill[controlpt] (SW) circle (0.1);
-@@ -434,8 +236,8 @@
- \coordinate (SE) at (3.86, -2.11);
- \coordinate (b0) at (-4, 1.75);
+ \foreach \x in {-4,-3.5,...,3.5}
+ \fill[mbutton] (\x, -1.75) rectangle +(0.36, -0.36);
+@@ -401,6 +169,7 @@
+   ($(b115.north west) + (-0.1,0.35)$) -- ($(b116.north east) + (0.1,0.35)$);
+ }
+ \onslide<3->{%
++\coordinate (b0) at (-4, 1.75);
+ \draw ($(b0) + (-0.25, 0)$) node[below right] {%
+ \begin{minipage}{10cm}
+ Other ideas:
+@@ -416,26 +185,11 @@
+ \end{center}
+ \end{frame}
  
+-%\node[rectangle] (b112) at (-3.82,-1.93) {};
+-%\fill ($(b112.west) + (-1,1)$) circle (0.1);
+-%\fill ($(b112.west) + (-0.5,0.25)$) circle (0.1);
+-
+-%\node[rectangle] (b0) at (-3.82,1.57) {0};
+-%\node[rectangle] (b99) at (-2.32,-1.43) {99};
+-%\node[bubble,color=LightGreen,fit=(b0) (b99)] (BLOCK) {};
+-
+ \begin{frame}{Target control pads x4}
+ \begin{center}
+ \begin{tikzpicture}[overlay,scale=1.2]
+ \onslide<1->{%
+-\coordinate (NW) at (-4, 1.75);
+-\coordinate (NE) at (3.86, 1.75);
+-\coordinate (SW) at (-4, -2.11);
+-\coordinate (SE) at (3.86, -2.11);
+-\coordinate (b0) at (-4, 1.75);
+-
 -\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
 -\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
-+\fill[color=MonomeCase,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
-+\fill[color=MonomePlate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
++\pic (0, 0) {monome={scale 1.2}};
  
  \foreach \x in {-4,-3.5,...,-2.5}
  \foreach \y in {1.75,1.25,...,-1.25}
-@@ -551,8 +353,8 @@
- \coordinate (SE) at (3.86, -2.11);
- \coordinate (caption) at ($(NW) + (-1.155,0.65)$);
+@@ -455,11 +209,6 @@
+ 
+ \foreach \x in {-4,-3.5,...,3.5}
+ \fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36);
+-
+-\fill[controlpt] (NW) circle (0.1);
+-\fill[controlpt] (SW) circle (0.1);
+-\fill[controlpt] (NE) circle (0.1);
+-\fill[controlpt] (SE) circle (0.1);
+ }
+ \onslide<2->{%
+ \foreach \y in {1.75,1.25,...,-1.25}
+@@ -545,27 +294,14 @@
+ \begin{center}
+ \begin{tikzpicture}[overlay,scale=1.2]
+ \onslide<1->{%
+-\coordinate (NW) at (-4, 1.75);
+-\coordinate (NE) at (3.86, 1.75);
+-\coordinate (SW) at (-4, -2.11);
+-\coordinate (SE) at (3.86, -2.11);
+-\coordinate (caption) at ($(NW) + (-1.155,0.65)$);
++\pic (0, 0) {monome={scale 1.2}};
  
 -\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
 -\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
-+\fill[color=MonomeCase,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
-+\fill[color=MonomePlate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
+-
+-\foreach \x in {-4,-3.5,...,3.5}
+-\foreach \y in {1.75,1.25,...,-1.75}
+-\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36); % blank grid
++\coordinate (NW) at (-4, 1.75);
++\coordinate (caption) at ($(NW) + (-1.155,0.65)$);
  
- \foreach \x in {-4,-3.5,...,3.5}
- \foreach \y in {1.75,1.25,...,-1.75}
-@@ -697,8 +499,8 @@
- \coordinate (NW) at (-4, 1.75);
- \coordinate (SE) at (3.86, -2.11);
+ \foreach \x in {-4,-3.5,...,-1}
+ \fill[mbutton] (\x, -1.75) rectangle +(0.36, -0.36); % function row
  
+-\fill[controlpt] (NW) circle (0.1);
+-\fill[controlpt] (SW) circle (0.1);
+-\fill[controlpt] (NE) circle (0.1);
+-\fill[controlpt] (SE) circle (0.1);
+-
+ \node[rectangle] (b117) at (-1.32,-1.93) {};
+ \node[rectangle] (b118) at (-0.82,-1.93) {};
+ }
+@@ -693,176 +429,14 @@
+ \node[box] (monolight) at (3.5,0.75) {monolight};
+ \node[box] (lightsd) at (0.5,-2) {lightsd};
+ \draw[ultra thick] (-1.46, 1.5) -| (monolight);
+-\node (monome) at (-3.5,1.5) {\begin{tikzpicture}[scale=0.5]
+-\coordinate (NW) at (-4, 1.75);
+-\coordinate (SE) at (3.86, -2.11);
+-
 -\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
 -\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
-+\fill[color=MonomeCase,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
-+\fill[color=MonomePlate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
- 
- \foreach \x in {-4,-3.5,...,3.5}
- \foreach \y in {1.75,1.25,...,-1.75}
-@@ -708,17 +510,17 @@
- \colorlet{LightColor}{LightSlateBlue}
- \begin{tikzpicture}[scale=0.19,rotate=90]
- % main body
+-
+-\foreach \x in {-4,-3.5,...,3.5}
+-\foreach \y in {1.75,1.25,...,-1.75}
+-\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
++\node (monome) at (-3.5,1.5) {\begin{tikzpicture}
++\pic (0, 0) {monome={scale 0.5}};
+ \end{tikzpicture}};
+-\node (bulbh) at (-4.2,-1.1) {%
+-\colorlet{LightColor}{LightSlateBlue}
+-\begin{tikzpicture}[scale=0.19,rotate=90]
+-% main body
 -\fill[color=BodyColor]
-+\fill[color=LightBulbBodyColor]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
- % main body light
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-% main body light
 -\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
+-    (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
 -\draw[line width=2mm,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=2mm,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
- 
- % led - body separator
+-    (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
+-
+-% led - body separator
 -\fill[color=BodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
-+\fill[color=LightBulbBodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
- 
- % led part
- \fill[color=LightColor]
-@@ -727,36 +529,36 @@
-     -- ++(0,-14mm) -- cycle;
- 
- % lower body
+-
+-% led part
+-\fill[color=LightColor]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
+-
+-% lower body
 -\fill[color=BodyColor!90!black]
-+\fill[color=LightBulbBodyColor!90!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % socket
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% socket
 -\fill[color=SocketColor]
-+\fill[color=LightBulbSocketColor]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-     decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
-     -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
 -\draw[thin,color=SocketColor] (-10mm,-42mm) -- (10mm,-52mm);
-+\draw[thin,color=LightBulbSocketColor] (-10mm,-42mm) -- (10mm,-52mm);
- 
- % socket light
+-
+-% socket light
 -\draw[line width=1mm,line cap=round,rounded corners=1pt,color=SocketColor!90!white]
-+\draw[line width=1mm,line cap=round,rounded corners=1pt,color=LightBulbSocketColor!90!white]
-     (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
- 
- % lower body light
+-    (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
+-
+-% lower body light
 -\draw[line width=1.8mm,color=BodyColor]
-+\draw[line width=1.8mm,color=LightBulbBodyColor]
-     (5mm,-18mm) -- ++(0,-20mm);
- 
- % led - body separator light
+-    (5mm,-18mm) -- ++(0,-20mm);
+-
+-% led - body separator light
 -\draw[line width=1.6mm, color=BodyColor] (16mm,32mm) -- ++(0,2.5mm);
-+\draw[line width=1.6mm, color=LightBulbBodyColor] (16mm,32mm) -- ++(0,2.5mm);
- % led - body separator shade
+-% led - body separator shade
 -\draw[thin, color=BodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
 -\draw[thin, color=BodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
- 
- % socket shade
+-
+-% socket shade
 -\draw[color=SocketColor!80!black]
-+\draw[color=LightBulbSocketColor!80!black]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-@@ -764,17 +566,17 @@
-     -- (10mm,-38mm);
- \draw[color=fgcolor]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm);
+-\draw[color=fgcolor]
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
 -\draw[rounded corners=1pt,color=SocketColor!80!black]
-+\draw[rounded corners=1pt,color=LightBulbSocketColor!80!black]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
- 
- % lower body shade
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-
+-% lower body shade
 -\draw[rounded corners=1pt,color=BodyColor!50!black]
-+\draw[rounded corners=1pt,color=LightBulbBodyColor!50!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % body shade
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% body shade
 -\draw[thick,rounded corners=1pt,color=BodyColor!60!black]
-+\draw[thick,rounded corners=1pt,color=LightBulbBodyColor!60!black]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
- 
-@@ -788,17 +590,17 @@
- \colorlet{LightColor}{IndianRed}
- \begin{tikzpicture}[scale=0.19,rotate=90]
- % main body
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-
+-% led shade
+-\draw[thick,rounded corners=1pt,color=LightColor!70!white]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
++\node (bulbh) at (-4.2,-1.1) {\begin{tikzpicture}
++\pic (0, 0) {lightbulb={LightSlateBlue scale 0.19 rotate 90}};
+ \end{tikzpicture}};
+-\node (bulbl) at (-4.2,-2.9) {%
+-\colorlet{LightColor}{IndianRed}
+-\begin{tikzpicture}[scale=0.19,rotate=90]
+-% main body
 -\fill[color=BodyColor]
-+\fill[color=LightBulbBodyColor]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
- % main body light
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-% main body light
 -\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
+-    (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
 -\draw[line width=2mm,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=2mm,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
- 
- % led - body separator
+-    (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
+-
+-% led - body separator
 -\fill[color=BodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
-+\fill[color=LightBulbBodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
- 
- % led part
- \fill[color=LightColor]
-@@ -807,36 +609,36 @@
-     -- ++(0,-14mm) -- cycle;
- 
- % lower body
+-
+-% led part
+-\fill[color=LightColor]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
+-
+-% lower body
 -\fill[color=BodyColor!90!black]
-+\fill[color=LightBulbBodyColor!90!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % socket
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% socket
 -\fill[color=SocketColor]
-+\fill[color=LightBulbSocketColor]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-     decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
-     -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
 -\draw[thin,color=SocketColor] (-10mm,-42mm) -- (10mm,-52mm);
-+\draw[thin,color=LightBulbSocketColor] (-10mm,-42mm) -- (10mm,-52mm);
- 
- % socket light
+-
+-% socket light
 -\draw[line width=1mm,line cap=round,rounded corners=1pt,color=SocketColor!90!white]
-+\draw[line width=1mm,line cap=round,rounded corners=1pt,color=LightBulbSocketColor!90!white]
-     (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
- 
- % lower body light
+-    (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
+-
+-% lower body light
 -\draw[line width=1.8mm,color=BodyColor]
-+\draw[line width=1.8mm,color=LightBulbBodyColor]
-     (5mm,-18mm) -- ++(0,-20mm);
- 
- % led - body separator light
+-    (5mm,-18mm) -- ++(0,-20mm);
+-
+-% led - body separator light
 -\draw[line width=1.6mm, color=BodyColor] (16mm,32mm) -- ++(0,2.5mm);
-+\draw[line width=1.6mm, color=LightBulbBodyColor] (16mm,32mm) -- ++(0,2.5mm);
- % led - body separator shade
+-% led - body separator shade
 -\draw[thin, color=BodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
 -\draw[thin, color=BodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
- 
- % socket shade
+-
+-% socket shade
 -\draw[color=SocketColor!80!black]
-+\draw[color=LightBulbSocketColor!80!black]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-@@ -844,17 +646,17 @@
-     -- (10mm,-38mm);
- \draw[color=fgcolor]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm);
+-\draw[color=fgcolor]
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
 -\draw[rounded corners=1pt,color=SocketColor!80!black]
-+\draw[rounded corners=1pt,color=LightBulbSocketColor!80!black]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
- 
- % lower body shade
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-
+-% lower body shade
 -\draw[rounded corners=1pt,color=BodyColor!50!black]
-+\draw[rounded corners=1pt,color=LightBulbBodyColor!50!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % body shade
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% body shade
 -\draw[thick,rounded corners=1pt,color=BodyColor!60!black]
-+\draw[thick,rounded corners=1pt,color=LightBulbBodyColor!60!black]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-
+-% led shade
+-\draw[thick,rounded corners=1pt,color=LightColor!70!white]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
++\node (bulbl) at (-4.2,-2.9) {\begin{tikzpicture}
++\pic (0, 0) {lightbulb={IndianRed scale 0.19 rotate 90}};
+ \end{tikzpicture}};
  
-@@ -1055,8 +857,8 @@
- \coordinate (NW) at (-4, 1.75);
- \coordinate (SE) at (3.86, -2.11);
+ \draw[ultra thick] (lightsd) -| (monolight);
+@@ -1051,178 +625,16 @@
  
+ \node[box,color=black] (serialoscd) at (0.5,1.5) {serialoscd};
+ \draw[ultra thick] (-1.46, 2.2) -| node[above, pos=0.4] {Serial \small{(FTDI)}} (serialoscd);
+-\node (monome) at (-3.5,1.5) {\begin{tikzpicture}[scale=0.5]
+-\coordinate (NW) at (-4, 1.75);
+-\coordinate (SE) at (3.86, -2.11);
+-
 -\fill[color=case,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
 -\fill[color=plate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
-+\fill[color=MonomeCase,rounded corners=2pt] ($(NW) + (-0.18,0.18)$) rectangle ($(SE) + (0.18,-0.18)$);
-+\fill[color=MonomePlate,rounded corners=2pt] ($(NW) + (-0.10,0.10)$) rectangle ($(SE) + (0.10,-0.10)$);
- 
- \foreach \x in {-4,-3.5,...,3.5}
- \foreach \y in {1.75,1.25,...,-1.75}
-@@ -1068,17 +870,17 @@
- \colorlet{LightColor}{LightSlateBlue}
- \begin{tikzpicture}[scale=0.19,rotate=90]
- % main body
+-
+-\foreach \x in {-4,-3.5,...,3.5}
+-\foreach \y in {1.75,1.25,...,-1.75}
+-\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
++\node (monome) at (-3.5,1.5) {\begin{tikzpicture}
++\pic (0, 0) {monome={scale 0.5}};
+ \end{tikzpicture}};
+ \node[box] (monolight) at (3.5,-0.25) {monolight};
+ \node[box] (lightsd) at (0.5,-2) {lightsd};
+-\node (bulbh) at (-4.2,-1.1) {%
+-\colorlet{LightColor}{LightSlateBlue}
+-\begin{tikzpicture}[scale=0.19,rotate=90]
+-% main body
 -\fill[color=BodyColor]
-+\fill[color=LightBulbBodyColor]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
- % main body light
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-% main body light
 -\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
+-    (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
 -\draw[line width=2mm,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=2mm,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
- 
- % led - body separator
+-    (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
+-
+-% led - body separator
 -\fill[color=BodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
-+\fill[color=LightBulbBodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
- 
- % led part
- \fill[color=LightColor]
-@@ -1087,36 +889,36 @@
-     -- ++(0,-14mm) -- cycle;
- 
- % lower body
+-
+-% led part
+-\fill[color=LightColor]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
+-
+-% lower body
 -\fill[color=BodyColor!90!black]
-+\fill[color=LightBulbBodyColor!90!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % socket
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% socket
 -\fill[color=SocketColor]
-+\fill[color=LightBulbSocketColor]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-     decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
-     -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
 -\draw[thin,color=SocketColor] (-10mm,-42mm) -- (10mm,-52mm);
-+\draw[thin,color=LightBulbSocketColor] (-10mm,-42mm) -- (10mm,-52mm);
- 
- % socket light
+-
+-% socket light
 -\draw[line width=1mm,line cap=round,rounded corners=1pt,color=SocketColor!90!white]
-+\draw[line width=1mm,line cap=round,rounded corners=1pt,color=LightBulbSocketColor!90!white]
-     (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
- 
- % lower body light
+-    (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
+-
+-% lower body light
 -\draw[line width=1.8mm,color=BodyColor]
-+\draw[line width=1.8mm,color=LightBulbBodyColor]
-     (5mm,-18mm) -- ++(0,-20mm);
- 
- % led - body separator light
+-    (5mm,-18mm) -- ++(0,-20mm);
+-
+-% led - body separator light
 -\draw[line width=1.6mm, color=BodyColor] (16mm,32mm) -- ++(0,2.5mm);
-+\draw[line width=1.6mm, color=LightBulbBodyColor] (16mm,32mm) -- ++(0,2.5mm);
- % led - body separator shade
+-% led - body separator shade
 -\draw[thin, color=BodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
 -\draw[thin, color=BodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
- 
- % socket shade
+-
+-% socket shade
 -\draw[color=SocketColor!80!black]
-+\draw[color=LightBulbSocketColor!80!black]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-@@ -1124,17 +926,17 @@
-     -- (10mm,-38mm);
- \draw[color=fgcolor]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm);
+-\draw[color=fgcolor]
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
 -\draw[rounded corners=1pt,color=SocketColor!80!black]
-+\draw[rounded corners=1pt,color=LightBulbSocketColor!80!black]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
- 
- % lower body shade
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-
+-% lower body shade
 -\draw[rounded corners=1pt,color=BodyColor!50!black]
-+\draw[rounded corners=1pt,color=LightBulbBodyColor!50!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % body shade
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% body shade
 -\draw[thick,rounded corners=1pt,color=BodyColor!60!black]
-+\draw[thick,rounded corners=1pt,color=LightBulbBodyColor!60!black]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
- 
-@@ -1148,17 +950,17 @@
- \colorlet{LightColor}{IndianRed}
- \begin{tikzpicture}[scale=0.19,rotate=90]
- % main body
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-
+-% led shade
+-\draw[thick,rounded corners=1pt,color=LightColor!70!white]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
++\node (bulbh) at (-4.2,-1.1) {\begin{tikzpicture}
++\pic (0, 0) {lightbulb={LightSlateBlue scale 0.19 rotate 90}};
+ \end{tikzpicture}};
+-\node (bulbl) at (-4.2,-2.9) {%
+-\colorlet{LightColor}{IndianRed}
+-\begin{tikzpicture}[scale=0.19,rotate=90]
+-% main body
 -\fill[color=BodyColor]
-+\fill[color=LightBulbBodyColor]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
- % main body light
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-% main body light
 -\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=1.5mm,line cap=round,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
+-    (-16mm,0.5mm) .. controls (0,-0.4mm) .. (16mm,0.5mm);
 -\draw[line width=2mm,rounded corners=1pt,color=BodyColor!80!white]
-+\draw[line width=2mm,rounded corners=1pt,color=LightBulbBodyColor!80!white]
-     (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
- 
- % led - body separator
+-    (16.5mm,32mm) -- ++(0,-32mm) -- ++(-15mm,-22mm);
+-
+-% led - body separator
 -\fill[color=BodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
-+\fill[color=LightBulbBodyColor!90!black] (-20mm,32mm) -- ++(0,2.5mm) -- ++(40mm,0) -- ++(0,-2.5mm) -- cycle;
- 
- % led part
- \fill[color=LightColor]
-@@ -1167,36 +969,36 @@
-     -- ++(0,-14mm) -- cycle;
- 
- % lower body
+-
+-% led part
+-\fill[color=LightColor]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
+-
+-% lower body
 -\fill[color=BodyColor!90!black]
-+\fill[color=LightBulbBodyColor!90!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % socket
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% socket
 -\fill[color=SocketColor]
-+\fill[color=LightBulbSocketColor]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-     decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
-     -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm) -- ++(-20mm,0) -- ++(0,-4mm) -- cycle;
 -\draw[thin,color=SocketColor] (-10mm,-42mm) -- (10mm,-52mm);
-+\draw[thin,color=LightBulbSocketColor] (-10mm,-42mm) -- (10mm,-52mm);
- 
- % socket light
+-
+-% socket light
 -\draw[line width=1mm,line cap=round,rounded corners=1pt,color=SocketColor!90!white]
-+\draw[line width=1mm,line cap=round,rounded corners=1pt,color=LightBulbSocketColor!90!white]
-     (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
- 
- % lower body light
+-    (4.5mm,-38mm) -- ++(0,-14mm) -- ++(-4mm,-2.5mm);
+-
+-% lower body light
 -\draw[line width=1.8mm,color=BodyColor]
-+\draw[line width=1.8mm,color=LightBulbBodyColor]
-     (5mm,-18mm) -- ++(0,-20mm);
- 
- % led - body separator light
+-    (5mm,-18mm) -- ++(0,-20mm);
+-
+-% led - body separator light
 -\draw[line width=1.6mm, color=BodyColor] (16mm,32mm) -- ++(0,2.5mm);
-+\draw[line width=1.6mm, color=LightBulbBodyColor] (16mm,32mm) -- ++(0,2.5mm);
- % led - body separator shade
+-% led - body separator shade
 -\draw[thin, color=BodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
 -\draw[thin, color=BodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (-20mm,32mm) -- ++(0,2.5mm);
-+\draw[thin, color=LightBulbBodyColor!80!black] (20mm,32mm) -- ++(0,2.5mm);
- 
- % socket shade
+-
+-% socket shade
 -\draw[color=SocketColor!80!black]
-+\draw[color=LightBulbSocketColor!80!black]
-     (-10mm,-38mm) -- ++(0,-4mm)
-     decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
-     -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
-@@ -1204,17 +1006,17 @@
-     -- (10mm,-38mm);
- \draw[color=fgcolor]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-    (-10mm,-38mm) -- ++(0,-4mm)
+-    decorate[screw] {(-10mm,-42mm) -- ++(0,-10mm)}
+-    -- ++(0,-0.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm) -- ++(0,0.5mm)
+-    decorate[screw] {(10mm,-52mm) -- ++(0,10mm)}
+-    -- (10mm,-38mm);
+-\draw[color=fgcolor]
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
 -\draw[rounded corners=1pt,color=SocketColor!80!black]
-+\draw[rounded corners=1pt,color=LightBulbSocketColor!80!black]
-     (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
- 
- % lower body shade
+-    (-10mm,-52.5mm) -- ++(7.5mm,-6mm) -- ++(5mm,0) -- ++(7.5mm,6mm);
+-
+-% lower body shade
 -\draw[rounded corners=1pt,color=BodyColor!50!black]
-+\draw[rounded corners=1pt,color=LightBulbBodyColor!50!black]
-     (-14mm,-18mm) -- ++(0,-18mm) --
-     ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
-     -- ++(0,18mm);
- 
- % body shade
+-    (-14mm,-18mm) -- ++(0,-18mm) --
+-    ++(2mm,-2mm) -- ++(24mm,0) -- ++(2mm,2mm)
+-    -- ++(0,18mm);
+-
+-% body shade
 -\draw[thick,rounded corners=1pt,color=BodyColor!60!black]
-+\draw[thick,rounded corners=1pt,color=LightBulbBodyColor!60!black]
-     (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
-     ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-    (-28mm,0) -- ++(0,32mm) -- ++(56mm,0) -- ++(0,-32mm) --
+-    ++(-10mm,-18mm) -- ++(-36mm,0) -- cycle;
+-
+-% led shade
+-\draw[thick,rounded corners=1pt,color=LightColor!70!white]
+-    (-28mm,34.5mm) -- ++(0,14mm)
+-    .. controls ++(28mm,1mm) .. ++(56mm,0)
+-    -- ++(0,-14mm) -- cycle;
++\node (bulbl) at (-4.2,-2.9) {\begin{tikzpicture}
++\pic (0, 0) {lightbulb={IndianRed scale 0.19 rotate 90}};
+ \end{tikzpicture}};
  
+ \draw[ultra thick] (serialoscd) -| node[above,pos=0.25] {OSC} node[below,pos=0.25] {\small{(UDP)}} (monolight);
 diff --git a/slides/fosdem_2017/lightsd-demo.sh b/slides/2017-02-04_fosdem/lightsd-demo.sh
 rename from slides/fosdem_2017/lightsd-demo.sh
 rename to slides/2017-02-04_fosdem/lightsd-demo.sh
@@ -704,7 +783,7 @@ diff --git a/slides/2017-04-XX_while_42/while42.tex b/slides/2017-04-XX_while_42
 new file mode 100644
 --- /dev/null
 +++ b/slides/2017-04-XX_while_42/while42.tex
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,335 @@
 +\documentclass{lgtdslides}
 +
 +\usepackage{tikz}
@@ -718,18 +797,142 @@ new file mode 100644
 +\date{While 42 SF, side projects}
 +\author{Louis Opter <louis@opter.org>}
 +
++\tikzset{arrow/.style={->, >=stealth,ultra thick,rounded corners}}
++
 +\begin{document}
 +
 +\begin{frame}\titlepage\end{frame}
 +
-+\begin{frame}{Un Test}
++\section{Démo}
++
++\begin{frame}{monolight}
++\begin{itemize}
++\item Manipulations;
++\item Retour visuel;
++\item Définition de l'interface.
++\end{itemize}
++\vspace{1em}
++\pause%
++Une autre idée que j'aimerais implémenter\ldots
++\end{frame}
++
++\begin{frame}{Effet sablier/alerte}
 +\begin{center}
-+\begin{tikzpicture}[overlay]
-+\pic (0,0) {monome={scale 1}};
-+\pic (0,0) {lightbulb={LightSlateBlue scale 0.19 rotate 90}};
++\begin{tikzpicture}[overlay,scale=1.2]
++\onslide<1->{%
++\pic (0, 0) {monome={scale 1.2}};
++
++\coordinate (NW) at (-4, 1.75);
++\coordinate (caption) at ($(NW) + (-1.155,0.65)$);
++
++\foreach \x in {-4,-3.5,...,-1}
++\fill[mbutton] (\x, -1.75) rectangle +(0.36, -0.36); % function row
++
++\node[rectangle] (b117) at (-1.32,-1.93) {};
++\node[rectangle] (b118) at (-0.82,-1.93) {};
++}
++\onslide<1,3->{%
++% targets toggles:
++\fill[mbutton] (-4, 1.75) rectangle +(0.36, -0.36);
++\foreach \x in {-2,0,...,3.5}
++\fill[mbuttvlow] (\x, 1.75) rectangle +(0.36, -0.36);
++
++% h:
++\fill[mbutthigh] (-4, -0.25) rectangle +(0.36, -0.36);
++\fill[mbutton] (-4, -0.75) rectangle +(0.36, -0.36);
++\fill[mbutton] (-4, -1.25) rectangle +(0.36, -0.36);
++
++% s:
++\fill[mbuttmed] (-3.5, -0.75) rectangle +(0.36, -0.36);
++\fill[mbutton] (-3.5, -1.25) rectangle +(0.36, -0.36);
++
++% b:
++\foreach \y in {1.25,0.75,...,-1.25}
++\fill[mbutton] (-3, \y) rectangle +(0.36, -0.36);
++
++% k:
++\fill[mbutthigh] (-2.5, -1.25) rectangle +(0.36, -0.36);
++}
++\onslide<1>{%
++\draw (caption) node[right] {Ajoutons deux nouvelles fonctions};
++
++\node (timer) [below=0.5cm of b117] {timer};
++\node (alert) [below=0.9cm of b118] {alert};
++\draw[arrow] (timer) -- (b117);
++\draw[arrow] (alert) -- (b118);
++}
++\onslide<2>{%
++\draw (caption) node[right] {Sélection du compte-à-rebours (1 bouton allumé = 1 unité de temps):};
++
++% partially lit grid:
++\foreach \x in {-4,-3.5,...,-0.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutton] (\x, \y) rectangle +(0.36, -0.36);
++\foreach \y in {1.75,1.25,...,-0.5}
++\fill[mbutton] (0, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36); % blank function row
++
++\fill[mbutton] (-1.5, -1.75) rectangle +(0.36, -0.36); % time button
++\fill[mbutton] (0, -1.75) rectangle +(0.36, -0.36); % dec time scale
++\fill[mbutton] (0.5, -1.75) rectangle +(0.36, -0.36); % inc time scale
++
++%\node[rectangle] (b117) at (-1.32,-1.93) {};
++%\node[rectangle] (b118) at (-0.82,-1.93) {};
++%\node[rectangle] (b119) at (-0.32,-1.93) {};
++\node[rectangle] (b120) at (0.18,-1.93) {};
++\node[rectangle] (b121) at (0.68,-1.93) {};
++\node[rectangle] (b122) at (1.18,-1.93) {};
++\draw[ultra thick,decorate,decoration={name=brace,mirror}]
++  ($(b120.south west) + (-0.1,-0.35)$) -- ($(b121.south east) + (0.1,-0.35)$);
++\node (timectl) [below=0.5cm of b121] {dec/inc time unit};
++}
++\onslide<3>{%
++\draw (caption) node[right] {Sélection de la cible et de la fonction (alert):};
++
++\node (alert) [below=0.5cm of b118] {alert};
++\draw[arrow] (alert) -- (b118);
++
++\node[rectangle,opacity=0] (b0) at (-3.82,1.57) {B};
++\node[rectangle,opacity=0] (b4) at (-1.82,1.57) {B};
++\node[rectangle,opacity=0] (b8) at (0.18,1.57) {B};
++\node[rectangle,opacity=0] (b12) at (2.18,1.57) {B};
++
++\coordinate (legend) at ($(caption) + (0.7, -0.05)$);
++\coordinate (upturn) at ($(legend) + (0,-1.36)$);
++\draw[arrow,<-] (b0.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++\draw[arrow,<-] (b4.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++\draw[arrow,<-] (b8.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++\draw[arrow,<-] (b12.south) -- ++(0,-0.35) -- (upturn) -- (legend.south);
++}
++\onslide<4>{%
++\fill[mbutton] (-3.5, 1.75) rectangle +(0.36, -0.36);
++
++\node[rectangle] (b1) at (-3.32,1.57) {};
++\node (feedback) [above right=0.5cm of b1] {Voyant d'activité du sablier};
++\draw[arrow] (feedback) -| (b1);
++}
 +\end{tikzpicture}
 +\end{center}
 +\end{frame}
++
++\section{Merci}
++
++{\setbeamertemplate{headline}{}
++\begin{frame}
++\begin{center}\Huge{Merci}\end{center}
++\vspace{1em}
++\begin{center}\Large{\emph{Place aux questions et à la discussion}}\end{center}
++\vspace{1em}
++\begin{itemize}
++\item \Large{\href{https://twitter.com/1opter}{@1opter}}
++\item \Large{\emph{\#lightsd} sur IRC (\emph{chat.freenode.net})}
++\item \Large{\url{https://www.lightsd.io/}}
++\end{itemize}
++\end{frame}}
++
++\section{Extras}
 +
 +\begin{frame}{Table des modèles LIFX}
 +\begin{tabular}{lll}
@@ -753,6 +956,168 @@ new file mode 100644
 +\end{tabular}
 +\end{frame}
 +
++\section{Démo (papier)}
++
++\begin{frame}{La grille}
++\begin{center}
++\begin{tikzpicture}[overlay]
++\pic (0, 0) {monome={scale 1.2}};
++\end{tikzpicture}
++\end{center}
++\end{frame}
++
++\begin{frame}{Ligne de fonctions/scènes}
++\begin{center}
++\begin{tikzpicture}[overlay,scale=1.2]
++\onslide<1->{%
++\pic (0, 0) {monome={scale 1.2}};
++
++\foreach \x in {-4,-3.5,...,3.5}
++\fill[mbutton] (\x, -1.75) rectangle +(0.36, -0.36);
++}
++\onslide<2->{%
++\foreach \x in {-1.5,-1,...,3}
++\fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36);
++
++\fill[color=fgcolor,decoration={name=snake,amplitude=2,segment length=45}]
++  decorate {(-4.25,-1.35) -- (4.15,-1.35)} -- (4.15,2) -- (-4.25,2) -- cycle;
++
++\node[rectangle] (b112) at (-3.82,-1.93) {};
++\node[rectangle] (b113) at (-3.32,-1.93) {};
++\node[rectangle] (b114) at (-2.82,-1.93) {};
++\node[rectangle] (b115) at (-2.32,-1.93) {};
++\node[rectangle] (b116) at (-1.82,-1.93) {};
++\node[rectangle] (b117) at (-1.32,-1.93) {};
++\node[rectangle] (b127) at (3.68,-1.93)  {};
++}
++\onslide<2>{
++\node (toggle) [above=1.1cm of b112] {%
++\begin{minipage}{2cm}
++\begin{center}
++on/off
++
++toggle
++\end{center}
++\end{minipage}};
++\node (off) [above=0.7cm of b113] {off};
++\node (on) [above=1.1cm of b114] {on};
++\node (scenes) [above=0.7cm of b116] {scenes\ldots};
++\node (uitoggle) [above=1.1cm of b127] {toggle UI};
++
++\draw[arrow] (toggle) -- (b112);
++\draw[arrow] (off) -- (b113);
++\draw[arrow] (on) -- (b114);
++\draw[arrow] (uitoggle) -- (b127);
++
++\draw[ultra thick,decorate,decoration={name=brace}]
++  ($(b115.north west) + (-0.1,0.35)$) -- ($(b116.north east) + (0.1,0.35)$);
++}
++\onslide<3->{%
++\coordinate (b0) at (-4, 1.75);
++\draw ($(b0) + (-0.25, 0)$) node[below right] {%
++\begin{minipage}{10cm}
++Other ideas:
++\vspace{1em}
++\begin{itemize}
++\item Boutons pour la navigation (pagination\ldots);  % will make sense on the next slide
++\item Boutons pour contrôler MPD.
++\end{itemize}
++\end{minipage}
++};
++}
++\end{tikzpicture}
++\end{center}
++\end{frame}
++
++\begin{frame}{Panneau de contrôle pour une cible (x4)}
++\begin{center}
++\begin{tikzpicture}[overlay,scale=1.2]
++\onslide<1->{%
++\pic (0, 0) {monome={scale 1.2}};
++
++\foreach \x in {-4,-3.5,...,-2.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutton] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {-2,-1.5,...,-0.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbuttmed] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {0,0.5,...,1.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbutton] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {2,2.5,...,3.5}
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbuttmed] (\x, \y) rectangle +(0.36, -0.36);
++
++\foreach \x in {-4,-3.5,...,3.5}
++\fill[mbuttoff] (\x, -1.75) rectangle +(0.36, -0.36);
++}
++\onslide<2->{%
++\foreach \y in {1.75,1.25,...,-1.25}
++\fill[mbuttoff] (-2, \y) rectangle +(0.36, -0.36);
++
++\fill[color=fgcolor,decoration={name=snake,amplitude=2,segment length=45}]
++  decorate {(-1.75,2) -- (-1.75,-2.36)} -- (4.2,-2.36) -- (4.2,2) -- cycle;
++
++\foreach \x in {-3.5,-3,...,-2.5}
++\fill[mbuttoff] (\x, 1.75) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-0.25} % h
++\fill[mbuttoff] (-4, \y) rectangle +(0.36, -0.36);
++\fill[mbutthigh] (-4, -0.25) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-0.75} % s
++\fill[mbuttoff] (-3.5, \y) rectangle +(0.36, -0.36);
++\fill[mbuttmed] (-3.5, -0.75) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-1.25} % b
++\fill[mbutton] (-3, \y) rectangle +(0.36, -0.36);
++
++\foreach \y in {1.25,0.75,...,-1.25} % k
++\fill[mbuttoff] (-2.5, \y) rectangle +(0.36, -0.36);
++\fill[mbutthigh] (-2.5, -1.25) rectangle +(0.36, -0.36);
++
++\node[rectangle] (b16) at (-3.82,1.07) {};
++\node (INC) at (-4.82,1.07) {INC};
++\draw[arrow] (INC) -- (b16);
++
++\node[rectangle] (b32) at (-3.82,0.57) {};
++\node (inc) at (-4.82,0.57) {inc};
++\draw[arrow] (inc) -- (b32);
++
++\node[rectangle] (b80) at (-3.82,-0.93) {};
++\node (dec) at (-4.82,-0.93) {dec};
++\draw[arrow] (dec) -- (b80);
++
++\node[rectangle] (b96) at (-3.82,-1.43) {};
++\node (DEC) at (-4.82,-1.43) {DEC};
++\draw[arrow] (DEC) -- (b96);
++
++\node[rectangle] (b4) at (-1.82,1.57) {};
++\node[rectangle] (b5) at (-1.32,1.57) {};
++\draw[arrow] (b5) -- (b4.west);
++\draw (b5) node[right] {Ligne de fonctions/voyants (bascule, à déterminer\ldots)};
++
++\node[rectangle] (b20) at (-1.82,1.07) {};
++\node[rectangle] (b21) at (-1.32,1.07) {};
++\draw[arrow] (b21) -- (b20.west);
++\draw (-1.32,1.32) node[below right] {%
++\begin{minipage}{10cm}
++4 barres de contrôle (Hsbk, ``roue de couleurs''):
++\vspace{1ex}
++\begin{itemize}
++\item Hue: 0.0--360.0°;
++\item Saturation: 0.0--1.0;
++\item Luminosité: 0.0--1.0;
++\item Température: 2500--9000K.
++\end{itemize}
++\end{minipage}};
++}
++\end{tikzpicture}
++\end{center}
++\end{frame}
 +\end{document}
 diff --git a/slides/CMakeLists.txt b/slides/CMakeLists.txt
 --- a/slides/CMakeLists.txt
