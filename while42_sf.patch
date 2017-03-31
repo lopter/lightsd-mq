@@ -580,10 +580,17 @@ rename to slides/2017-02-04_fosdem/fosdem_2017.tex
  \end{tikzpicture}};
  
  \draw[ultra thick] (lightsd) -| (monolight);
-@@ -1051,178 +625,16 @@
+@@ -1044,194 +618,8 @@
  
- \node[box,color=black] (serialoscd) at (0.5,1.5) {serialoscd};
- \draw[ultra thick] (-1.46, 2.2) -| node[above, pos=0.4] {Serial \small{(FTDI)}} (serialoscd);
+ \begin{frame}{Detailed architecture}
+ \begin{center}
+-\begin{tikzpicture}[overlay]
+-\coordinate (Origin) at (0,0);
+-
+-\fill[controlpt] (Origin) circle (0.1);
+-
+-\node[box,color=black] (serialoscd) at (0.5,1.5) {serialoscd};
+-\draw[ultra thick] (-1.46, 2.2) -| node[above, pos=0.4] {Serial \small{(FTDI)}} (serialoscd);
 -\node (monome) at (-3.5,1.5) {\begin{tikzpicture}[scale=0.5]
 -\coordinate (NW) at (-4, 1.75);
 -\coordinate (SE) at (3.86, -2.11);
@@ -594,11 +601,9 @@ rename to slides/2017-02-04_fosdem/fosdem_2017.tex
 -\foreach \x in {-4,-3.5,...,3.5}
 -\foreach \y in {1.75,1.25,...,-1.75}
 -\fill[mbuttoff] (\x, \y) rectangle +(0.36, -0.36);
-+\node (monome) at (-3.5,1.5) {\begin{tikzpicture}
-+\pic (0, 0) {monome={scale 0.5}};
- \end{tikzpicture}};
- \node[box] (monolight) at (3.5,-0.25) {monolight};
- \node[box] (lightsd) at (0.5,-2) {lightsd};
+-\end{tikzpicture}};
+-\node[box] (monolight) at (3.5,-0.25) {monolight};
+-\node[box] (lightsd) at (0.5,-2) {lightsd};
 -\node (bulbh) at (-4.2,-1.1) {%
 -\colorlet{LightColor}{LightSlateBlue}
 -\begin{tikzpicture}[scale=0.19,rotate=90]
@@ -678,9 +683,7 @@ rename to slides/2017-02-04_fosdem/fosdem_2017.tex
 -    (-28mm,34.5mm) -- ++(0,14mm)
 -    .. controls ++(28mm,1mm) .. ++(56mm,0)
 -    -- ++(0,-14mm) -- cycle;
-+\node (bulbh) at (-4.2,-1.1) {\begin{tikzpicture}
-+\pic (0, 0) {lightbulb={LightSlateBlue scale 0.19 rotate 90}};
- \end{tikzpicture}};
+-\end{tikzpicture}};
 -\node (bulbl) at (-4.2,-2.9) {%
 -\colorlet{LightColor}{IndianRed}
 -\begin{tikzpicture}[scale=0.19,rotate=90]
@@ -760,11 +763,20 @@ rename to slides/2017-02-04_fosdem/fosdem_2017.tex
 -    (-28mm,34.5mm) -- ++(0,14mm)
 -    .. controls ++(28mm,1mm) .. ++(56mm,0)
 -    -- ++(0,-14mm) -- cycle;
-+\node (bulbl) at (-4.2,-2.9) {\begin{tikzpicture}
-+\pic (0, 0) {lightbulb={IndianRed scale 0.19 rotate 90}};
- \end{tikzpicture}};
- 
- \draw[ultra thick] (serialoscd) -| node[above,pos=0.25] {OSC} node[below,pos=0.25] {\small{(UDP)}} (monolight);
+-\end{tikzpicture}};
+-
+-\draw[ultra thick] (serialoscd) -| node[above,pos=0.25] {OSC} node[below,pos=0.25] {\small{(UDP)}} (monolight);
+-\draw[ultra thick] (lightsd) -| node[above,pos=0.25] {JSON-RPC} node[below,pos=0.25] {\small{(TCP/Unix)}} (monolight);
+-\draw[wifipath] (bulbh.east) -- (-2.2,-1.15);
+-\draw[wifipath] (lightsd.west) -- (-1.1,-2);
+-\draw[wifipath] (bulbl.east) -- (-2.2,-2.85);
+-\node (wifi) at (-2.1,-2.25) {\small{(UDP)}};
+-\draw ($(wifi.north) + (0,0.2)$) node {LIFX-LAN};
++\begin{tikzpicture}
++\pic (0, 0) {monolightarch};
+ \end{tikzpicture}
+ \end{center}
+ \end{frame}
 diff --git a/slides/fosdem_2017/lightsd-demo.sh b/slides/2017-02-04_fosdem/lightsd-demo.sh
 rename from slides/fosdem_2017/lightsd-demo.sh
 rename to slides/2017-02-04_fosdem/lightsd-demo.sh
@@ -783,7 +795,7 @@ diff --git a/slides/2017-04-XX_while_42/while42.tex b/slides/2017-04-XX_while_42
 new file mode 100644
 --- /dev/null
 +++ b/slides/2017-04-XX_while_42/while42.tex
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,365 @@
 +\documentclass{lgtdslides}
 +
 +\usepackage{tikz}
@@ -806,14 +818,17 @@ new file mode 100644
 +\section{Démo}
 +
 +\begin{frame}{monolight}
-+\begin{itemize}
-+\item Manipulations;
-+\item Retour visuel;
-+\item Définition de l'interface.
-+\end{itemize}
++\only<1>{%
++\begin{center}
++\begin{tikzpicture}
++\pic (0, 0) {monolightarch};
++\end{tikzpicture}
++\end{center}
++}
++\only<2>{%
 +\vspace{1em}
-+\pause%
 +Une autre idée que j'aimerais implémenter\ldots
++}
 +\end{frame}
 +
 +\begin{frame}{Effet sablier/alerte}
@@ -918,9 +933,30 @@ new file mode 100644
 +\end{center}
 +\end{frame}
 +
-+\section{Motivations}
++\section{À propos du projet}
 +
 +\begin{frame}{Motivations}
++À l'origine du projet :
++\vspace{1em}
++\begin{itemize}
++\item Délais de découverte/utilisation, fiabilité ;
++\item Sécurité, vie privée, (dé-)centralisation ;
++\item Obsolescence programmée (ou non) ;
++\item « Accessibilité » ;
++\item Insatisfaction professionnelle.
++\end{itemize}
++\end{frame}
++
++\begin{frame}{Résultats}
++Quelques découvertes et confirmations :
++\vspace{1em}
++\begin{itemize}
++\item Les blobs binaires c'est de la merde ;
++\item L'IoT s'améliore mais c'est pas encore ça ;
++\item Spectre de problèmes vraiment très intéressant ;
++% todo: rajouter le spectre juste sur un slide puis reprendre la liste
++\item Une méthode d'apprentissage de premier ordre.
++\end{itemize}
 +\end{frame}
 +
 +\section{Merci}
@@ -1022,7 +1058,7 @@ new file mode 100644
 +\coordinate (b0) at (-4, 1.75);
 +\draw ($(b0) + (-0.25, 0)$) node[below right] {%
 +\begin{minipage}{10cm}
-+Other ideas:
++D'autres idées :
 +\vspace{1em}
 +\begin{itemize}
 +\item Boutons pour la navigation (pagination\ldots);  % will make sense on the next slide
@@ -1148,7 +1184,7 @@ diff --git a/slides/common/lgtdfigs.sty b/slides/common/lgtdfigs.sty
 new file mode 100644
 --- /dev/null
 +++ b/slides/common/lgtdfigs.sty
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,168 @@
 +\ProvidesPackage{lgtdfigs}
 +
 +\usetikzlibrary{%
@@ -1164,13 +1200,13 @@ new file mode 100644
 +\colorlet{LightBulbBodyColor}{Grey!90!black}
 +\colorlet{LightBulbSocketColor}{Silver!90!black}
 +
-+\tikzset{screw/.style={decoration={
++\tikzset{screw/.style={decoration={%
 +    name=snake,amplitude=0.1mm,segment length=0.6mm
 +}}}
 +
 +\tikzset{pics/lightbulb/.style args={#1 scale #2 rotate #3}{code={% arg1 is light color
 +
-+\tikzset{screw/.style={decoration={
++\tikzset{screw/.style={decoration={%
 +    name=snake,amplitude=0.1mm,segment length=0.6mm
 +}}}
 +
@@ -1286,6 +1322,36 @@ new file mode 100644
 +}
 +
 +\end{scope}
++}}}
++
++%%% Detailed arch diagram
++
++\tikzset{pics/monolightarch/.style={code={%
++
++\tikzset{wifipath/.style={thick,opacity=0.8,decorate,decoration={name=expanding waves,angle=25,segment length=3.5}}}
++
++\coordinate (Origin) at (0,0);
++\node[box,color=black] (serialoscd) at (0.5,1.5) {serialoscd};
++\draw[ultra thick] (-1.46, 2.2) -| node[above, pos=0.4] {Serial \small{(FTDI)}} (serialoscd);
++\node (monome) at (-3.5,1.5) {\begin{tikzpicture}
++\pic (0, 0) {monome={scale 0.5}};
++\end{tikzpicture}};
++\node[box] (monolight) at (3.5,-0.25) {monolight};
++\node[box] (lightsd) at (0.5,-2) {lightsd};
++\node (bulbh) at (-4.2,-1.1) {\begin{tikzpicture}
++\pic (0, 0) {lightbulb={LightSlateBlue scale 0.19 rotate 90}};
++\end{tikzpicture}};
++\node (bulbl) at (-4.2,-2.9) {\begin{tikzpicture}
++\pic (0, 0) {lightbulb={IndianRed scale 0.19 rotate 90}};
++\end{tikzpicture}};
++
++\draw[ultra thick] (serialoscd) -| node[above,pos=0.25] {OSC} node[below,pos=0.25] {\small{(UDP)}} (monolight);
++\draw[ultra thick] (lightsd) -| node[above,pos=0.25] {JSON-RPC} node[below,pos=0.25] {\small{(TCP/Unix)}} (monolight);
++\draw[wifipath] (bulbh.east) -- (-2.2,-1.15);
++\draw[wifipath] (lightsd.west) -- (-1.1,-2);
++\draw[wifipath] (bulbl.east) -- (-2.2,-2.85);
++\node (wifi) at (-2.1,-2.25) {\small{(UDP)}};
++\draw ($(wifi.north) + (0,0.2)$) node {LIFX-LAN};
 +}}}
 diff --git a/slides/common/lgtdslides.cls b/slides/common/lgtdslides.cls
 new file mode 100644
