@@ -1,0 +1,255 @@
+# HG changeset patch
+# Parent  bb7a1425080bc272456650675e5e03896ca21d54
+lightsd: add windows support
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -19,6 +19,12 @@
+ 
+ ### Platform checks ############################################################
+ 
++INCLUDE(CheckFunctionExists)
++INCLUDE(CheckVariableExists)
++INCLUDE(TestBigEndian)
++
++TEST_BIG_ENDIAN(BIG_ENDIAN_SYSTEM)
++
+ # TODO: we need at least 2.0.19-stable because of the logging defines
+ FIND_PACKAGE(Event2 REQUIRED COMPONENTS core)
+ FIND_PACKAGE(Endian REQUIRED)
+@@ -37,16 +43,10 @@
+     INCLUDE(UseLATEX)
+ ENDIF ()
+ 
+-INCLUDE(CheckFunctionExists)
+-INCLUDE(CheckVariableExists)
+-INCLUDE(TestBigEndian)
+-
+ INCLUDE(CompatReallocArray)
+ INCLUDE(CompatSetProctitle)
+ INCLUDE(CompatTimeMonotonic)
+ 
+-TEST_BIG_ENDIAN(BIG_ENDIAN_SYSTEM)
+-
+ ### Global definitions #########################################################
+ 
+ INCLUDE(AddAllSubdirectories)
+@@ -54,11 +54,13 @@
+ 
+ SET(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
+ 
+-SET(CMAKE_C_FLAGS "-pipe ${CMAKE_C_FLAGS}")
+-STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
+ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE}}")
+ STRING(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
+-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99")
++IF (CMAKE_C_COMPILER_ID MATCHES "MSVC")
++    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Wall")
++ELSE ()
++    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Wall -Wstrict-prototypes -std=c99 -pipe")
++ENDIF ()
+ SET(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE} "")
+ 
+ IF (CMAKE_SYSTEM_NAME MATCHES "Linux")
+@@ -74,6 +76,14 @@
+     ADD_DEFINITIONS("-D_DARWIN_C_SOURCE=1")
+ ENDIF ()
+ 
++IF (MSVC)
++    ADD_DEFINITIONS(
++        "-D_CRT_SECURE_NO_WARNINGS"
++        "-DWIN32_LEAN_AND_MEAN"
++        "-DNOMINMAX"
++    )
++ENDIF ()
++
+ ADD_DEFINITIONS(
+     "-DLGTD_BIG_ENDIAN_SYSTEM=${BIG_ENDIAN_SYSTEM}"
+     "-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
+diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
+--- a/CMakeScripts/FindEndian.cmake
++++ b/CMakeScripts/FindEndian.cmake
+@@ -12,10 +12,16 @@
+     IF (HAVE_ENDIAN_H)
+         MESSAGE(STATUS "Looking for endian.h - found")
+         SET(ENDIAN_H_PATH "using native headers" CACHE INTERNAL "endian.h path")
+-    ELSEIF (EXISTS "${COMPAT_ENDIAN_H}")
++    ELSEIF (EXISTS "${COMPAT_ENDIAN_H}" OR EXISTS "${COMPAT_ENDIAN_H}.in")
+         MESSAGE(STATUS "Looking for endian.h - not found, using built-in compatibility file")
+-        FILE(COPY "${COMPAT_ENDIAN_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/compat/")
+-        SET(ENDIAN_H_PATH "${COMPAT_ENDIAN_H}" CACHE INTERNAL "endian.h path")
++        IF (EXISTS "${COMPAT_ENDIAN_H}")
++            FILE(COPY "${COMPAT_ENDIAN_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/compat/")
++            SET(ENDIAN_H_PATH "${COMPAT_ENDIAN_H}" CACHE INTERNAL "endian.h path")
++        ELSE ()
++            MESSAGE(STATUS "LOUIS BIG_ENDIAN_SYSTEM = \"${BIG_ENDIAN_SYSTEM}\"")
++            CONFIGURE_FILE("${COMPAT_ENDIAN_H}.in" "${LIGHTSD_BINARY_DIR}/compat/endian.h")
++            SET(ENDIAN_H_PATH "${COMPAT_ENDIAN_H}.in" CACHE INTERNAL "endian.h path")
++        ENDIF ()
+     ELSE ()
+         MESSAGE(STATUS "Looking for endian.h - not found")
+     ENDIF ()
+diff --git a/CMakeScripts/FindEvent2.cmake b/CMakeScripts/FindEvent2.cmake
+--- a/CMakeScripts/FindEvent2.cmake
++++ b/CMakeScripts/FindEvent2.cmake
+@@ -1,14 +1,21 @@
+ FIND_PATH(
+     EVENT2_INCLUDE_DIR
+     event2/event.h
+-    # OpenBSD has libevent1 in /usr/lib, always try /usr/local first:
+-    HINTS /usr/local/
++    HINTS
++    /usr/local/ # OpenBSD has libevent1 in /usr/lib, always try /usr/local first
++    $ENV{EVENT2_DIR}/include # Windows...
+ )
+ 
+ FOREACH (COMPONENT ${Event2_FIND_COMPONENTS})
+     STRING(TOUPPER ${COMPONENT} UPPER_COMPONENT)
+     FIND_LIBRARY(
+-        EVENT2_${UPPER_COMPONENT}_LIBRARY event_${COMPONENT} HINTS /usr/local/
++        EVENT2_${UPPER_COMPONENT}_LIBRARY
++        event_${COMPONENT}
++        NAMES
++        libevent_${COMPONENT} # Windows
++        HINTS
++        /usr/local/
++        $ENV{EVENT2_DIR}
+     )
+     IF (EVENT2_${UPPER_COMPONENT}_LIBRARY)
+         SET(Event2_${COMPONENT}_FOUND TRUE)
+diff --git a/compat/Windows/endian.h.in b/compat/Windows/endian.h.in
+new file mode 100644
+--- /dev/null
++++ b/compat/Windows/endian.h.in
+@@ -0,0 +1,35 @@
++#pragma once
++
++#include <stdlib.h>
++
++#if @BIG_ENDIAN_SYSTEM@
++#   define htobe16(x) (x)
++#   define htole16(x) _byteswap_ushort(x)
++#   define be16toh(x) (x)
++#   define le16toh(x) _byteswap_ushort(x)
++
++#   define htobe32(x) (x)
++#   define htole32(x) _byteswap_ulong(x)
++#   define be32toh(x) (x)
++#   define le32toh(x) _byteswap_ulong(x)
++
++#   define htobe64(x) (x)
++#   define htole64(x) _byteswap_uint64(x)
++#   define be64toh(x) (x)
++#   define le64toh(x) _byteswap_uint64(x)
++#else
++#   define htobe16(x) _byteswap_ushort(x)
++#   define htole16(x) (x)
++#   define be16toh(x) _byteswap_ushort(x)
++#   define le16toh(x) (x)
++
++#   define htobe32(x) _byteswap_ulong(x)
++#   define htole32(x) (x)
++#   define be32toh(x) _byteswap_ulong(x)
++#   define le32toh(x) (x)
++
++#   define htobe64(x) _byteswap_uint64(x)
++#   define htole64(x) (x)
++#   define be64toh(x) _byteswap_uint64(x)
++#   define le64toh(x) (x)
++#endif
+diff --git a/compat/Windows/time_monotonic.c b/compat/Windows/time_monotonic.c
+new file mode 100644
+--- /dev/null
++++ b/compat/Windows/time_monotonic.c
+@@ -0,0 +1,63 @@
++// Copyright (c) 2017, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#include <Windows.h>
++#include <stdbool.h>
++#include <stdlib.h>
++#include <stdio.h>
++#include <stdint.h>
++
++#include "time_monotonic.h"
++
++enum { MSECS_IN_NSEC = 1000000 };
++
++lgtd_time_mono_t
++lgtd_time_monotonic_msecs(void)
++{
++    static LARGE_INTEGER frequency = { .QuadPart = 0 };
++    if (frequency.QuadPart == 0
++        && QueryPerformanceFrequency(&frequency) == false) {
++        LPSTR msg = NULL;
++        DWORD msg_len = FormatMessageA(
++            FORMAT_MESSAGE_ALLOCATE_BUFFER
++            | FORMAT_MESSAGE_FROM_SYSTEM
++            | FORMAT_MESSAGE_IGNORE_INSERTS,
++            NULL,
++            GetLastError(),
++            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
++            // By default the message is stored in the buffer pointed by
++            // lpMsgBuf, but we use FORMAT_MESSAGE_ALLOCATE_BUFFER to have
++            // the buffer allocated for us.
++            // So instead you need to give the function a pointer on your
++            // pointer instead of your buffer and do an ugly cast:
++            (LPSTR)&msg,
++            0,
++            NULL
++        );
++        if (!msg_len) {
++            msg = "unknown error";
++        }
++        fprintf(stderr, "lightsd: QPC timer unavailable: %s.\r\n", msg);
++        exit(1);
++    }
++
++    LARGE_INTEGER time;
++    QueryPerformanceCounter(&time);
++    time.QuadPart = time.QuadPart * MSECS_IN_NSEC;
++    time.QuadPart = time.QuadPart / frequency.QuadPart;
++    return time.QuadPart;
++}
+diff --git a/compat/Windows/time_monotonic.h b/compat/Windows/time_monotonic.h
+new file mode 100644
+--- /dev/null
++++ b/compat/Windows/time_monotonic.h
+@@ -0,0 +1,22 @@
++// Copyright (c) 2017, Louis Opter <kalessin@kalessin.fr>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++#pragma once
++
++typedef int64_t lgtd_time_mono_t;
++
++lgtd_time_mono_t lgtd_time_monotonic_msecs(void);

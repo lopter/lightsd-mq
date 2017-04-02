@@ -1,5 +1,6 @@
 update_use_latex.cmake
 while42_sf.patch
+add_windows_support.patch
 add_power_transition.patch #+future
 open_gateway_on_any_bulb_response.patch #+future
 make_gateway_write_callbacks_low_priority.patch #+future
