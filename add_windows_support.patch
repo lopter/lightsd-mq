@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  bb7a1425080bc272456650675e5e03896ca21d54
+# Parent  6588e9c430a568518ddf3d59be33ecefbe8abe70
 lightsd: add windows support
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -67,10 +67,39 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ADD_DEFINITIONS(
      "-DLGTD_BIG_ENDIAN_SYSTEM=${BIG_ENDIAN_SYSTEM}"
      "-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
+@@ -99,8 +109,8 @@
+ 
+ INCLUDE_DIRECTORIES(
+     ${EVENT2_INCLUDE_DIR}
++    ${LIGHTSD_BINARY_DIR}
+     ${LIGHTSD_BINARY_DIR}/compat
+-    ${LIGHTSD_BINARY_DIR}/compat/generic
+ )
+ 
+ ADD_SUBDIRECTORY(compat)
+diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
+--- a/CMakeScripts/CompatTimeMonotonic.cmake
++++ b/CMakeScripts/CompatTimeMonotonic.cmake
+@@ -1,6 +1,5 @@
+ IF (NOT TIME_MONOTONIC_LIBRARY)
+     SET(COMPAT_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.c")
+-    SET(COMPAT_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.h")
+     SET(GENERIC_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.c")
+     SET(GENERIC_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.h")
+     SET(TIME_MONOTONIC_LIBRARY time_monotonic CACHE INTERNAL "lgtd_time_monotonic implementation")
+@@ -44,7 +43,7 @@
+         )
+     ELSEIF (EXISTS "${COMPAT_TIME_MONOTONIC_IMPL}")
+         MESSAGE(STATUS "Looking for clock_gettime - not found, using built-in compatibilty file")
+-        FILE(COPY "${COMPAT_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
++        FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
+         SET(
+             TIME_MONOTONIC_IMPL "${COMPAT_TIME_MONOTONIC_IMPL}"
+             CACHE INTERNAL "lgtd_time_monotonic (${CMAKE_SYSTEM_NAME} specific source)"
 diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
 --- a/CMakeScripts/FindEndian.cmake
 +++ b/CMakeScripts/FindEndian.cmake
-@@ -12,10 +12,16 @@
+@@ -12,10 +12,15 @@
      IF (HAVE_ENDIAN_H)
          MESSAGE(STATUS "Looking for endian.h - found")
          SET(ENDIAN_H_PATH "using native headers" CACHE INTERNAL "endian.h path")
@@ -83,7 +112,6 @@ diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
 +            FILE(COPY "${COMPAT_ENDIAN_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/compat/")
 +            SET(ENDIAN_H_PATH "${COMPAT_ENDIAN_H}" CACHE INTERNAL "endian.h path")
 +        ELSE ()
-+            MESSAGE(STATUS "LOUIS BIG_ENDIAN_SYSTEM = \"${BIG_ENDIAN_SYSTEM}\"")
 +            CONFIGURE_FILE("${COMPAT_ENDIAN_H}.in" "${LIGHTSD_BINARY_DIR}/compat/endian.h")
 +            SET(ENDIAN_H_PATH "${COMPAT_ENDIAN_H}.in" CACHE INTERNAL "endian.h path")
 +        ENDIF ()
@@ -118,6 +146,33 @@ diff --git a/CMakeScripts/FindEvent2.cmake b/CMakeScripts/FindEvent2.cmake
      )
      IF (EVENT2_${UPPER_COMPONENT}_LIBRARY)
          SET(Event2_${COMPONENT}_FOUND TRUE)
+diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
+deleted file mode 100644
+--- a/compat/Darwin/time_monotonic.h
++++ /dev/null
+@@ -1,22 +0,0 @@
+-// Copyright (c) 2015, Louis Opter <kalessin@kalessin.fr>
+-//
+-// This file is part of lighstd.
+-//
+-// lighstd is free software: you can redistribute it and/or modify
+-// it under the terms of the GNU General Public License as published by
+-// the Free Software Foundation, either version 3 of the License, or
+-// (at your option) any later version.
+-//
+-// lighstd is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// You should have received a copy of the GNU General Public License
+-// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+-
+-#pragma once
+-
+-typedef uint64_t lgtd_time_mono_t;
+-
+-lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
 diff --git a/compat/Windows/endian.h.in b/compat/Windows/endian.h.in
 new file mode 100644
 --- /dev/null
@@ -162,8 +217,8 @@ diff --git a/compat/Windows/time_monotonic.c b/compat/Windows/time_monotonic.c
 new file mode 100644
 --- /dev/null
 +++ b/compat/Windows/time_monotonic.c
-@@ -0,0 +1,63 @@
-+// Copyright (c) 2017, Louis Opter <kalessin@kalessin.fr>
+@@ -0,0 +1,69 @@
++// Copyright (c) 2017, Louis Opter <louis@opter.org>
 +//
 +// This file is part of lighstd.
 +//
@@ -186,7 +241,7 @@ new file mode 100644
 +#include <stdio.h>
 +#include <stdint.h>
 +
-+#include "time_monotonic.h"
++#include "core/time_monotonic.h"
 +
 +enum { MSECS_IN_NSEC = 1000000 };
 +
@@ -226,30 +281,134 @@ new file mode 100644
 +    time.QuadPart = time.QuadPart / frequency.QuadPart;
 +    return time.QuadPart;
 +}
-diff --git a/compat/Windows/time_monotonic.h b/compat/Windows/time_monotonic.h
++
++void
++lgtd_sleep_monotonic_msecs(int msecs)
++{
++    Sleep(msecs);
++}
+diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
+--- a/compat/generic/time_monotonic.c
++++ b/compat/generic/time_monotonic.c
+@@ -15,10 +15,13 @@
+ // You should have received a copy of the GNU General Public License
+ // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
+ 
++#include <assert.h>
+ #include <stdint.h>
++#include <stdlib.h>
+ #include <time.h>
+ 
+-#include "time_monotonic.h"
++#include "core/time_monotonic.h"
++#include "core/lightsd.h"
+ 
+ lgtd_time_mono_t
+ lgtd_time_monotonic_msecs(void)
+@@ -27,3 +30,23 @@
+     clock_gettime(CLOCK_MONOTONIC, &tp);
+     return tp.tv_sec * 1000 + tp.tv_nsec / 1000000;
+ }
++
++void
++lgtd_sleep_monotonic_msecs(int msecs)
++{
++    assert(msecs >= 0);
++
++    struct timespec remainder = LGTD_MSECS_TO_TIMESPEC(msecs),
++                    request = LGTD_MSECS_TO_TIMESPEC(msecs),
++                    *rmtp = &remainder,
++                    *rqtp = &request;
++    while (remainder.tv_sec > 0 && remainder.tv_usec > 0) {
++        int err = nanosleep(rqtp, rmtp);
++        if (err && errno != EINTR) {
++            const char *reason = strerror(errno);
++            fprintf(stderr, "lightsd: nanosleep failed: %s.\n", reason);
++            abort();
++        }
++        LGTD_SWAP(struct timespec *, rqtp, rmtp);
++    }
++}
+diff --git a/compat/generic/time_monotonic.h b/compat/generic/time_monotonic.h
+--- a/compat/generic/time_monotonic.h
++++ b/compat/generic/time_monotonic.h
+@@ -20,3 +20,4 @@
+ typedef uint64_t lgtd_time_mono_t;
+ 
+ lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
++void lgtd_sleep_monotonic_msecs(int);
+diff --git a/core/lightsd.h b/core/lightsd.h
+--- a/core/lightsd.h
++++ b/core/lightsd.h
+@@ -35,7 +35,7 @@
+ #pragma once
+ 
+ #ifndef __attribute__
+-# define __atttribute__(e)
++# define __attribute__(e)
+ #endif
+ 
+ #define LGTD_ABS(v) ((v) >= 0 ? (v) : (v) * -1)
+@@ -43,11 +43,16 @@
+ #define LGTD_MAX(a, b) ((a) > (b) ? (a) : (b))
+ 
+ #define LGTD_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
++#define LGTD_SWAP(type, a, b) do { type _tmp = a; a = b; b = _tmp; } while (0)
+ 
+ #define LGTD_MSECS_TO_TIMEVAL(v) {  \
+     .tv_sec = (v) / 1000,           \
+     .tv_usec = ((v) % 1000) * 1000  \
+ }
++#define LGTD_MSECS_TO_TIMESPEC(v) {  \
++    .tv_sec = (v) / 1000,            \
++    .tv_nsec = ((v) % 1E6) * 1000000 \
++}
+ #define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)1E6)
+ #define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)1E9)
+ #define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)1E9)
+diff --git a/tests/compat/CMakeLists.txt b/tests/compat/CMakeLists.txt
 new file mode 100644
 --- /dev/null
-+++ b/compat/Windows/time_monotonic.h
-@@ -0,0 +1,22 @@
-+// Copyright (c) 2017, Louis Opter <kalessin@kalessin.fr>
-+//
-+// This file is part of lighstd.
-+//
-+// lighstd is free software: you can redistribute it and/or modify
-+// it under the terms of the GNU General Public License as published by
-+// the Free Software Foundation, either version 3 of the License, or
-+// (at your option) any later version.
-+//
-+// lighstd is distributed in the hope that it will be useful,
-+// but WITHOUT ANY WARRANTY; without even the implied warranty of
-+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+// GNU General Public License for more details.
-+//
-+// You should have received a copy of the GNU General Public License
-+// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++++ b/tests/compat/CMakeLists.txt
+@@ -0,0 +1,6 @@
++INCLUDE_DIRECTORIES(
++    ${LIGHTSD_SOURCE_DIR}
++    ${LIGHTSD_BINARY_DIR}
++)
 +
-+#pragma once
++ADD_ALL_SUBDIRECTORIES()
+diff --git a/tests/compat/time_monotonic/CMakeLists.txt b/tests/compat/time_monotonic/CMakeLists.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/compat/time_monotonic/CMakeLists.txt
+@@ -0,0 +1,8 @@
++FUNCTION(ADD_TIME_MONOTONIC_TEST TEST_SOURCE)
++    ADD_TEST_FROM_C_SOURCES(${TEST_SOURCE} ${TIME_MONOTONIC_LIBRARY})
++ENDFUNCTION()
 +
-+typedef int64_t lgtd_time_mono_t;
++FILE(GLOB TESTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "test_*.c")
++FOREACH(TEST ${TESTS})
++    ADD_TIME_MONOTONIC_TEST(${TEST})
++ENDFOREACH()
+diff --git a/tests/compat/time_monotonic/test_time_monotonic_msecs.c b/tests/compat/time_monotonic/test_time_monotonic_msecs.c
+new file mode 100644
+--- /dev/null
++++ b/tests/compat/time_monotonic/test_time_monotonic_msecs.c
+@@ -0,0 +1,17 @@
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <stdlib.h>
 +
-+lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
++#include "core/time_monotonic.h"
++#include "core/lightsd.h"
++
++int
++main(void)
++{
++    lgtd_time_mono_t elapsed = lgtd_time_monotonic_msecs();
++    lgtd_sleep_monotonic_msecs(50);
++    elapsed = lgtd_time_monotonic_msecs() - elapsed;
++    printf("slept for %jums\r\n", elapsed);
++    return elapsed - 40 > 10;
++}
