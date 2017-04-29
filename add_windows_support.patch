@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  6588e9c430a568518ddf3d59be33ecefbe8abe70
+# Parent  1803cda7be2c37197f442deebb44b44ce44d8886
 lightsd: add windows support
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -67,16 +67,21 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ADD_DEFINITIONS(
      "-DLGTD_BIG_ENDIAN_SYSTEM=${BIG_ENDIAN_SYSTEM}"
      "-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
-@@ -99,8 +109,8 @@
+@@ -99,11 +109,12 @@
  
  INCLUDE_DIRECTORIES(
      ${EVENT2_INCLUDE_DIR}
++    ${LIGHTSD_SOURCE_DIR}
++    ${LIGHTSD_SOURCE_DIR}/compat/generic
 +    ${LIGHTSD_BINARY_DIR}
      ${LIGHTSD_BINARY_DIR}/compat
 -    ${LIGHTSD_BINARY_DIR}/compat/generic
  )
  
- ADD_SUBDIRECTORY(compat)
+-ADD_SUBDIRECTORY(compat)
+ ADD_SUBDIRECTORY(core)
+ ADD_SUBDIRECTORY(lifx)
+ 
 diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
 --- a/CMakeScripts/CompatTimeMonotonic.cmake
 +++ b/CMakeScripts/CompatTimeMonotonic.cmake
@@ -146,6 +151,56 @@ diff --git a/CMakeScripts/FindEvent2.cmake b/CMakeScripts/FindEvent2.cmake
      )
      IF (EVENT2_${UPPER_COMPONENT}_LIBRARY)
          SET(Event2_${COMPONENT}_FOUND TRUE)
+diff --git a/compat/CMakeLists.txt b/compat/CMakeLists.txt
+deleted file mode 100644
+--- a/compat/CMakeLists.txt
++++ /dev/null
+@@ -1,1 +0,0 @@
+-ADD_SUBDIRECTORY(generic)
+diff --git a/compat/Darwin/time_monotonic.c b/compat/Darwin/time_monotonic.c
+--- a/compat/Darwin/time_monotonic.c
++++ b/compat/Darwin/time_monotonic.c
+@@ -22,9 +22,15 @@
+ #include <mach/mach_time.h>
+ #include <sys/time.h>
+ #include <assert.h>
++#include <errno.h>
++#include <stdbool.h>
++#include <stdio.h>
+ #include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+-#include "time_monotonic.h"
++#include "core/time_monotonic.h"
++#include "core/lightsd.h"
+ 
+ enum { MSECS_IN_NSEC = 1000000 };
+ 
+@@ -40,3 +46,23 @@
+ 
+     return time * timebase.numer / timebase.denom / MSECS_IN_NSEC;
+ }
++
++void
++lgtd_sleep_monotonic_msecs(int msecs)
++{
++    assert(msecs >= 0);
++
++    struct timespec remainder = LGTD_MSECS_TO_TIMESPEC(msecs),
++                    request = LGTD_MSECS_TO_TIMESPEC(msecs),
++                    *rmtp = &remainder,
++                    *rqtp = &request;
++    while (remainder.tv_sec > 0 && remainder.tv_nsec > 0) {
++        int err = nanosleep(rqtp, rmtp);
++        if (err && errno != EINTR) {
++            const char *reason = strerror(errno);
++            fprintf(stderr, "lightsd: nanosleep failed: %s.\n", reason);
++            abort();
++        }
++        LGTD_SWAP(struct timespec *, rqtp, rmtp);
++    }
++}
 diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
 deleted file mode 100644
 --- a/compat/Darwin/time_monotonic.h
@@ -287,16 +342,26 @@ new file mode 100644
 +{
 +    Sleep(msecs);
 +}
+diff --git a/compat/generic/CMakeLists.txt b/compat/generic/CMakeLists.txt
+deleted file mode 100644
+--- a/compat/generic/CMakeLists.txt
++++ /dev/null
+@@ -1,1 +0,0 @@
+-FILE(COPY sys DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
 --- a/compat/generic/time_monotonic.c
 +++ b/compat/generic/time_monotonic.c
-@@ -15,10 +15,13 @@
+@@ -15,10 +15,17 @@
  // You should have received a copy of the GNU General Public License
  // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
  
 +#include <assert.h>
- #include <stdint.h>
++#include <errno.h>
++#include <stdbool.h>
++#include <stdio.h>
 +#include <stdlib.h>
+ #include <stdint.h>
++#include <string.h>
  #include <time.h>
  
 -#include "time_monotonic.h"
@@ -305,7 +370,7 @@ diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
  
  lgtd_time_mono_t
  lgtd_time_monotonic_msecs(void)
-@@ -27,3 +30,23 @@
+@@ -27,3 +34,23 @@
      clock_gettime(CLOCK_MONOTONIC, &tp);
      return tp.tv_sec * 1000 + tp.tv_nsec / 1000000;
  }
@@ -337,6 +402,19 @@ diff --git a/compat/generic/time_monotonic.h b/compat/generic/time_monotonic.h
  
  lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
 +void lgtd_sleep_monotonic_msecs(int);
+diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
+--- a/core/CMakeLists.txt
++++ b/core/CMakeLists.txt
+@@ -2,9 +2,7 @@
+ # I only have lifx bulbs right now and I don't want to do any premature work.
+ 
+ INCLUDE_DIRECTORIES(
+-    ${CMAKE_CURRENT_SOURCE_DIR}/../
+     ${CMAKE_CURRENT_SOURCE_DIR}
+-    ${CMAKE_CURRENT_BINARY_DIR}/../
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
 diff --git a/core/lightsd.h b/core/lightsd.h
 --- a/core/lightsd.h
 +++ b/core/lightsd.h
@@ -359,23 +437,29 @@ diff --git a/core/lightsd.h b/core/lightsd.h
      .tv_sec = (v) / 1000,           \
      .tv_usec = ((v) % 1000) * 1000  \
  }
-+#define LGTD_MSECS_TO_TIMESPEC(v) {  \
-+    .tv_sec = (v) / 1000,            \
-+    .tv_nsec = ((v) % 1E6) * 1000000 \
++#define LGTD_MSECS_TO_TIMESPEC(v) {         \
++    .tv_sec = (v) / 1000,                   \
++    .tv_nsec = ((v) % 1000000) * 1000000    \
 +}
  #define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)1E6)
  #define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)1E9)
  #define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)1E9)
+diff --git a/lifx/CMakeLists.txt b/lifx/CMakeLists.txt
+--- a/lifx/CMakeLists.txt
++++ b/lifx/CMakeLists.txt
+@@ -1,7 +1,5 @@
+ INCLUDE_DIRECTORIES(
+-    ${CMAKE_CURRENT_SOURCE_DIR}/../
+     ${CMAKE_CURRENT_SOURCE_DIR}
+-    ${CMAKE_CURRENT_BINARY_DIR}/../
+     ${CMAKE_CURRENT_BINARY_DIR}
+ )
+ 
 diff --git a/tests/compat/CMakeLists.txt b/tests/compat/CMakeLists.txt
 new file mode 100644
 --- /dev/null
 +++ b/tests/compat/CMakeLists.txt
-@@ -0,0 +1,6 @@
-+INCLUDE_DIRECTORIES(
-+    ${LIGHTSD_SOURCE_DIR}
-+    ${LIGHTSD_BINARY_DIR}
-+)
-+
+@@ -0,0 +1,1 @@
 +ADD_ALL_SUBDIRECTORIES()
 diff --git a/tests/compat/time_monotonic/CMakeLists.txt b/tests/compat/time_monotonic/CMakeLists.txt
 new file mode 100644
@@ -412,3 +496,29 @@ new file mode 100644
 +    printf("slept for %jums\r\n", elapsed);
 +    return elapsed - 40 > 10;
 +}
+diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
+--- a/tests/core/CMakeLists.txt
++++ b/tests/core/CMakeLists.txt
+@@ -1,9 +1,7 @@
+ INCLUDE_DIRECTORIES(
+-    ${LIGHTSD_SOURCE_DIR}
+     ${LIGHTSD_SOURCE_DIR}/core/
+     ${CMAKE_CURRENT_SOURCE_DIR}
+     ${CMAKE_CURRENT_SOURCE_DIR}/../lifx
+-    ${LIGHTSD_BINARY_DIR}
+     ${LIGHTSD_BINARY_DIR}/core/
+     ${CMAKE_CURRENT_BINARY_DIR}
+     ${CMAKE_CURRENT_BINARY_DIR}/../lifx
+diff --git a/tests/lifx/CMakeLists.txt b/tests/lifx/CMakeLists.txt
+--- a/tests/lifx/CMakeLists.txt
++++ b/tests/lifx/CMakeLists.txt
+@@ -1,9 +1,7 @@
+ INCLUDE_DIRECTORIES(
+-    ${LIGHTSD_SOURCE_DIR}
+     ${LIGHTSD_SOURCE_DIR}/lifx/
+     ${CMAKE_CURRENT_SOURCE_DIR}
+     ${CMAKE_CURRENT_SOURCE_DIR}/../core
+-    ${LIGHTSD_BINARY_DIR}
+     ${LIGHTSD_BINARY_DIR}/lifx/
+     ${CMAKE_CURRENT_BINARY_DIR}
+     ${CMAKE_CURRENT_BINARY_DIR}/../core
