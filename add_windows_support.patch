@@ -188,18 +188,18 @@ diff --git a/compat/Darwin/time_monotonic.c b/compat/Darwin/time_monotonic.c
 +    assert(msecs >= 0);
 +
 +    struct timespec remainder = LGTD_MSECS_TO_TIMESPEC(msecs),
-+                    request = LGTD_MSECS_TO_TIMESPEC(msecs),
++                    request = { 0, 0 },
 +                    *rmtp = &remainder,
 +                    *rqtp = &request;
-+    while (remainder.tv_sec > 0 && remainder.tv_nsec > 0) {
++    do {
++        LGTD_SWAP(struct timespec *, rqtp, rmtp);
 +        int err = nanosleep(rqtp, rmtp);
 +        if (err && errno != EINTR) {
 +            const char *reason = strerror(errno);
 +            fprintf(stderr, "lightsd: nanosleep failed: %s.\n", reason);
 +            abort();
 +        }
-+        LGTD_SWAP(struct timespec *, rqtp, rmtp);
-+    }
++    } while (remainder.tv_sec > 0 && remainder.tv_nsec > 0);
 +}
 diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
 deleted file mode 100644
@@ -381,18 +381,18 @@ diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
 +    assert(msecs >= 0);
 +
 +    struct timespec remainder = LGTD_MSECS_TO_TIMESPEC(msecs),
-+                    request = LGTD_MSECS_TO_TIMESPEC(msecs),
++                    request = { 0, 0 },
 +                    *rmtp = &remainder,
 +                    *rqtp = &request;
-+    while (remainder.tv_sec > 0 && remainder.tv_usec > 0) {
++    do {
++        LGTD_SWAP(struct timespec *, rqtp, rmtp);
 +        int err = nanosleep(rqtp, rmtp);
 +        if (err && errno != EINTR) {
 +            const char *reason = strerror(errno);
 +            fprintf(stderr, "lightsd: nanosleep failed: %s.\n", reason);
 +            abort();
 +        }
-+        LGTD_SWAP(struct timespec *, rqtp, rmtp);
-+    }
++    } while (remainder.tv_sec > 0 && remainder.tv_nsec > 0);
 +}
 diff --git a/compat/generic/time_monotonic.h b/compat/generic/time_monotonic.h
 --- a/compat/generic/time_monotonic.h
@@ -437,9 +437,9 @@ diff --git a/core/lightsd.h b/core/lightsd.h
      .tv_sec = (v) / 1000,           \
      .tv_usec = ((v) % 1000) * 1000  \
  }
-+#define LGTD_MSECS_TO_TIMESPEC(v) {         \
-+    .tv_sec = (v) / 1000,                   \
-+    .tv_nsec = ((v) % 1000000) * 1000000    \
++#define LGTD_MSECS_TO_TIMESPEC(v) {     \
++    .tv_sec = (v) / 1000,               \
++    .tv_nsec = ((v) % 1000) * 1000000   \
 +}
  #define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)1E6)
  #define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)1E9)
@@ -493,8 +493,8 @@ new file mode 100644
 +    lgtd_time_mono_t elapsed = lgtd_time_monotonic_msecs();
 +    lgtd_sleep_monotonic_msecs(50);
 +    elapsed = lgtd_time_monotonic_msecs() - elapsed;
-+    printf("slept for %jums\r\n", elapsed);
-+    return elapsed - 40 > 10;
++    printf("slept for %jums\r\n", (uintmax_t)elapsed);
++    return LGTD_ABS(elapsed - 50) > 10;
 +}
 diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
 --- a/tests/core/CMakeLists.txt
