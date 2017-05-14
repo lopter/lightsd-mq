@@ -1,0 +1,29 @@
+# HG changeset patch
+# Parent  5304640171f0d46dfa96778d12917be784ef4c73
+lightsd: harden the systemd service configuration and add a sample drop-in
+
+diff --git a/dist/lightsd.service b/dist/lightsd.service
+--- a/dist/lightsd.service
++++ b/dist/lightsd.service
+@@ -8,6 +8,13 @@
+ Group=lightsd
+ RuntimeDirectory=lightsd
+ Restart=on-failure
++ProtectSystem=full
++ProtectHome=true
++ProtectKernelTunables=yes
++ProtectControlGroups=yes
++ProtectKernelModules=yes
++# Debian Stretch and after:
++# RestrictNamespaces=yes
+ 
+ [Install]
+ WantedBy=multi-user.target
+diff --git a/examples/custom-exec-start.conf b/examples/custom-exec-start.conf
+new file mode 100644
+--- /dev/null
++++ b/examples/custom-exec-start.conf
+@@ -0,0 +1,3 @@
++[Service]
++ExecStart=
++ExecStart=/usr/bin/lightsd -t -v warning -s %t/lightsd/socket -c %t/lightsd/pipe -l :::56742
