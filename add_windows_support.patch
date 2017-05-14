@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  1803cda7be2c37197f442deebb44b44ce44d8886
+# Parent  3eaedf3f30570024bdac00f3b6a784bed52d01f9
 lightsd: add windows support
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
