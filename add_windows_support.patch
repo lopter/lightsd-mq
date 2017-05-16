@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent  3eaedf3f30570024bdac00f3b6a784bed52d01f9
+# Parent  b80960a5db4446db68d47e60bb94660804e4ffae
 lightsd: add windows support
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -52,14 +52,13 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  SET(CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE} "")
  
  IF (CMAKE_SYSTEM_NAME MATCHES "Linux")
-@@ -74,6 +76,14 @@
+@@ -74,6 +76,13 @@
      ADD_DEFINITIONS("-D_DARWIN_C_SOURCE=1")
  ENDIF ()
  
 +IF (MSVC)
 +    ADD_DEFINITIONS(
 +        "-D_CRT_SECURE_NO_WARNINGS"
-+        "-DWIN32_LEAN_AND_MEAN"
 +        "-DNOMINMAX"
 +    )
 +ENDIF ()
@@ -67,7 +66,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ADD_DEFINITIONS(
      "-DLGTD_BIG_ENDIAN_SYSTEM=${BIG_ENDIAN_SYSTEM}"
      "-DLGTD_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
-@@ -99,11 +109,12 @@
+@@ -99,11 +108,12 @@
  
  INCLUDE_DIRECTORIES(
      ${EVENT2_INCLUDE_DIR}
@@ -85,22 +84,84 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
 --- a/CMakeScripts/CompatTimeMonotonic.cmake
 +++ b/CMakeScripts/CompatTimeMonotonic.cmake
-@@ -1,6 +1,5 @@
+@@ -1,8 +1,6 @@
  IF (NOT TIME_MONOTONIC_LIBRARY)
      SET(COMPAT_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.c")
 -    SET(COMPAT_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/time_monotonic.h")
      SET(GENERIC_TIME_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.c")
-     SET(GENERIC_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.h")
+-    SET(GENERIC_TIME_MONOTONIC_H "${LIGHTSD_SOURCE_DIR}/compat/generic/time_monotonic.h")
      SET(TIME_MONOTONIC_LIBRARY time_monotonic CACHE INTERNAL "lgtd_time_monotonic implementation")
-@@ -44,7 +43,7 @@
+ 
+     IF (APPLE)
+@@ -18,6 +16,7 @@
+     ENDIF ()
+ 
+     SET(CMAKE_REQUIRED_QUIET TRUE)
++
+     MESSAGE(STATUS "Looking for clock_gettime")
+     CHECK_FUNCTION_EXISTS("clock_gettime" HAVE_CLOCK_GETTIME)
+     IF (NOT HAVE_CLOCK_GETTIME)
+@@ -32,19 +31,17 @@
+             UNSET(TIME_MONOTONIC_LIBRARY_DEP CACHE)
+         ENDIF ()
+     ENDIF ()
+-    UNSET(CMAKE_REQUIRED_QUIET)
++
+     UNSET(CMAKE_REQUIRED_FLAGS)
+ 
+     IF (HAVE_CLOCK_GETTIME)
+         MESSAGE(STATUS "Looking for clock_gettime - found")
+-        FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
+         SET(
+             TIME_MONOTONIC_IMPL ${GENERIC_TIME_MONOTONIC_IMPL}
+             CACHE INTERNAL "lgtd_time_monotonic (POSIX generic source)"
          )
      ELSEIF (EXISTS "${COMPAT_TIME_MONOTONIC_IMPL}")
          MESSAGE(STATUS "Looking for clock_gettime - not found, using built-in compatibilty file")
 -        FILE(COPY "${COMPAT_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
-+        FILE(COPY "${GENERIC_TIME_MONOTONIC_H}" DESTINATION "${LIGHTSD_BINARY_DIR}/core/")
          SET(
              TIME_MONOTONIC_IMPL "${COMPAT_TIME_MONOTONIC_IMPL}"
              CACHE INTERNAL "lgtd_time_monotonic (${CMAKE_SYSTEM_NAME} specific source)"
+@@ -52,9 +49,38 @@
+     ELSE ()
+         MESSAGE(SEND_ERROR "Looking for clock_gettime - not found")
+     ENDIF ()
++
++    SET(COMPAT_SLEEP_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/${CMAKE_SYSTEM_NAME}/sleep_monotonic.c")
++    SET(GENERIC_SLEEP_MONOTONIC_IMPL "${LIGHTSD_SOURCE_DIR}/compat/generic/sleep_monotonic.c")
++
++    MESSAGE(STATUS "Looking for nanosleep")
++    CHECK_FUNCTION_EXISTS("nanosleep" HAVE_NANOSLEEP)
++    IF (HAVE_NANOSLEEP)
++        MESSAGE(STATUS "Looking for nanosleep - found")
++        SET(
++            SLEEP_MONOTONIC_IMPL "${GENERIC_SLEEP_MONOTONIC_IMPL}"
++            CACHE INTERNAL "lgtd_sleep_monotonic (POSIX generic source)"
++        )
++    ELSEIF (EXISTS "${COMPAT_SLEEP_MONOTONIC_IMPL}")
++        MESSAGE(STATUS "Looking for nanosleep - not found, using built-in compatibilty file")
++        SET(
++            SLEEP_MONOTONIC_IMPL "${COMPAT_SLEEP_MONOTONIC_IMPL}"
++            CACHE INTERNAL "lgtd_sleep_monotonic (${CMAKE_SYSTEM_NAME} specific source)"
++        )
++        IF (WIN32)
++            SET(TIME_MONOTONIC_LIBRARY_DEP Winmm CACHE INTERNAL "dependency for lgtd_sleep_monotonic")
++        ENDIF ()
++    ENDIF ()
++
++    UNSET(CMAKE_REQUIRED_QUIET)
+ ENDIF ()
+ 
+-ADD_LIBRARY(${TIME_MONOTONIC_LIBRARY} STATIC "${TIME_MONOTONIC_IMPL}")
++ADD_LIBRARY(
++    ${TIME_MONOTONIC_LIBRARY}
++    STATIC
++    "${TIME_MONOTONIC_IMPL}"
++    "${SLEEP_MONOTONIC_IMPL}"
++)
+ 
+ IF (TIME_MONOTONIC_LIBRARY_DEP)
+     TARGET_LINK_LIBRARIES(${TIME_MONOTONIC_LIBRARY} ${TIME_MONOTONIC_LIBRARY_DEP})
 diff --git a/CMakeScripts/FindEndian.cmake b/CMakeScripts/FindEndian.cmake
 --- a/CMakeScripts/FindEndian.cmake
 +++ b/CMakeScripts/FindEndian.cmake
@@ -160,47 +221,15 @@ deleted file mode 100644
 diff --git a/compat/Darwin/time_monotonic.c b/compat/Darwin/time_monotonic.c
 --- a/compat/Darwin/time_monotonic.c
 +++ b/compat/Darwin/time_monotonic.c
-@@ -22,9 +22,15 @@
- #include <mach/mach_time.h>
- #include <sys/time.h>
+@@ -24,7 +24,7 @@
  #include <assert.h>
-+#include <errno.h>
-+#include <stdbool.h>
-+#include <stdio.h>
  #include <stdint.h>
-+#include <stdlib.h>
-+#include <string.h>
  
 -#include "time_monotonic.h"
 +#include "core/time_monotonic.h"
-+#include "core/lightsd.h"
  
  enum { MSECS_IN_NSEC = 1000000 };
  
-@@ -40,3 +46,23 @@
- 
-     return time * timebase.numer / timebase.denom / MSECS_IN_NSEC;
- }
-+
-+void
-+lgtd_sleep_monotonic_msecs(int msecs)
-+{
-+    assert(msecs >= 0);
-+
-+    struct timespec remainder = LGTD_MSECS_TO_TIMESPEC(msecs),
-+                    request = { 0, 0 },
-+                    *rmtp = &remainder,
-+                    *rqtp = &request;
-+    do {
-+        LGTD_SWAP(struct timespec *, rqtp, rmtp);
-+        int err = nanosleep(rqtp, rmtp);
-+        if (err && errno != EINTR) {
-+            const char *reason = strerror(errno);
-+            fprintf(stderr, "lightsd: nanosleep failed: %s.\n", reason);
-+            abort();
-+        }
-+    } while (remainder.tv_sec > 0 && remainder.tv_nsec > 0);
-+}
 diff --git a/compat/Darwin/time_monotonic.h b/compat/Darwin/time_monotonic.h
 deleted file mode 100644
 --- a/compat/Darwin/time_monotonic.h
@@ -268,11 +297,11 @@ new file mode 100644
 +#   define be64toh(x) _byteswap_uint64(x)
 +#   define le64toh(x) (x)
 +#endif
-diff --git a/compat/Windows/time_monotonic.c b/compat/Windows/time_monotonic.c
+diff --git a/compat/Windows/sleep_monotonic.c b/compat/Windows/sleep_monotonic.c
 new file mode 100644
 --- /dev/null
-+++ b/compat/Windows/time_monotonic.c
-@@ -0,0 +1,69 @@
++++ b/compat/Windows/sleep_monotonic.c
+@@ -0,0 +1,63 @@
 +// Copyright (c) 2017, Louis Opter <louis@opter.org>
 +//
 +// This file is part of lighstd.
@@ -290,6 +319,11 @@ new file mode 100644
 +// You should have received a copy of the GNU General Public License
 +// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
 +
++// See:
++//
++// https://msdn.microsoft.com/en-us/library/windows/desktop/ms686298(v=vs.85).aspx
++// https://msdn.microsoft.com/en-us/library/dd743626(v=vs.85).aspx
++
 +#include <Windows.h>
 +#include <stdbool.h>
 +#include <stdlib.h>
@@ -297,13 +331,77 @@ new file mode 100644
 +#include <stdint.h>
 +
 +#include "core/time_monotonic.h"
++#include "core/lightsd.h"
 +
-+enum { MSECS_IN_NSEC = 1000000 };
++enum { TIMER_RESOLUTION_MS = 1 };
++
++static UINT
++_lgtd_set_timer_resolution(UINT resolution_ms)
++{
++    TIMECAPS tc;
++    if (timeGetDevCaps(&tc, sizeof(tc)) != TIMERR_NOERROR) {
++        fprintf(stderr, "lightsd: multimedia timers unavailable.");
++        exit(1);
++    }
++
++    UINT resolution = LGTD_MAX(tc.wPeriodMin, resolution_ms);
++    resolution = LGTD_MIN(resolution, tc.wPeriodMax);
++    timeBeginPeriod(resolution);
++    return resolution;
++}
++
++static void
++_lgtd_reset_timer_resolution(UINT resolution_ms)
++{
++    if (timeEndPeriod(resolution_ms) != TIMERR_NOERROR) {
++        fprintf(stderr, "lightsd: can't reset timer resolution.");
++    }
++}
++
++void
++lgtd_sleep_monotonic_msecs(int msecs)
++{
++    UINT actual = _lgtd_set_timer_resolution(TIMER_RESOLUTION_MS);
++    Sleep(msecs);
++    _lgtd_reset_timer_resolution(actual);
++}
+diff --git a/compat/Windows/time_monotonic.c b/compat/Windows/time_monotonic.c
+new file mode 100644
+--- /dev/null
++++ b/compat/Windows/time_monotonic.c
+@@ -0,0 +1,67 @@
++// Copyright (c) 2017, Louis Opter <louis@opter.org>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
++// This is pretty much "Using QPC in native code" from:
++//
++// https://msdn.microsoft.com/en-us/library/windows/desktop/dn553408(v=vs.85).aspx
++
++#include <Windows.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++
++#include "core/time_monotonic.h"
 +
 +lgtd_time_mono_t
 +lgtd_time_monotonic_msecs(void)
 +{
-+    static LARGE_INTEGER frequency = { .QuadPart = 0 };
++    static LARGE_INTEGER frequency = { .QuadPart = 0 }; // ticks per second
 +    if (frequency.QuadPart == 0
 +        && QueryPerformanceFrequency(&frequency) == false) {
 +        LPSTR msg = NULL;
@@ -332,15 +430,12 @@ new file mode 100644
 +
 +    LARGE_INTEGER time;
 +    QueryPerformanceCounter(&time);
-+    time.QuadPart = time.QuadPart * MSECS_IN_NSEC;
-+    time.QuadPart = time.QuadPart / frequency.QuadPart;
++    // Multiply the number of ticks by 1000 first to get a final value in ms:
++    time.QuadPart *= 1000;
++    // Then (the order is important to avoid loosing precision) divide by the
++    // number of ticks per second:
++    time.QuadPart /= frequency.QuadPart;
 +    return time.QuadPart;
-+}
-+
-+void
-+lgtd_sleep_monotonic_msecs(int msecs)
-+{
-+    Sleep(msecs);
 +}
 diff --git a/compat/generic/CMakeLists.txt b/compat/generic/CMakeLists.txt
 deleted file mode 100644
@@ -348,32 +443,39 @@ deleted file mode 100644
 +++ /dev/null
 @@ -1,1 +0,0 @@
 -FILE(COPY sys DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
---- a/compat/generic/time_monotonic.c
-+++ b/compat/generic/time_monotonic.c
-@@ -15,10 +15,17 @@
- // You should have received a copy of the GNU General Public License
- // along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
- 
+diff --git a/compat/generic/sleep_monotonic.c b/compat/generic/sleep_monotonic.c
+new file mode 100644
+--- /dev/null
++++ b/compat/generic/sleep_monotonic.c
+@@ -0,0 +1,48 @@
++// Copyright (c) 2017, Louis Opter <louis@opter.org>
++//
++// This file is part of lighstd.
++//
++// lighstd is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// lighstd is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with lighstd.  If not, see <http://www.gnu.org/licenses/>.
++
 +#include <assert.h>
 +#include <errno.h>
 +#include <stdbool.h>
 +#include <stdio.h>
 +#include <stdlib.h>
- #include <stdint.h>
++#include <stdint.h>
 +#include <string.h>
- #include <time.h>
- 
--#include "time_monotonic.h"
++#include <time.h>
++
 +#include "core/time_monotonic.h"
 +#include "core/lightsd.h"
- 
- lgtd_time_mono_t
- lgtd_time_monotonic_msecs(void)
-@@ -27,3 +34,23 @@
-     clock_gettime(CLOCK_MONOTONIC, &tp);
-     return tp.tv_sec * 1000 + tp.tv_nsec / 1000000;
- }
 +
 +void
 +lgtd_sleep_monotonic_msecs(int msecs)
@@ -394,14 +496,18 @@ diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
 +        }
 +    } while (remainder.tv_sec > 0 && remainder.tv_nsec > 0);
 +}
-diff --git a/compat/generic/time_monotonic.h b/compat/generic/time_monotonic.h
---- a/compat/generic/time_monotonic.h
-+++ b/compat/generic/time_monotonic.h
-@@ -20,3 +20,4 @@
- typedef uint64_t lgtd_time_mono_t;
+diff --git a/compat/generic/time_monotonic.c b/compat/generic/time_monotonic.c
+--- a/compat/generic/time_monotonic.c
++++ b/compat/generic/time_monotonic.c
+@@ -18,7 +18,7 @@
+ #include <stdint.h>
+ #include <time.h>
  
- lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
-+void lgtd_sleep_monotonic_msecs(int);
+-#include "time_monotonic.h"
++#include "core/time_monotonic.h"
+ 
+ lgtd_time_mono_t
+ lgtd_time_monotonic_msecs(void)
 diff --git a/core/CMakeLists.txt b/core/CMakeLists.txt
 --- a/core/CMakeLists.txt
 +++ b/core/CMakeLists.txt
@@ -444,6 +550,16 @@ diff --git a/core/lightsd.h b/core/lightsd.h
  #define LGTD_NSECS_TO_USECS(v) ((v) / (unsigned int)1E6)
  #define LGTD_NSECS_TO_SECS(v) ((v) / (unsigned int)1E9)
  #define LGTD_SECS_TO_NSECS(v) ((v) * (unsigned int)1E9)
+diff --git a/compat/generic/time_monotonic.h b/core/time_monotonic.h
+rename from compat/generic/time_monotonic.h
+rename to core/time_monotonic.h
+--- a/compat/generic/time_monotonic.h
++++ b/core/time_monotonic.h
+@@ -20,3 +20,4 @@
+ typedef uint64_t lgtd_time_mono_t;
+ 
+ lgtd_time_mono_t lgtd_time_monotonic_msecs(void);
++void lgtd_sleep_monotonic_msecs(int);
 diff --git a/lifx/CMakeLists.txt b/lifx/CMakeLists.txt
 --- a/lifx/CMakeLists.txt
 +++ b/lifx/CMakeLists.txt
@@ -490,11 +606,11 @@ new file mode 100644
 +int
 +main(void)
 +{
-+    lgtd_time_mono_t elapsed = lgtd_time_monotonic_msecs();
++    lgtd_time_mono_t start = lgtd_time_monotonic_msecs();
 +    lgtd_sleep_monotonic_msecs(50);
-+    elapsed = lgtd_time_monotonic_msecs() - elapsed;
-+    printf("slept for %jums\r\n", (uintmax_t)elapsed);
-+    return LGTD_ABS(elapsed - 50) > 10;
++    int duration = (int)(lgtd_time_monotonic_msecs() - start);
++    printf("slept for %dms\r\n", duration);
++    return LGTD_ABS(duration - 50) > 10;
 +}
 diff --git a/tests/core/CMakeLists.txt b/tests/core/CMakeLists.txt
 --- a/tests/core/CMakeLists.txt
