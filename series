@@ -1,4 +1,3 @@
-update_use_latex.cmake
 while42_sf.patch
 lightsd_systemd_drop_in_harden.patch
 add_windows_support.patch
