@@ -1,6 +1,8 @@
 # HG changeset patch
-# Parent  b80960a5db4446db68d47e60bb94660804e4ffae
-lightsd: add windows support
+# Parent  6ec1913ccfc63c8ca38368d04f885be5d59f8817
+lightsd: get the build system and time_monotonic to work on Windows
+
+This is the first step towards Windows portability.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -81,6 +83,24 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  ADD_SUBDIRECTORY(core)
  ADD_SUBDIRECTORY(lifx)
  
+diff --git a/CMakeScripts/AddAllSubdirectories.cmake b/CMakeScripts/AddAllSubdirectories.cmake
+--- a/CMakeScripts/AddAllSubdirectories.cmake
++++ b/CMakeScripts/AddAllSubdirectories.cmake
+@@ -1,8 +1,12 @@
+ FUNCTION(ADD_ALL_SUBDIRECTORIES)
+     FILE(GLOB SUBDIRECTORIES "*")
+     FOREACH (ENTRY ${SUBDIRECTORIES})
+-        IF (IS_DIRECTORY ${ENTRY} AND EXISTS "${ENTRY}/CMakeLists.txt")
+-            ADD_SUBDIRECTORY(${ENTRY})
++        IF (
++            IS_DIRECTORY "${ENTRY}" AND
++            NOT IS_SYMLINK "${ENTRY}" AND
++            EXISTS "${ENTRY}/CMakeLists.txt"
++        )
++            ADD_SUBDIRECTORY("${ENTRY}")
+         ENDIF ()
+     ENDFOREACH ()
+ ENDFUNCTION()
 diff --git a/CMakeScripts/CompatTimeMonotonic.cmake b/CMakeScripts/CompatTimeMonotonic.cmake
 --- a/CMakeScripts/CompatTimeMonotonic.cmake
 +++ b/CMakeScripts/CompatTimeMonotonic.cmake
